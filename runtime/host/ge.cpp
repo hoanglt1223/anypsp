@@ -546,6 +546,7 @@ void Ge::build_light_setup() {
     color24(regs_[kMaterialEmissive], l.emissive);
     color24(regs_[kAmbientColor], l.global);
     l.alpha = static_cast<float>(regs_[kMaterialAlpha] & 0xFFu);
+    l.global_alpha = static_cast<float>(regs_[kAmbientAlpha] & 0xFFu) / 255.0f;
     l.count = 0;
     for (std::uint32_t i = 0; i < 4u; ++i) {
         if ((regs_[kLightEnable0 + i] & 1u) == 0u) continue;
@@ -611,7 +612,8 @@ void Ge::light_vertex(const float pos[3], const float normal[3], float color[4])
             out[k] += attenuation * (light.ambient[k] * mat_ambient[k] + light.diffuse[k] * mat_diffuse[k] * diffuse);
     }
     for (int k = 0; k < 3; ++k) color[k] = clamp255(out[k]);
-    color[3] = clamp255(alpha);
+    // Like the colour, the alpha is global ambient x material ambient (emissive adds no alpha).
+    color[3] = clamp255(alpha * setup.global_alpha);
 }
 
 Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {

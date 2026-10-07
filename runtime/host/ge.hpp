@@ -190,6 +190,7 @@ private:
     struct LightSetup {
         float mat_ambient[3]{}, mat_diffuse[3]{}, emissive[3]{}, global[3]{};
         float alpha{};
+        float global_alpha{1}; // the global ambient's alpha scales the lit alpha
         std::uint32_t update{};
         int count{};
         struct Light {
