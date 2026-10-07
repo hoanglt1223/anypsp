@@ -399,6 +399,8 @@ int main(int argc, char **argv) {
     bool use_gl = false, threads = true;
     struct Press { int frame, length; std::uint32_t buttons; };
     std::vector<Press> presses; // --press frame:buttons_hex:length
+    struct Stick { int frame, length, x, y; };
+    std::vector<Stick> sticks;  // --stick frame:x,y:length (0..255, 128 = centre)
     for (int i = 2; i + 1 < argc; i += 2) {
         const std::string flag = argv[i];
         if (flag == "--disc") disc = argv[i + 1];
@@ -416,6 +418,11 @@ int main(int argc, char **argv) {
             const auto a = spec.find(':'), b = spec.rfind(':');
             presses.push_back({std::stoi(spec.substr(0, a)), std::stoi(spec.substr(b + 1u)),
                                static_cast<std::uint32_t>(std::stoul(spec.substr(a + 1u, b - a - 1u), nullptr, 16))});
+        } else if (flag == "--stick") {
+            const std::string spec = argv[i + 1];
+            const auto a = spec.find(':'), comma = spec.find(','), b = spec.rfind(':');
+            sticks.push_back({std::stoi(spec.substr(0, a)), std::stoi(spec.substr(b + 1u)),
+                              std::stoi(spec.substr(a + 1u, comma - a - 1u)), std::stoi(spec.substr(comma + 1u, b - comma - 1u))});
         }
     }
     try {
@@ -453,7 +460,10 @@ int main(int argc, char **argv) {
             std::uint32_t buttons = 0u;
             for (const auto &p : presses)
                 if (frame >= p.frame && frame < p.frame + p.length) buttons |= p.buttons;
-            g_session.kernel->set_pad(buttons);
+            int lx = 128, ly = 128;
+            for (const auto &s : sticks)
+                if (frame >= s.frame && frame < s.frame + s.length) lx = s.x, ly = s.y;
+            g_session.kernel->set_pad(buttons, static_cast<std::uint8_t>(lx), static_cast<std::uint8_t>(ly));
             if (!step(50.0)) break;
             ++frame;
             progress.store(frame);

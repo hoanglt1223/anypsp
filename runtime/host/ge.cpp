@@ -110,21 +110,30 @@ struct SectionTimer {
 };
 // Debugging aids: PSPWEB_DUMP_FRAME=n logs every primitive of frame n with its
 // state and writes the textures it decodes to PSPWEB_DUMP_DIR (default
-// build/dump); PSPWEB_SKIP_PRIMS=a-b drops primitives a..b of every frame.
+// build/dump); PSPWEB_SKIP_PRIMS=a-b[,c-d...] drops those primitives of every frame.
 std::uint32_t env_number(const char *name, std::uint32_t fallback) {
     const char *v = std::getenv(name);
     return v != nullptr ? static_cast<std::uint32_t>(std::strtoul(v, nullptr, 10)) : fallback;
 }
 const std::uint32_t g_dump_frame = env_number("PSPWEB_DUMP_FRAME", 0u);
 const std::string g_dump_dir = std::getenv("PSPWEB_DUMP_DIR") != nullptr ? std::getenv("PSPWEB_DUMP_DIR") : "build/dump";
-const std::pair<std::uint32_t, std::uint32_t> g_skip_prims = [] {
+const std::vector<std::pair<std::uint32_t, std::uint32_t>> g_skip_prims = [] {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> ranges;
     const char *v = std::getenv("PSPWEB_SKIP_PRIMS");
-    if (v == nullptr) return std::pair<std::uint32_t, std::uint32_t>{1u, 0u};
-    char *end = nullptr;
-    const auto lo = static_cast<std::uint32_t>(std::strtoul(v, &end, 10));
-    const auto hi = (end != nullptr && *end == '-') ? static_cast<std::uint32_t>(std::strtoul(end + 1, nullptr, 10)) : lo;
-    return std::pair<std::uint32_t, std::uint32_t>{lo, hi};
+    while (v != nullptr && *v != '\0') {
+        char *end = nullptr;
+        const auto lo = static_cast<std::uint32_t>(std::strtoul(v, &end, 10));
+        const auto hi = *end == '-' ? static_cast<std::uint32_t>(std::strtoul(end + 1, &end, 10)) : lo;
+        ranges.emplace_back(lo, hi);
+        v = *end == ',' ? end + 1 : nullptr;
+    }
+    return ranges;
 }();
+bool skipped_prim(std::uint32_t index) {
+    for (const auto &[lo, hi] : g_skip_prims)
+        if (index >= lo && index <= hi) return true;
+    return false;
+}
 
 #ifdef __EMSCRIPTEN__
 // ?profile in the page sets PSPWEB_FRAME_PROFILE: list timing only, cheap enough
@@ -747,7 +756,7 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     g_section_ms[0] += 0.0; // decode timer ends with scope below
     const std::uint32_t prim_index = prim_in_frame_++;
     if (frame_ == g_dump_frame) log_primitive(prim_index, type, count);
-    if (prim_index >= g_skip_prims.first && prim_index <= g_skip_prims.second) return;
+    if (!g_skip_prims.empty() && skipped_prim(prim_index)) return;
     SectionTimer emit_timer{1};
 
     const std::uint64_t pixels_before = stats_.pixels;
@@ -1276,7 +1285,14 @@ void Ge::log_primitive(std::uint32_t index, std::uint32_t type, std::uint32_t co
     if ((regs_[0x1F] & 1u) != 0u) std::cerr << " FOG=" << regs_[0xCF];
     if ((regs_[0x27] & 1u) != 0u) std::cerr << " COLORTEST";
     if ((regs_[0x28] & 1u) != 0u) std::cerr << " LOGICOP=" << regs_[0xE6];
-    if ((regs_[kLightingEnable] & 1u) != 0u) std::cerr << " light";
+    if ((regs_[kLightingEnable] & 1u) != 0u) {
+        std::cerr << " light upd=" << regs_[kMaterialUpdate] << " emis=" << regs_[kMaterialEmissive]
+                  << " diff=" << regs_[kMaterialDiffuse] << " global=" << regs_[kAmbientColor];
+        for (std::uint32_t i = 0; i < 4u; ++i)
+            if ((regs_[kLightEnable0 + i] & 1u) != 0u)
+                std::cerr << " L" << i << "=" << regs_[kLightType0 + i] << ":" << regs_[kLightColor0 + i * 3u] << "/"
+                          << regs_[kLightColor0 + i * 3u + 1u] << "/" << regs_[kLightColor0 + i * 3u + 2u];
+    }
     if ((regs_[kMaskRgb] & 0xFFFFFFu) != 0u || (regs_[kMaskAlpha] & 0xFFu) != 0u)
         std::cerr << " mask=" << regs_[kMaskRgb] << "/" << regs_[kMaskAlpha];
     std::cerr << " mat=" << regs_[kMaterialAmbient] << "/" << regs_[kMaterialAlpha] << std::dec << "\n";
