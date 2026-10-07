@@ -335,6 +335,8 @@ private:
     void sceKernelLibcTime(Ctx &ctx);
     void sceKernelLibcGettimeofday(Ctx &ctx);
     void sceKernelCpuSuspendIntr(Ctx &ctx);
+    void sceKernelMemcpy(Ctx &ctx);
+    void sceKernelMemset(Ctx &ctx);
     void return_zero(Ctx &ctx);
     void return_one(Ctx &ctx);
 

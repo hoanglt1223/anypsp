@@ -99,7 +99,15 @@ void Kernel::install_devices() {
     hle(suspend, 0x3AEE7261u, "sceKernelPowerUnlock", &Kernel::return_zero);
     hle(suspend, 0x090CCB3Fu, "sceKernelPowerTick", &Kernel::return_zero);
     hle("SysMemUserForUser", 0x342061E5u, "sceKernelSetCompiledSdkVersion370", &Kernel::return_zero);
+    hle("SysMemUserForUser", 0x1B4217BCu, "sceKernelSetCompiledSdkVersion603_605", &Kernel::return_zero);
     hle("scePower", 0xEBD177D6u, "scePowerSetClockFrequency", &Kernel::return_zero);
+    hle("scePower", 0x469989ADu, "scePowerSetClockFrequency2", &Kernel::return_zero);
+    // Firmware modules are all high-level emulated, so loading one is a no-op.
+    hle("sceUtility", 0x2A2B3DE0u, "sceUtilityLoadModule", &Kernel::return_zero);
+    hle("sceUtility", 0xE49BFE92u, "sceUtilityUnloadModule", &Kernel::return_zero);
+    // Keys for downloadable content; disc files use sceIoIoctl instead.
+    hle("scePspNpDrm_user", 0xA1336091u, "sceNpDrmSetLicenseeKey", &Kernel::return_zero);
+    hle("scePspNpDrm_user", 0x08D98894u, "sceNpDrmEdataSetupKey", &Kernel::return_zero);
     hle("scePower", 0x04B7766Eu, "scePowerRegisterCallback", &Kernel::return_zero);
     hle("scePower", 0xDFA8BAF8u, "scePowerUnregisterCallback", &Kernel::return_zero);
 }

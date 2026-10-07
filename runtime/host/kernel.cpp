@@ -280,6 +280,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(io, 0x810C4BC3u, "sceIoClose", &Kernel::sceIoClose);
     hle(io, 0x6A638D83u, "sceIoRead", &Kernel::sceIoRead);
     hle(io, 0x63632449u, "sceIoIoctl", &Kernel::sceIoIoctl);
+    hle(io, 0xB293727Fu, "sceIoChangeAsyncPriority", &Kernel::return_zero);
     hle(io, 0x42EC03ACu, "sceIoWrite", &Kernel::sceIoWrite);
     hle(io, 0x27EB27B8u, "sceIoLseek", &Kernel::sceIoLseek);
     hle(io, 0x68963324u, "sceIoLseek32", &Kernel::sceIoLseek32);
@@ -333,6 +334,9 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle("Kernel_Library", 0x092968F4u, "sceKernelCpuSuspendIntr", &Kernel::sceKernelCpuSuspendIntr);
     hle("Kernel_Library", 0x5F10D406u, "sceKernelCpuResumeIntr", &Kernel::return_zero);
     hle("Kernel_Library", 0x3B84732Du, "sceKernelCpuResumeIntrWithSync", &Kernel::return_zero);
+    hle("Kernel_Library", 0x293B45B8u, "sceKernelGetThreadId", &Kernel::sceKernelGetThreadId);
+    hle("Kernel_Library", 0x1839852Au, "sceKernelMemcpy", &Kernel::sceKernelMemcpy);
+    hle("Kernel_Library", 0xA089ECA4u, "sceKernelMemset", &Kernel::sceKernelMemset);
 
     install_devices();
     install_mpeg();
@@ -1282,6 +1286,31 @@ void Kernel::sceKernelLibcGettimeofday(Ctx &ctx) {
         rt_.memory().store32(ctx.gpr[4] + 4u, static_cast<std::uint32_t>(now % 1000000u));
     }
     finish(ctx, 0u);
+}
+
+void Kernel::sceKernelMemcpy(Ctx &ctx) {
+    const std::uint32_t dst = ctx.gpr[4], src = ctx.gpr[5], size = ctx.gpr[6];
+    std::uint8_t *to = rt_.memory().raw_pointer(dst, size);
+    const std::uint8_t *from = rt_.memory().raw_pointer(src, size);
+    if (to != nullptr && from != nullptr) {
+        std::memmove(to, from, size);
+    } else {
+        std::vector<std::uint8_t> bytes(size);
+        for (std::uint32_t i = 0; i < size; ++i) bytes[i] = rt_.memory().load8(src + i);
+        for (std::uint32_t i = 0; i < size; ++i) rt_.memory().store8(dst + i, bytes[i]);
+    }
+    finish(ctx, dst);
+}
+
+void Kernel::sceKernelMemset(Ctx &ctx) {
+    const std::uint32_t dst = ctx.gpr[4], size = ctx.gpr[6];
+    const auto value = static_cast<std::uint8_t>(ctx.gpr[5]);
+    if (std::uint8_t *to = rt_.memory().raw_pointer(dst, size); to != nullptr) {
+        std::memset(to, value, size);
+    } else {
+        for (std::uint32_t i = 0; i < size; ++i) rt_.memory().store8(dst + i, value);
+    }
+    finish(ctx, dst);
 }
 
 void Kernel::sceKernelCpuSuspendIntr(Ctx &ctx) { finish(ctx, 1u); }
