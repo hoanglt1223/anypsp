@@ -279,6 +279,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(io, 0x109F50BCu, "sceIoOpen", &Kernel::sceIoOpen);
     hle(io, 0x810C4BC3u, "sceIoClose", &Kernel::sceIoClose);
     hle(io, 0x6A638D83u, "sceIoRead", &Kernel::sceIoRead);
+    hle(io, 0x63632449u, "sceIoIoctl", &Kernel::sceIoIoctl);
     hle(io, 0x42EC03ACu, "sceIoWrite", &Kernel::sceIoWrite);
     hle(io, 0x27EB27B8u, "sceIoLseek", &Kernel::sceIoLseek);
     hle(io, 0x68963324u, "sceIoLseek32", &Kernel::sceIoLseek32);

@@ -3,10 +3,15 @@
 // the cache parks the calling thread until its chunks arrive.
 
 #include "kernel.hpp"
+#include "pgd.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <iomanip>
 #include <iostream>
+#include <optional>
+#include <sstream>
 
 namespace pspweb {
 namespace {
@@ -14,6 +19,8 @@ namespace {
 constexpr std::uint32_t kErrorFileNotFound = 0x80010002u;
 constexpr std::uint32_t kErrorBadFile = 0x80020323u;
 constexpr std::uint32_t kErrorIo = 0x80010005u;
+constexpr std::uint32_t kErrorPgdInvalidHeader = 0x80510204u;
+constexpr std::uint64_t kMaxWholeFileRead = 256u << 20u;
 
 #if !defined(__EMSCRIPTEN__)
 const char *fopen_mode(std::uint32_t flags) {
@@ -207,6 +214,10 @@ void Kernel::sceIoRead(Ctx &ctx) {
         finish(ctx, kErrorBadFile);
         return;
     }
+    if (it->second.plain) {
+        finish(ctx, plain_read(it->second, ctx.gpr[5], ctx.gpr[6]));
+        return;
+    }
     if (it->second.web != nullptr) {
         web_read(ctx, fd, ctx.gpr[5], ctx.gpr[6], false);
         return;
@@ -244,8 +255,9 @@ void Kernel::sceIoWrite(Ctx &ctx) {
 void Kernel::sceIoLseek(Ctx &ctx) {
     const auto it = files_.find(static_cast<std::int32_t>(ctx.gpr[4]));
     const std::int64_t offset = static_cast<std::int64_t>(ctx.gpr[6] | (static_cast<std::uint64_t>(ctx.gpr[7]) << 32u));
-    if (it != files_.end() && it->second.web != nullptr) {
-        it->second.position = seek_target(it->second.position, it->second.web->size, offset, ctx.gpr[8]);
+    if (it != files_.end() && (it->second.plain || it->second.web != nullptr)) {
+        const std::uint64_t size = it->second.plain ? it->second.plain->size() : it->second.web->size;
+        it->second.position = seek_target(it->second.position, size, offset, ctx.gpr[8]);
         finish64(ctx, it->second.position);
         return;
     }
@@ -260,8 +272,9 @@ void Kernel::sceIoLseek(Ctx &ctx) {
 void Kernel::sceIoLseek32(Ctx &ctx) {
     const auto it = files_.find(static_cast<std::int32_t>(ctx.gpr[4]));
     const std::int64_t offset = static_cast<std::int32_t>(ctx.gpr[5]);
-    if (it != files_.end() && it->second.web != nullptr) {
-        it->second.position = seek_target(it->second.position, it->second.web->size, offset, ctx.gpr[6]);
+    if (it != files_.end() && (it->second.plain || it->second.web != nullptr)) {
+        const std::uint64_t size = it->second.plain ? it->second.plain->size() : it->second.web->size;
+        it->second.position = seek_target(it->second.position, size, offset, ctx.gpr[6]);
         finish(ctx, static_cast<std::uint32_t>(it->second.position));
         return;
     }
@@ -369,6 +382,12 @@ void Kernel::sceIoReadAsync(Ctx &ctx) {
         finish(ctx, kErrorBadFile);
         return;
     }
+    if (it->second.plain) {
+        it->second.async_result = static_cast<std::int32_t>(plain_read(it->second, ctx.gpr[5], ctx.gpr[6]));
+        it->second.async_pending = false;
+        finish(ctx, 0u);
+        return;
+    }
     if (it->second.web != nullptr) {
         web_read(ctx, fd, ctx.gpr[5], ctx.gpr[6], true);
         return;
@@ -387,8 +406,9 @@ void Kernel::sceIoLseekAsync(Ctx &ctx) {
         return;
     }
     const std::int64_t offset = static_cast<std::int64_t>(ctx.gpr[6] | (static_cast<std::uint64_t>(ctx.gpr[7]) << 32u));
-    if (it->second.web != nullptr) {
-        it->second.position = seek_target(it->second.position, it->second.web->size, offset, ctx.gpr[8]);
+    if (it->second.plain || it->second.web != nullptr) {
+        const std::uint64_t size = it->second.plain ? it->second.plain->size() : it->second.web->size;
+        it->second.position = seek_target(it->second.position, size, offset, ctx.gpr[8]);
         it->second.async_result = static_cast<std::int64_t>(it->second.position);
     } else if (it->second.file != nullptr) {
         std::fseek(it->second.file, static_cast<long>(offset), static_cast<int>(ctx.gpr[8]));
@@ -442,6 +462,107 @@ void Kernel::sceIoPollAsync(Ctx &ctx) {
         return;
     }
     sceIoWaitAsync(ctx);
+}
+
+std::uint32_t Kernel::plain_read(OpenFile &open, std::uint32_t buffer, std::uint32_t length) {
+    const std::vector<std::uint8_t> &plain = *open.plain;
+    const std::uint64_t position = std::min<std::uint64_t>(open.position, plain.size());
+    const auto count = static_cast<std::uint32_t>(std::min<std::uint64_t>(length, plain.size() - position));
+    std::uint8_t *dst = rt_.memory().raw_pointer(buffer, count);
+    if (count != 0u && dst == nullptr) return kErrorBadFile;
+    if (count != 0u) std::memcpy(dst, plain.data() + position, count);
+    open.position = position + count;
+    return count;
+}
+
+// Hands the whole of an open file to `use` and finishes the call with its
+// result.  A streamed file that is not cached yet parks the thread until its
+// data has arrived.
+void Kernel::with_file_contents(Ctx &ctx, std::int32_t fd,
+                                std::function<std::uint32_t(OpenFile &, std::span<const std::uint8_t>)> use) {
+    OpenFile &open = files_.at(fd);
+    if (open.file != nullptr) {
+        const long position = std::ftell(open.file);
+        std::fseek(open.file, 0, SEEK_END);
+        const long size = std::ftell(open.file);
+        if (size < 0 || static_cast<std::uint64_t>(size) > kMaxWholeFileRead) {
+            std::fseek(open.file, position, SEEK_SET);
+            finish(ctx, kErrorIo);
+            return;
+        }
+        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
+        std::fseek(open.file, 0, SEEK_SET);
+        bytes.resize(std::fread(bytes.data(), 1u, bytes.size(), open.file));
+        std::fseek(open.file, position, SEEK_SET);
+        finish(ctx, use(open, bytes));
+        return;
+    }
+    if (open.web == nullptr || open.web->size > kMaxWholeFileRead) {
+        finish(ctx, open.web == nullptr ? kErrorBadFile : kErrorIo);
+        return;
+    }
+    const auto size = static_cast<std::uint32_t>(open.web->size);
+    auto bytes = std::make_shared<std::vector<std::uint8_t>>(size);
+    if (webfs_->read_cached(*open.web, 0u, size, bytes->data())) {
+        finish(ctx, use(open, *bytes));
+        return;
+    }
+    const std::int32_t waiting_thread = current_uid_;
+    webfs_->fetch(*open.web, 0u, size, [this, fd, size, bytes, use = std::move(use), waiting_thread](bool ok) {
+        const auto it = files_.find(fd);
+        std::uint32_t result = kErrorIo;
+        if (it != files_.end() && ok && webfs_->read_cached(*it->second.web, 0u, size, bytes->data()))
+            result = use(it->second, *bytes);
+        if (Thread *t = thread(waiting_thread); t != nullptr && t->uid == waiting_thread &&
+            t->state == ThreadState::Waiting && t->wait == WaitType::Io)
+            wake(*t, result);
+    });
+    if (Thread *self = current(); self != nullptr) {
+        self->wait_uid = fd;
+        self->wait_mode = 0u;
+    }
+    block(ctx, WaitType::Io, 0u);
+}
+
+// Games use ioctls on disc files to set up PGD (DRM) decryption; other
+// commands are accepted without doing anything.
+void Kernel::sceIoIoctl(Ctx &ctx) {
+    const std::int32_t fd = static_cast<std::int32_t>(ctx.gpr[4]);
+    const std::uint32_t command = ctx.gpr[5];
+    const auto it = files_.find(fd);
+    if (it == files_.end()) {
+        finish(ctx, kErrorBadFile);
+        return;
+    }
+    if (command == 0x04100002u) { // where the PGD container starts inside the file
+        if (ctx.gpr[7] >= 4u) it->second.pgd_offset = rt_.memory().load32(ctx.gpr[6]);
+        finish(ctx, 0u);
+        return;
+    }
+    if (command != 0x04100001u) {
+        std::ostringstream name;
+        name << "sceIoIoctl 0x" << std::hex << std::setw(8) << std::setfill('0') << command;
+        if (fallback_logged_.insert(name.str()).second) std::cerr << "[io] ignoring " << name.str() << "\n";
+        finish(ctx, 0u);
+        return;
+    }
+    // The game's version key; files that turn out not to be PGD are read as they are.
+    std::optional<std::array<std::uint8_t, 16>> key;
+    if (ctx.gpr[7] == 16u) {
+        key.emplace();
+        for (std::uint32_t i = 0; i < 16u; ++i) (*key)[i] = rt_.memory().load8(ctx.gpr[6] + i);
+    }
+    with_file_contents(ctx, fd, [key](OpenFile &open, std::span<const std::uint8_t> bytes) -> std::uint32_t {
+        if (open.pgd_offset >= bytes.size() || !pgd::is_pgd(bytes.subspan(open.pgd_offset))) return 0u;
+        auto plain = std::make_shared<std::vector<std::uint8_t>>();
+        if (!pgd::decrypt(bytes.subspan(open.pgd_offset), key ? key->data() : nullptr, *plain)) {
+            std::cerr << "[io] PGD decryption failed: " << open.path << "\n";
+            return kErrorPgdInvalidHeader;
+        }
+        open.plain = std::move(plain);
+        open.position = 0u;
+        return 0u;
+    });
 }
 
 } // namespace pspweb

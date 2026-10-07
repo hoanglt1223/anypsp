@@ -21,6 +21,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -90,11 +91,14 @@ struct MemoryBlock {
 struct OpenFile {
     std::FILE *file{};          // native host file
     const WebFile *web{};       // streamed disc file (browser build)
-    std::uint64_t position{};   // web files track their own position
+    std::uint64_t position{};   // web and decrypted files track their own position
     std::string path;
     std::int64_t async_result{};
     bool async_pending{};
     bool closing{};
+    // Set once a PGD (DRM) file has been decrypted; reads come from here then.
+    std::shared_ptr<const std::vector<std::uint8_t>> plain;
+    std::uint32_t pgd_offset{}; // where the PGD container starts in the file
 };
 
 struct DirectoryEntry {
@@ -233,6 +237,9 @@ private:
     [[nodiscard]] bool stat_path(const std::string &psp_path, DirectoryEntry &entry) const;
     void write_stat(std::uint32_t address, const DirectoryEntry &entry);
     void web_read(Ctx &ctx, std::int32_t fd, std::uint32_t buffer, std::uint32_t length, bool async);
+    std::uint32_t plain_read(OpenFile &open, std::uint32_t buffer, std::uint32_t length);
+    void with_file_contents(Ctx &ctx, std::int32_t fd,
+                            std::function<std::uint32_t(OpenFile &, std::span<const std::uint8_t>)> use);
     void finish_async(std::int32_t fd);
     static void finish(Ctx &ctx, std::uint32_t result);
     static void finish64(Ctx &ctx, std::uint64_t result);
@@ -308,6 +315,7 @@ private:
     void sceIoCloseAsync(Ctx &ctx);
     void sceIoWaitAsync(Ctx &ctx);
     void sceIoPollAsync(Ctx &ctx);
+    void sceIoIoctl(Ctx &ctx);
 
     // sceDisplay / sceGe_user.
     void sceDisplaySetMode(Ctx &ctx);
