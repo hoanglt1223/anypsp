@@ -318,12 +318,12 @@ void Kernel::install_sas() {
     add(0x74AE582Au, "__sceSasGetEnvelopeHeight", [voice](Ctx &ctx) {
         Voice *v = voice(ctx);
         if (v == nullptr) return kErrorInvalidVoice;
-        return static_cast<std::uint32_t>(v->envelope.height);
+        return static_cast<std::uint32_t>(std::min<std::int64_t>(v->envelope.height, kEnvelopeMax));
     });
     add(0x07F58C24u, "__sceSasGetAllEnvelopeHeights", [&sas, &m](Ctx &ctx) {
         for (int i = 0; i < kVoices; ++i)
             m.store32(ctx.gpr[5] + static_cast<std::uint32_t>(i) * 4u,
-                      static_cast<std::uint32_t>(sas.voices[static_cast<std::size_t>(i)].envelope.height));
+                      static_cast<std::uint32_t>(std::min<std::int64_t>(sas.voices[static_cast<std::size_t>(i)].envelope.height, kEnvelopeMax)));
         return 0u;
     });
     add(0x787D04D5u, "__sceSasSetPause", [&sas](Ctx &ctx) {
@@ -360,7 +360,7 @@ void Kernel::install_sas() {
                     v.current = v.following;
                     v.following = v.vag.next(m);
                 }
-                const std::int64_t height = v.envelope.height;
+                const std::int64_t height = std::min<std::int64_t>(v.envelope.height, kEnvelopeMax);
                 v.envelope.step();
                 const auto envelope = static_cast<std::int32_t>((height + (1 << 14)) >> 15);
                 const std::int32_t shaped = (sample * envelope + (1 << 14)) >> 15;
