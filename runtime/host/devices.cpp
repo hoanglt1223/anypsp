@@ -58,6 +58,7 @@ void Kernel::install_devices() {
     hle(audio, 0xE2D56B2Du, "sceAudioOutputPanned", &Kernel::sceAudioOutputPanned);
     hle(audio, 0xCB2E439Eu, "sceAudioSetChannelDataLen", &Kernel::sceAudioSetChannelDataLen);
     hle(audio, 0xB011922Fu, "sceAudioGetChannelRestLength", &Kernel::sceAudioGetChannelRestLength);
+    hle(audio, 0x647CEF33u, "sceAudioGetChannelRestLen", &Kernel::sceAudioGetChannelRestLength);
     hle(audio, 0x95FD0C2Du, "sceAudioChangeChannelConfig", &Kernel::return_zero);
     hle(audio, 0xB7E1D8E7u, "sceAudioChangeChannelVolume", &Kernel::return_zero);
     hle(audio, 0x01562BA3u, "sceAudioOutput2Reserve", &Kernel::sceAudioOutput2Reserve);
@@ -70,6 +71,8 @@ void Kernel::install_devices() {
     hle("sceUmdUser", 0xC6183D47u, "sceUmdActivate", &Kernel::return_zero);
     hle("sceUmdUser", 0x56202973u, "sceUmdWaitDriveStatWithTimer", &Kernel::return_zero);
     hle("sceUmdUser", 0x8EF08FCEu, "sceUmdWaitDriveStat", &Kernel::return_zero);
+    hle("sceUmdUser", 0x4A9E5E29u, "sceUmdWaitDriveStatCB", &Kernel::return_zero);
+    hle("sceUmdUser", 0x6AF9B50Au, "sceUmdCancelWaitDriveStat", &Kernel::return_zero);
     hle("sceImpose", 0x24FD7BCFu, "sceImposeGetLanguageMode", &Kernel::sceImposeGetLanguageMode);
     hle("sceImpose", 0x36AA6E91u, "sceImposeSetLanguageMode", &Kernel::return_zero);
     hle("sceDisplay", 0xDBA6C4C4u, "sceDisplayGetFramePerSec", &Kernel::sceDisplayGetFramePerSec);
@@ -106,6 +109,7 @@ void Kernel::install_devices() {
     hle("SysMemUserForUser", 0x342061E5u, "sceKernelSetCompiledSdkVersion370", &Kernel::return_zero);
     hle("SysMemUserForUser", 0x1B4217BCu, "sceKernelSetCompiledSdkVersion603_605", &Kernel::return_zero);
     hle("SysMemUserForUser", 0x91DE343Cu, "sceKernelSetCompiledSdkVersion500_505", &Kernel::return_zero);
+    hle("SysMemUserForUser", 0xEBD5C3E6u, "sceKernelSetCompiledSdkVersion395", &Kernel::return_zero);
     // Memory stick callbacks and folders need no work: the memory stick is a host folder.
     hle("IoFileMgrForUser", 0x54F5FB11u, "sceIoDevctl", &Kernel::return_zero);
     hle("IoFileMgrForUser", 0x06A70004u, "sceIoMkdir", &Kernel::return_zero);

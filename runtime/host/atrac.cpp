@@ -231,15 +231,11 @@ void Kernel::install_atrac() {
         if (address != 0u) m.store32(address, value);
     };
 
-    add(0x7A20E7AFu, "sceAtracSetDataAndGetID", [&st, &m](Ctx &ctx) -> std::uint32_t {
-        const std::uint32_t buffer = ctx.gpr[4], size = ctx.gpr[5];
+    auto set_data = [&m](Atrac &a, std::uint32_t buffer, std::uint32_t size) -> std::uint32_t {
         const std::uint8_t *header = m.raw_pointer(buffer, std::min<std::uint32_t>(size, 4096u));
         Track track;
         if (header == nullptr || !parse_header(header, std::min<std::uint32_t>(size, 4096u), track)) return kErrorUnknownFormat;
-        auto slot = std::find_if(st.ids.begin(), st.ids.end(), [](const Atrac &a) { return !a.used; });
-        if (slot == st.ids.end()) return kErrorNoId;
-        Atrac &a = *slot;
-        a = Atrac{};
+        a.release();
         a.used = true;
         a.track = track;
         a.buffer = buffer;
@@ -257,7 +253,34 @@ void Kernel::install_atrac() {
             a.release();
             return kErrorUnknownFormat;
         }
+        return 0u;
+    };
+
+    add(0x7A20E7AFu, "sceAtracSetDataAndGetID", [&st, set_data](Ctx &ctx) -> std::uint32_t {
+        auto slot = std::find_if(st.ids.begin(), st.ids.end(), [](const Atrac &a) { return !a.used; });
+        if (slot == st.ids.end()) return kErrorNoId;
+        const std::uint32_t result = set_data(*slot, ctx.gpr[4], ctx.gpr[5]);
+        return result != 0u ? result : static_cast<std::uint32_t>(slot - st.ids.begin());
+    });
+    add(0x0E2A73ABu, "sceAtracSetData", [get, set_data](Ctx &ctx) {
+        Atrac *a = get(ctx.gpr[4]);
+        if (a == nullptr) return kErrorBadId;
+        return set_data(*a, ctx.gpr[5], ctx.gpr[6]);
+    });
+    add(0x132F1ECAu, "sceAtracReinit", [](Ctx &) { return 0u; });
+    add(0x780F88D1u, "sceAtracGetAtracID", [&st](Ctx &) -> std::uint32_t {
+        auto slot = std::find_if(st.ids.begin(), st.ids.end(), [](const Atrac &a) { return !a.used; });
+        if (slot == st.ids.end()) return kErrorNoId;
+        *slot = Atrac{};
+        slot->used = true;
         return static_cast<std::uint32_t>(slot - st.ids.begin());
+    });
+    add(0xE23E3A35u, "sceAtracGetNextDecodePosition", [get, put](Ctx &ctx) {
+        Atrac *a = get(ctx.gpr[4]);
+        if (a == nullptr) return kErrorBadId;
+        if (a->sample > a->track.end_sample) return kErrorAllDataDecoded;
+        put(ctx.gpr[5], static_cast<std::uint32_t>(a->sample));
+        return 0u;
     });
     add(0x5622B7C1u, "sceAtracSetAA3DataAndGetID", [](Ctx &) { return kErrorUnknownFormat; });
     add(0x61EB33F5u, "sceAtracReleaseAtracID", [get](Ctx &ctx) {
