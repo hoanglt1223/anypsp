@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <ctime>
 #include <iostream>
 
@@ -78,6 +79,8 @@ void Kernel::install_devices() {
     hle("sceImpose", 0x36AA6E91u, "sceImposeSetLanguageMode", &Kernel::return_zero);
     hle("sceDisplay", 0xDBA6C4C4u, "sceDisplayGetFramePerSec", &Kernel::sceDisplayGetFramePerSec);
     hle("sceRtc", 0xE7C27D1Bu, "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
+    hle("sceRtc", 0x3F7AD767u, "sceRtcGetCurrentTick", &Kernel::sceRtcGetCurrentTick);
+    hle("sceRtc", 0xC41C2853u, "sceRtcGetTickResolution", &Kernel::sceRtcGetTickResolution);
     hle("UtilsForUser", 0x91E4F6A7u, "sceKernelLibcClock", &Kernel::sceKernelLibcClock);
     hle("Kernel_Library", 0xB55249D2u, "sceKernelIsCpuIntrEnable", &Kernel::return_one);
 
@@ -386,6 +389,20 @@ void Kernel::sceDisplayGetFramePerSec(Ctx &ctx) {
 }
 
 void Kernel::sceKernelLibcClock(Ctx &ctx) { finish(ctx, static_cast<std::uint32_t>(now_us())); }
+
+void Kernel::sceRtcGetCurrentTick(Ctx &ctx) {
+    constexpr std::uint64_t kUnixEpochTick = 62135596800000000ull;
+    static const std::uint64_t base = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count()) - now_us();
+    const std::uint64_t tick = kUnixEpochTick + base + now_us();
+    if (ctx.gpr[4] != 0u) {
+        rt_.memory().store32(ctx.gpr[4], static_cast<std::uint32_t>(tick));
+        rt_.memory().store32(ctx.gpr[4] + 4u, static_cast<std::uint32_t>(tick >> 32u));
+    }
+    finish(ctx, 0u);
+}
+
+void Kernel::sceRtcGetTickResolution(Ctx &ctx) { finish(ctx, 1000000u); }
 
 void Kernel::sceRtcGetCurrentClockLocalTime(Ctx &ctx) {
     const std::time_t now = std::time(nullptr);

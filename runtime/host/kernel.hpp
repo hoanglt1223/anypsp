@@ -496,6 +496,8 @@ private:
     void sceKernelReferEventFlagStatus(Ctx &ctx);
     void sceKernelLibcClock(Ctx &ctx);
     void sceRtcGetCurrentClockLocalTime(Ctx &ctx);
+    void sceRtcGetCurrentTick(Ctx &ctx);
+    void sceRtcGetTickResolution(Ctx &ctx);
     void sceKernelVolatileMemLock(Ctx &ctx);
 
     psprecomp::Runtime &rt_;
