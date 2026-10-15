@@ -48,9 +48,11 @@ public:
     // Called once per vblank; cached RAM textures are revalidated once per frame.
     void next_frame() {
         ++frame_;
+        ++texture_epoch_;
         prim_in_frame_ = 0u;
         state_dirty_ = true; // cached textures revalidate once per frame
     }
+    void cpu_wrote(std::uint32_t address, std::uint32_t bytes);
     // sceGeSaveContext / sceGeRestoreContext: the state as a list of GE commands
     // (games treat the context buffer as opaque, and it holds up to 512 words).
     [[nodiscard]] std::vector<std::uint32_t> save_context() const;
@@ -168,6 +170,7 @@ private:
     std::uint64_t texture_cache_texels_{};
     std::uint64_t clut_hash_{};
     std::uint32_t frame_{1};
+    std::uint32_t texture_epoch_{1};
     std::uint32_t prim_in_frame_{}; // for PSPWEB_DUMP_FRAME / PSPWEB_SKIP_PRIMS
     void log_primitive(std::uint32_t index, std::uint32_t type, std::uint32_t count);
     void dump_texture(const CachedTexture &texture, std::uint32_t address, std::uint32_t format, std::uint32_t width,

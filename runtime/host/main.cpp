@@ -77,6 +77,7 @@ bool start_session(const std::string &module_path, const std::string &disc_root,
     s.kernel = std::make_unique<pspweb::Kernel>(rt);
     s.kernel->reserve(load_base, image_end - load_base, "module:" + module->name);
     s.kernel->set_roots(disc_root, memstick_root);
+    s.kernel->set_flash_root(std::filesystem::path(module_path).parent_path() / "flash0");
     if (!manifest.empty() && !s.kernel->enable_webfs(manifest, data_url))
         std::cerr << "[pspweb] no disc manifest at " << manifest << ", using local files\n";
     s.kernel->add_main_module(*module, load_base, image_end - load_base);

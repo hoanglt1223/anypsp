@@ -205,6 +205,7 @@ public:
 
     // Host directories that disc0:/umd0: and ms0: resolve to.
     void set_roots(std::filesystem::path disc_root, std::filesystem::path memstick_root);
+    void set_flash_root(std::filesystem::path flash_root) { flash_root_ = std::move(flash_root); }
     // Marks a guest range (the loaded module image) as allocated.
     void reserve(std::uint32_t address, std::uint32_t size, std::string name);
     // Registers HLE handlers, logging fallbacks for every other import, and the
@@ -542,6 +543,8 @@ private:
     void install_savedata();
     std::shared_ptr<void> savedata_;
     std::shared_ptr<void> atrac_;           // atrac.cpp state
+    void install_fonts();
+    std::shared_ptr<void> fonts_;
     std::array<AudioChannel, 8> audio_channels_{};
     AudioChannel audio_output2_{};
     AudioSink audio_sink_{};
@@ -565,6 +568,7 @@ private:
     bool throttle_flips_{std::getenv("PSPWEB_NO_FLIP_THROTTLE") == nullptr};
     std::filesystem::path disc_root_{"."};
     std::filesystem::path memstick_root_{"."};
+    std::filesystem::path flash_root_{"flash0"};
     std::string cwd_{"disc0:/"};
     std::set<std::string> registered_;
     std::set<std::string> fallback_logged_;

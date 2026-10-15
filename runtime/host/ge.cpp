@@ -1267,7 +1267,7 @@ void Ge::bind_texture() {
     if (gl_ != nullptr && in_vram) gl_->prepare_vram_read(address, bytes); // may touch_vram()
     const std::uint64_t stamp = in_vram ? vram_stamp(address, bytes) : 0u;
     auto found = textures_.find(key);
-    if (found != textures_.end() && found->second.frame == frame_ &&
+    if (found != textures_.end() && found->second.frame == texture_epoch_ &&
         (!in_vram || found->second.vram_generation == stamp)) {
         texture_ = &found->second;
         return;
@@ -1276,7 +1276,7 @@ void Ge::bind_texture() {
     if (source == nullptr) return; // fall back to direct sampling
     const std::uint64_t hash = hash_bytes(source, bytes);
     if (found != textures_.end() && found->second.source_hash == hash) {
-        found->second.frame = frame_;
+        found->second.frame = texture_epoch_;
         found->second.vram_generation = stamp;
         texture_ = &found->second;
         return;
@@ -1293,7 +1293,7 @@ void Ge::bind_texture() {
         for (std::uint32_t x = 0; x < width; ++x)
             cached.texels[y * width + x] = fetch_texel(static_cast<int>(x), static_cast<int>(y));
     cached.source_hash = hash;
-    cached.frame = frame_;
+    cached.frame = texture_epoch_;
     cached.vram_generation = stamp;
     texture_ = &cached;
 }
@@ -1576,6 +1576,15 @@ void Ge::block_transfer() {
 void Ge::set_gl(GeGl *gl) {
     gl_ = gl;
     if (gl_ != nullptr) gl_->set_vram_write_hook([this](std::uint32_t address, std::uint32_t bytes) { touch_vram(address, bytes); });
+}
+
+void Ge::cpu_wrote(std::uint32_t address, std::uint32_t bytes) {
+    if ((address & 0x0F000000u) == 0x04000000u) {
+        touch_vram(address, bytes);
+    } else {
+        ++texture_epoch_;
+        state_dirty_ = true;
+    }
 }
 
 void Ge::touch_vram(std::uint32_t address, std::uint32_t bytes) {
