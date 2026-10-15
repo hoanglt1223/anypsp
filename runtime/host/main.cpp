@@ -6,6 +6,7 @@
 #include "kernel.hpp"
 
 #include "psprecomp/elf32.hpp"
+#include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 
 #include <algorithm>
@@ -13,7 +14,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -29,6 +32,10 @@
 #include <chrono>
 #include <thread>
 #endif
+
+namespace psprecomp {
+void register_dynamic_code();
+}
 
 namespace {
 
@@ -49,6 +56,14 @@ struct Session {
 };
 
 Session g_session;
+std::filesystem::path g_dynamic_listing;
+
+void capture_dynamic_code(std::uint32_t address, const std::uint32_t *words, std::size_t count) {
+    std::ofstream out(g_dynamic_listing, std::ios::app);
+    out << std::hex << std::uppercase << std::setfill('0') << std::setw(8) << address;
+    for (std::size_t i = 0; i < count; ++i) out << ' ' << std::setw(8) << words[i];
+    out << '\n';
+}
 
 bool start_session(const std::string &module_path, const std::string &disc_root,
                    const std::string &memstick_root, const std::string &guest_path,
@@ -74,6 +89,12 @@ bool start_session(const std::string &module_path, const std::string &disc_root,
     }
 
     psprecomp::register_generated_functions(rt);
+    psprecomp::register_dynamic_code();
+    psprecomp::set_runtime_missing_code_handler(&psprecomp::run_dynamic_code);
+#if !defined(__EMSCRIPTEN__)
+    g_dynamic_listing = std::filesystem::path(module_path).parent_path() / "dynamic.txt";
+    psprecomp::set_dynamic_code_capture(&capture_dynamic_code);
+#endif
     s.kernel = std::make_unique<pspweb::Kernel>(rt);
     s.kernel->reserve(load_base, image_end - load_base, "module:" + module->name);
     s.kernel->set_roots(disc_root, memstick_root);
