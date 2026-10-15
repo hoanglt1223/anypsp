@@ -43,10 +43,11 @@ void Kernel::return_one(Ctx &ctx) { finish(ctx, 1u); }
 void Kernel::install_devices() {
     const char *ctrl = "sceCtrl";
     hle(ctrl, 0x3A622550u, "sceCtrlPeekBufferPositive", &Kernel::sceCtrlPeekBufferPositive);
-    hle(ctrl, 0x1F803938u, "sceCtrlReadBufferPositive", &Kernel::sceCtrlPeekBufferPositive);
+    hle(ctrl, 0x1F803938u, "sceCtrlReadBufferPositive", &Kernel::sceCtrlReadBufferPositive);
     hle(ctrl, 0x0B588501u, "sceCtrlReadLatch", &Kernel::sceCtrlReadLatch);
     hle(ctrl, 0xB1D0E5CDu, "sceCtrlPeekLatch", &Kernel::sceCtrlPeekLatch);
-    hle(ctrl, 0x1F4011E6u, "sceCtrlSetSamplingMode", &Kernel::return_zero);
+    hle(ctrl, 0x1F4011E6u, "sceCtrlSetSamplingMode", &Kernel::sceCtrlSetSamplingMode);
+    hle(ctrl, 0xDA6B76A1u, "sceCtrlGetSamplingMode", &Kernel::sceCtrlGetSamplingMode);
     hle(ctrl, 0x6A2774F3u, "sceCtrlSetSamplingCycle", &Kernel::return_zero);
     hle(ctrl, 0xA7144800u, "sceCtrlSetIdleCancelThreshold", &Kernel::return_zero);
 
@@ -136,8 +137,37 @@ void Kernel::sceKernelVolatileMemLock(Ctx &ctx) {
 // sceCtrl
 
 void Kernel::sceCtrlPeekBufferPositive(Ctx &ctx) {
-    const std::uint32_t data = ctx.gpr[4];
     const std::uint32_t count = std::max(ctx.gpr[5], 1u);
+    write_pad(ctx.gpr[4], count);
+    finish(ctx, count);
+}
+
+void Kernel::sceCtrlSetSamplingMode(Ctx &ctx) {
+    const std::uint32_t previous = pad_mode_;
+    pad_mode_ = ctx.gpr[4] & 1u;
+    finish(ctx, previous);
+}
+
+void Kernel::sceCtrlGetSamplingMode(Ctx &ctx) {
+    if (ctx.gpr[4] != 0u) rt_.memory().store32(ctx.gpr[4], pad_mode_);
+    finish(ctx, 0u);
+}
+
+void Kernel::sceCtrlReadBufferPositive(Ctx &ctx) {
+    const std::uint32_t count = std::max(ctx.gpr[5], 1u);
+    if (pad_read_vcount_ != display_.vcount) {
+        pad_read_vcount_ = display_.vcount;
+        write_pad(ctx.gpr[4], count);
+        finish(ctx, count);
+        return;
+    }
+    Thread *t = current();
+    t->wait_out_address = ctx.gpr[4];
+    t->wait_count = count;
+    block(ctx, WaitType::CtrlRead, 0u);
+}
+
+void Kernel::write_pad(std::uint32_t data, std::uint32_t count) {
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t entry = data + i * 16u;
         rt_.memory().store32(entry + 0u, static_cast<std::uint32_t>(now_us()));
@@ -146,7 +176,6 @@ void Kernel::sceCtrlPeekBufferPositive(Ctx &ctx) {
         rt_.memory().store8(entry + 9u, pad_ly_);
         for (std::uint32_t j = 10u; j < 16u; ++j) rt_.memory().store8(entry + j, 0u);
     }
-    finish(ctx, count);
 }
 
 // ---------------------------------------------------------------------------

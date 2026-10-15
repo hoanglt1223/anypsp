@@ -627,7 +627,7 @@ void Kernel::call_guest(Ctx &ctx, std::uint32_t entry, std::initializer_list<std
 
 void Kernel::dump_threads() const {
     static const char *states[] = {"dormant", "ready", "running", "waiting", "dead"};
-    static const char *waits[] = {"-", "sleep", "delay", "vblank", "thread-end", "sema", "event-flag", "fpl", "io", "callback", "ge", "mutex", "mbx"};
+    static const char *waits[] = {"-", "sleep", "delay", "vblank", "thread-end", "sema", "event-flag", "fpl", "io", "callback", "ge", "mutex", "mbx", "ctrl"};
     for (const auto &[uid, t] : threads_) {
         const auto &c = uid == current_uid_ ? rt_.cpu() : t.ctx;
         std::cerr << "[thread] " << uid << " " << t.name << " prio=" << t.priority << " "
@@ -671,6 +671,11 @@ bool Kernel::frame(double budget_ms) {
     for (auto &[uid, t] : threads_) {
         (void)uid;
         if (t.state == ThreadState::Waiting && t.wait == WaitType::Vblank) wake(t, 0u);
+        if (t.state == ThreadState::Waiting && t.wait == WaitType::CtrlRead) {
+            write_pad(t.wait_out_address, t.wait_count);
+            pad_read_vcount_ = display_.vcount;
+            wake(t, t.wait_count);
+        }
     }
     run_interrupts(kVblankInterrupt);
 

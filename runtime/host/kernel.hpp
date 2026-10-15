@@ -41,7 +41,7 @@ inline constexpr std::uint32_t kVramAddress = 0x04000000u;
 inline constexpr std::uint32_t kVramSize = 0x00200000u;
 
 enum class ThreadState { Dormant, Ready, Running, Waiting, Dead };
-enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx };
+enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx, CtrlRead };
 
 // PSP pad button bits (SceCtrlData::Buttons).
 namespace pad {
@@ -463,6 +463,10 @@ private:
                       bool blocking = true);
     void dialog_get_status(Ctx &ctx, UtilityDialog &dialog);
     void sceCtrlPeekBufferPositive(Ctx &ctx);
+    void sceCtrlReadBufferPositive(Ctx &ctx);
+    void sceCtrlSetSamplingMode(Ctx &ctx);
+    void sceCtrlGetSamplingMode(Ctx &ctx);
+    void write_pad(std::uint32_t data, std::uint32_t count);
     void sceAudioChReserve(Ctx &ctx);
     void sceAudioChRelease(Ctx &ctx);
     void sceAudioOutputBlocking(Ctx &ctx);
@@ -544,6 +548,8 @@ private:
     std::uint32_t latch_make_{}, latch_break_{}; // buttons pressed / released since the last sceCtrlReadLatch
     std::uint8_t pad_lx_{128u};
     std::uint8_t pad_ly_{128u};
+    std::uint32_t pad_read_vcount_{~0u};
+    std::uint32_t pad_mode_{};
     std::int32_t current_uid_{-1};
     std::int32_t next_uid_{0x100};
     std::uint64_t ready_sequence_{};
