@@ -49,6 +49,7 @@ constexpr std::uint32_t kErrorEventFlagCondition = 0x800201AFu;
 constexpr std::uint32_t kErrorWaitDelete = 0x800201B5u;
 constexpr std::uint32_t kErrorIllegalCount = 0x800201BDu;
 constexpr std::uint32_t kErrorUnknownMbx = 0x8002019Bu;
+constexpr std::uint32_t kErrorUnknownAlarm = 0x8002019Fu;
 constexpr std::uint32_t kErrorMbxNoMessage = 0x800201B2u;
 constexpr std::uint32_t kErrorUnknownMutex = 0x800201C3u;
 constexpr std::uint32_t kErrorMutexLocked = 0x800201C4u;
@@ -66,6 +67,7 @@ Clock::time_point g_slice_deadline{};
 
 void slice_heartbeat(std::uint64_t, std::uint32_t) {
     if (Clock::now() >= g_slice_deadline) g_runtime->stop("slice");
+    else if (g_kernel->interrupt_pending()) g_runtime->stop("interrupt");
 }
 
 void thread_return_trampoline(psprecomp::Runtime &, psprecomp::AllegrexContext &ctx) {
@@ -129,6 +131,11 @@ Kernel::Kernel(psprecomp::Runtime &runtime)
     g_runtime = &runtime;
     frame_real_start_ns_ = real_now_ns();
     reserve(kUserPartitionStart, 0x4000u, "loader");
+    ge_->set_signal_sink([this](std::int32_t callback, bool finish, std::uint32_t value) {
+        const std::lock_guard<std::mutex> lock(ge_events_mutex_);
+        ge_events_.push_back(GeEvent{callback, finish, value});
+        ge_event_pending_.store(true, std::memory_order_relaxed);
+    });
 }
 
 void Kernel::set_roots(std::filesystem::path disc_root, std::filesystem::path memstick_root) {
@@ -263,6 +270,9 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(im, 0xD61E6961u, "sceKernelReleaseSubIntrHandler", &Kernel::sceKernelReleaseSubIntrHandler);
     hle(im, 0xFB8E22ECu, "sceKernelEnableSubIntr", &Kernel::sceKernelEnableSubIntr);
     hle(im, 0x8A389411u, "sceKernelDisableSubIntr", &Kernel::sceKernelDisableSubIntr);
+    hle(tm, 0x6652B8CAu, "sceKernelSetAlarm", &Kernel::sceKernelSetAlarm);
+    hle(tm, 0xB2C25152u, "sceKernelSetSysClockAlarm", &Kernel::sceKernelSetSysClockAlarm);
+    hle(tm, 0x7E65B999u, "sceKernelCancelAlarm", &Kernel::sceKernelCancelAlarm);
     hle(tm, 0x28B6489Cu, "sceKernelDeleteSema", &Kernel::sceKernelDeleteSema);
     hle(tm, 0x3F53E640u, "sceKernelSignalSema", &Kernel::sceKernelSignalSema);
     hle(tm, 0x4E3A1105u, "sceKernelWaitSema", &Kernel::sceKernelWaitSema);
@@ -349,8 +359,8 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle("sceGe_user", 0xB287BD61u, "sceGeDrawSync", &Kernel::sceGeDrawSync);
     hle("sceGe_user", 0x4C06E472u, "sceGeContinue", &Kernel::return_zero);
     hle("sceGe_user", 0xB448EC0Du, "sceGeBreak", &Kernel::return_zero);
-    hle("sceGe_user", 0xA4FC06A4u, "sceGeSetCallback", &Kernel::return_zero);
-    hle("sceGe_user", 0x05DB22CEu, "sceGeUnsetCallback", &Kernel::return_zero);
+    hle("sceGe_user", 0xA4FC06A4u, "sceGeSetCallback", &Kernel::sceGeSetCallback);
+    hle("sceGe_user", 0x05DB22CEu, "sceGeUnsetCallback", &Kernel::sceGeUnsetCallback);
     hle("sceGe_user", 0xB77905EAu, "sceGeEdramSetAddrTranslation", &Kernel::return_zero);
     hle("sceGe_user", 0xDC93CFEFu, "sceGeGetCmd", &Kernel::sceGeGetCmd);
     hle("sceGe_user", 0x438A385Au, "sceGeSaveContext", &Kernel::sceGeSaveContext);
@@ -519,6 +529,10 @@ std::uint64_t Kernel::earliest_timed_wake() const {
             (earliest == 0u || t.wake_time_us < earliest))
             earliest = t.wake_time_us;
     }
+    for (const auto &[uid, alarm] : alarms_) {
+        (void)uid;
+        if (alarm.running == 0 && (earliest == 0u || alarm.at < earliest)) earliest = alarm.at;
+    }
     return earliest;
 }
 
@@ -663,6 +677,16 @@ bool Kernel::frame(double budget_ms) {
     const auto deadline = Clock::now() + std::chrono::microseconds(static_cast<std::int64_t>(budget_ms * 1000.0));
     while (!halted_ && Clock::now() < deadline) {
         poll_waits();
+        run_alarms();
+        run_ge_callbacks();
+        if (Thread *running = current()) {
+            const Thread *next = pick_ready();
+            if (next != nullptr && next->priority < running->priority) {
+                running->ctx = rt_.cpu();
+                make_ready(*running, true);
+                current_uid_ = -1;
+            }
+        }
         if (current() == nullptr) {
             Thread *next = pick_ready();
             if (next == nullptr && waiting_for_ge()) {
@@ -694,7 +718,7 @@ bool Kernel::frame(double budget_ms) {
             break;
         }
         const std::string &reason = rt_.stop_reason();
-        if (reason == "idle") continue;
+        if (reason == "idle" || reason == "interrupt") continue;
         if (reason == "slice") break;
         halted_ = true;
         halt_reason_ = reason;
@@ -1249,24 +1273,68 @@ void Kernel::run_interrupts(std::uint32_t interrupt) {
     for (auto &[key, handler] : sub_interrupts_) {
         if (key.first != interrupt || !handler.enabled || handler.handler == 0u) continue;
         if (handler.running != 0 && threads_.contains(handler.running)) continue; // still busy with the last one
-        Thread t;
-        t.uid = new_uid();
-        t.name = "pspweb_interrupt";
-        t.entry = handler.handler;
-        t.priority = 1;
-        t.stack_size = 0x4000u;
-        t.stack_block = allocate("stack:interrupt", 1u, t.stack_size, 0u);
-        if (t.stack_block < 0) return;
-        t.stack_top = blocks_.at(t.stack_block).address + t.stack_size;
-        t.gp = handler.gp;
-        const std::int32_t uid = t.uid;
-        auto &stored = threads_[uid] = std::move(t);
-        start_thread(stored, 0u, {});
-        stored.ctx.gpr[4] = key.second;
-        stored.ctx.gpr[5] = handler.arg;
-        make_ready(stored, true);
-        guest_calls_[uid] = GuestCall{0, nullptr}; // removed again when it returns
+        const std::int32_t uid = start_handler(handler.handler, handler.gp, key.second, handler.arg, nullptr);
+        if (uid == 0) return;
         handler.running = uid;
+    }
+}
+
+std::int32_t Kernel::start_handler(std::uint32_t entry, std::uint32_t gp, std::uint32_t a0, std::uint32_t a1,
+                                   std::function<std::uint32_t(std::uint32_t)> done) {
+    Thread t;
+    t.uid = new_uid();
+    t.name = "pspweb_interrupt";
+    t.entry = entry;
+    t.priority = 1;
+    t.stack_size = 0x4000u;
+    t.stack_block = allocate("stack:interrupt", 1u, t.stack_size, 0u);
+    if (t.stack_block < 0) return 0;
+    t.stack_top = blocks_.at(t.stack_block).address + t.stack_size;
+    t.gp = gp;
+    const std::int32_t uid = t.uid;
+    auto &stored = threads_[uid] = std::move(t);
+    start_thread(stored, 0u, {});
+    stored.ctx.gpr[4] = a0;
+    stored.ctx.gpr[5] = a1;
+    make_ready(stored, true);
+    guest_calls_[uid] = GuestCall{0, std::move(done)}; // removed again when it returns
+    return uid;
+}
+
+void Kernel::set_alarm(Ctx &ctx, std::uint64_t delay_us) {
+    const std::int32_t uid = new_uid();
+    alarms_[uid] = Alarm{now_us() + delay_us, ctx.gpr[5], ctx.gpr[6], ctx.gpr[28], 0};
+    finish(ctx, static_cast<std::uint32_t>(uid));
+}
+
+void Kernel::sceKernelSetAlarm(Ctx &ctx) { set_alarm(ctx, ctx.gpr[4]); }
+
+void Kernel::sceKernelSetSysClockAlarm(Ctx &ctx) {
+    auto &m = rt_.memory();
+    set_alarm(ctx, m.load32(ctx.gpr[4]) | static_cast<std::uint64_t>(m.load32(ctx.gpr[4] + 4u)) << 32u);
+}
+
+void Kernel::sceKernelCancelAlarm(Ctx &ctx) {
+    finish(ctx, alarms_.erase(static_cast<std::int32_t>(ctx.gpr[4])) != 0u ? 0u : kErrorUnknownAlarm);
+}
+
+void Kernel::run_alarms() {
+    const std::uint64_t now = now_us();
+    for (auto &[uid, alarm] : alarms_) {
+        if (alarm.running != 0 || now < alarm.at) continue;
+        const std::int32_t id = uid;
+        alarm.running = start_handler(alarm.handler, alarm.gp, alarm.common, 0u, [this, id](std::uint32_t next) {
+            const auto it = alarms_.find(id);
+            if (it == alarms_.end()) return 0u;
+            if (next == 0u) {
+                alarms_.erase(it);
+            } else {
+                it->second.at = now_us() + next;
+                it->second.running = 0;
+            }
+            return 0u;
+        });
+        if (alarm.running == 0) return;
     }
 }
 
@@ -1467,7 +1535,43 @@ void Kernel::sceGeEdramGetSize(Ctx &ctx) { finish(ctx, kVramSize); }
 // the PSP; a stalled list resumes from where it stopped when the stall address
 // moves.  The sync calls wait (mode 0) or report the state (mode 1).
 void Kernel::sceGeListEnQueue(Ctx &ctx) {
-    finish(ctx, ge_worker_->enqueue(ctx.gpr[4], ctx.gpr[5]));
+    const auto callback = static_cast<std::int32_t>(ctx.gpr[6]);
+    finish(ctx, ge_worker_->enqueue(ctx.gpr[4], ctx.gpr[5], ge_callbacks_.contains(callback) ? callback : -1));
+}
+
+void Kernel::sceGeSetCallback(Ctx &ctx) {
+    auto &m = rt_.memory();
+    const std::uint32_t data = ctx.gpr[4];
+    for (std::int32_t id = 0; id < 16; ++id) {
+        if (ge_callbacks_.contains(id)) continue;
+        ge_callbacks_[id] = GeCallback{m.load32(data), m.load32(data + 4u), m.load32(data + 8u), m.load32(data + 12u), ctx.gpr[28]};
+        finish(ctx, static_cast<std::uint32_t>(id));
+        return;
+    }
+    finish(ctx, kErrorNoMemory);
+}
+
+void Kernel::sceGeUnsetCallback(Ctx &ctx) {
+    ge_callbacks_.erase(static_cast<std::int32_t>(ctx.gpr[4]));
+    finish(ctx, 0u);
+}
+
+void Kernel::run_ge_callbacks() {
+    std::vector<GeEvent> events;
+    {
+        const std::lock_guard<std::mutex> lock(ge_events_mutex_);
+        ge_event_pending_.store(false, std::memory_order_relaxed);
+        if (ge_events_.empty()) return;
+        events.swap(ge_events_);
+    }
+    for (const GeEvent &event : events) {
+        const auto it = ge_callbacks_.find(event.callback);
+        if (it == ge_callbacks_.end()) continue;
+        const GeCallback &callback = it->second;
+        const std::uint32_t entry = event.finish ? callback.finish : callback.signal;
+        if (entry != 0u)
+            start_handler(entry, callback.gp, event.value, event.finish ? callback.finish_arg : callback.signal_arg, nullptr);
+    }
 }
 
 void Kernel::sceGeListUpdateStallAddr(Ctx &ctx) {

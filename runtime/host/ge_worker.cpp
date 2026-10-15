@@ -110,15 +110,17 @@ void GeWorker::call(std::function<void()> work) {
     while (!finished.load()) relax();
 }
 
-std::uint32_t GeWorker::enqueue(std::uint32_t list, std::uint32_t stall) {
+std::uint32_t GeWorker::enqueue(std::uint32_t list, std::uint32_t stall, std::int32_t callback) {
     const std::uint32_t id = ++queued_;
-    post([this, id, list, stall] {
+    post([this, id, list, stall, callback] {
+        ge_.set_list_callback(callback);
         if (ge_.run_list(list, stall)) {
             stalled_pc_ = 0u;
             completed_.store(id);
         } else {
             // Stopped at the stall address; resumes from there when it moves.
             stalled_id_ = id;
+            stalled_callback_ = callback;
             stalled_pc_ = stall & 0x0FFFFFFFu;
         }
     });
@@ -128,6 +130,7 @@ std::uint32_t GeWorker::enqueue(std::uint32_t list, std::uint32_t stall) {
 void GeWorker::update_stall(std::uint32_t, std::uint32_t stall) {
     post([this, stall] {
         if (stalled_pc_ == 0u) return;
+        ge_.set_list_callback(stalled_callback_);
         if (ge_.run_list(stalled_pc_, stall)) {
             stalled_pc_ = 0u;
             completed_.store(stalled_id_);

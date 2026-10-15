@@ -24,7 +24,7 @@ namespace {
 // GE command opcodes used below.
 enum : std::uint32_t {
     kNop = 0x00, kVaddr = 0x01, kIaddr = 0x02, kPrim = 0x04, kJump = 0x08, kCall = 0x0A, kRet = 0x0B,
-    kEnd = 0x0C, kFinish = 0x0F, kBase = 0x10, kVertexType = 0x12, kOffsetAddr = 0x13, kOrigin = 0x14,
+    kEnd = 0x0C, kSignal = 0x0E, kFinish = 0x0F, kBase = 0x10, kVertexType = 0x12, kOffsetAddr = 0x13, kOrigin = 0x14,
     kLightingEnable = 0x17, kLightEnable0 = 0x18, kCullEnable = 0x1D, kTextureEnable = 0x1E,
     kBlendEnable = 0x21, kAlphaTestEnable = 0x22, kZTestEnable = 0x23,
     kBoneMatrixNumber = 0x2A, kBoneMatrixData = 0x2B, kMorphWeight0 = 0x2C,
@@ -208,6 +208,7 @@ bool Ge::run_list(std::uint32_t start, std::uint32_t stall) {
     // Commands are read through a raw pointer to the current 4 KiB page.
     const std::uint8_t *page = nullptr;
     std::uint32_t page_start = 1u;
+    std::uint32_t previous = 0u;
     for (std::uint32_t guard = 0; guard < 8'000'000u; ++guard) {
         if (stall != 0u && pc_ == stall) return false;
         if ((pc_ & ~0xFFFu) != page_start) {
@@ -218,8 +219,26 @@ bool Ge::run_list(std::uint32_t start, std::uint32_t stall) {
         if (page != nullptr) std::memcpy(&op, page + (pc_ - page_start), 4u);
         else op = memory_.load32(pc_);
         pc_ += 4u;
-        if ((op >> 24u) == kEnd) return true;
+        if ((op >> 24u) == kEnd) {
+            if ((previous >> 24u) == kSignal) {
+                const std::uint32_t behaviour = (previous >> 16u) & 0xFFu;
+                if (behaviour == 8u) sync_barrier_ = true;
+                else if (behaviour >= 1u && behaviour <= 3u && signal_sink_) signal_sink_(list_callback_, false, previous & 0xFFFFu);
+                previous = op;
+                continue;
+            }
+            if ((previous >> 24u) == kFinish) {
+                if (sync_barrier_) {
+                    sync_barrier_ = false;
+                    previous = op;
+                    continue;
+                }
+                if (signal_sink_) signal_sink_(list_callback_, true, previous & 0xFFFFu);
+            }
+            return true;
+        }
         execute(op);
+        previous = op;
     }
     return true;
 }

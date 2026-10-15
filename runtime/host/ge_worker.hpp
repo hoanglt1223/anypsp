@@ -36,7 +36,7 @@ public:
     [[nodiscard]] bool threaded() const noexcept { return threaded_; }
 
     // Guest side.
-    std::uint32_t enqueue(std::uint32_t list, std::uint32_t stall);
+    std::uint32_t enqueue(std::uint32_t list, std::uint32_t stall, std::int32_t callback = -1);
     void update_stall(std::uint32_t id, std::uint32_t stall);
     // True once list `id` (0: every list queued so far) has finished.
     [[nodiscard]] bool done(std::uint32_t id) const noexcept;
@@ -77,6 +77,7 @@ private:
     std::atomic<std::uint64_t> busy_ns_{};
     // GE side: a list waiting for its stall address to move.
     std::uint32_t stalled_id_{}, stalled_pc_{};
+    std::int32_t stalled_callback_{-1};
     bool presented_{}; // set by work that drew to the screen (ends a web tick)
 
 public:

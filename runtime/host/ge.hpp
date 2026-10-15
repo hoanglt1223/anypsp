@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -24,6 +25,8 @@ public:
     // Executes a display list from `start` until END or the stall address.
     // Returns true when the list reached its end.
     bool run_list(std::uint32_t start, std::uint32_t stall);
+    void set_signal_sink(std::function<void(std::int32_t, bool, std::uint32_t)> sink) { signal_sink_ = std::move(sink); }
+    void set_list_callback(std::int32_t callback) { list_callback_ = callback; }
 
     struct Stats {
         std::uint64_t lists{};
@@ -229,6 +232,9 @@ private:
     std::array<std::uint8_t, 2048> clut_{};
 
     Stats stats_{};
+    std::function<void(std::int32_t, bool, std::uint32_t)> signal_sink_;
+    std::int32_t list_callback_{-1};
+    bool sync_barrier_{};
 };
 
 } // namespace pspweb

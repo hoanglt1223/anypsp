@@ -14,6 +14,7 @@
 #include "psprecomp/runtime.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <cstdlib>
@@ -22,6 +23,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <span>
 #include <string>
@@ -153,6 +155,28 @@ struct SubInterrupt {
     std::int32_t running{}; // uid of the handler thread while it runs
 };
 
+struct GeCallback {
+    std::uint32_t signal{};
+    std::uint32_t signal_arg{};
+    std::uint32_t finish{};
+    std::uint32_t finish_arg{};
+    std::uint32_t gp{};
+};
+
+struct GeEvent {
+    std::int32_t callback{};
+    bool finish{};
+    std::uint32_t value{};
+};
+
+struct Alarm {
+    std::uint64_t at{};
+    std::uint32_t handler{};
+    std::uint32_t common{};
+    std::uint32_t gp{};
+    std::int32_t running{};
+};
+
 struct AudioChannel {
     bool reserved{};
     std::uint32_t samples{};
@@ -226,6 +250,7 @@ public:
     using AudioSink = void (*)(const std::int16_t *samples, std::uint32_t frames);
     void set_audio_sink(AudioSink sink) { audio_sink_ = sink; }
     void savedata_choose(int index);
+    [[nodiscard]] bool interrupt_pending() const noexcept { return ge_event_pending_.load(std::memory_order_relaxed); }
 
 private:
     using Ctx = psprecomp::AllegrexContext;
@@ -332,6 +357,13 @@ private:
     void sceKernelEnableSubIntr(Ctx &ctx);
     void sceKernelDisableSubIntr(Ctx &ctx);
     void run_interrupts(std::uint32_t interrupt);
+    std::int32_t start_handler(std::uint32_t entry, std::uint32_t gp, std::uint32_t a0, std::uint32_t a1,
+                               std::function<std::uint32_t(std::uint32_t)> done);
+    void sceKernelSetAlarm(Ctx &ctx);
+    void sceKernelSetSysClockAlarm(Ctx &ctx);
+    void sceKernelCancelAlarm(Ctx &ctx);
+    void set_alarm(Ctx &ctx, std::uint64_t delay_us);
+    void run_alarms();
     void sceKernelDeleteSema(Ctx &ctx);
     void sceKernelSignalSema(Ctx &ctx);
     void sceKernelWaitSema(Ctx &ctx);
@@ -412,6 +444,9 @@ private:
     void sceGeRestoreContext(Ctx &ctx);
     void sceGeListSync(Ctx &ctx);
     void sceGeDrawSync(Ctx &ctx);
+    void sceGeSetCallback(Ctx &ctx);
+    void sceGeUnsetCallback(Ctx &ctx);
+    void run_ge_callbacks();
 
     // UtilsForUser / Kernel_Library.
     void sceKernelLibcTime(Ctx &ctx);
@@ -475,6 +510,11 @@ private:
     std::map<std::int32_t, Mutex> mutexes_;
     std::map<std::int32_t, Mailbox> mailboxes_;
     std::map<std::pair<std::uint32_t, std::uint32_t>, SubInterrupt> sub_interrupts_; // (interrupt, sub) -> handler
+    std::map<std::int32_t, Alarm> alarms_;
+    std::map<std::int32_t, GeCallback> ge_callbacks_;
+    std::mutex ge_events_mutex_;
+    std::vector<GeEvent> ge_events_;
+    std::atomic<bool> ge_event_pending_{false};
     struct GuestCall {
         std::int32_t caller{};
         std::function<std::uint32_t(std::uint32_t)> done;
