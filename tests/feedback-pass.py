@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the analysis -> translate -> run -> feedback loop on one homebrew module.
 
-  python tests/feedback-pass.py <module.prx|.elf> [--frames 600] [--passes 2] [--tools out/msvc]
+  python tests/feedback-pass.py <module.prx|.elf> [--frames 600] [--passes 2] [--base-first] [--tools out/msvc]
 
 Pass N: anypsp-analyze (with the feedback of earlier passes), psp_recomp --auto
 --seeds, a headless runner build (out/runners/<name>), then a run that appends
@@ -43,13 +43,15 @@ def main():
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--passes", type=int, default=2)
     parser.add_argument("--opt", default="d", help="generated-code optimization: d, 1 or 2")
+    parser.add_argument("--base-first", action="store_true",
+                        help="translate pass 1 from the framework's own seeds only, to exercise the feedback loop")
     parser.add_argument("--tools", type=pathlib.Path, default=ROOT / "out" / "msvc")
     args = parser.parse_args()
 
     module = args.module.resolve()
     if not module.exists():
         raise SystemExit(f"{module} does not exist (run tests/fetch-corpus.py?)")
-    name = re.sub(r"[^A-Za-z0-9_]", "_", module.stem)
+    name = re.sub(r"[^A-Za-z0-9_]", "_", module.name)
     analyze = exe(args.tools, "anypsp-analyze")
     recomp = exe(args.tools / "recomp", "psp_recomp")
     work = ROOT / "out" / "feedback" / name
@@ -69,7 +71,8 @@ def main():
         seeds = report_dir / report["seeds_csv"]
         if generated.exists():
             shutil.rmtree(generated)
-        run([recomp, module, "--auto", generated, "--seeds", seeds])
+        base_only = args.base_first and number == 1
+        run([recomp, module, "--auto", generated] + ([] if base_only else ["--seeds", seeds]))
         run([CMAKE, "-S", ROOT, "-B", runner_build, f"-DANYPSP_RUNNER_NAME={name}", f"-DANYPSP_RUNNER_GENERATED={generated}", f"-DANYPSP_RUNNER_OPT={args.opt}"])
         run([CMAKE, "--build", runner_build, "--config", "Release", "--target", f"anypsp-run-{name}"])
         runner = exe(runner_build, f"anypsp-run-{name}")
@@ -83,6 +86,7 @@ def main():
         passes.append({
             "pass": number,
             "functions": report["functions"]["count"],
+            "translated_from": "framework seeds" if base_only else "anypsp-analyze seeds",
             "feedback_used": report["feedback"]["used"],
             "runner_exit": result.returncode,
             "frames": int(stopped[-1][0]) if stopped else None,
