@@ -155,10 +155,10 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
     case psprecomp::OpcodeKind::Divu:
         if (d.rt == 0u) {
             out << "    { const std::uint32_t dividend = " << reg(d.rs) << "; "
-                << "ctx.lo = 0xFFFFFFFFu; ctx.hi = dividend; }\n";
+                << "ctx.lo = dividend <= 0xFFFFu ? 0xFFFFu : 0xFFFFFFFFu; ctx.hi = dividend; }\n";
         } else {
             out << "    { const std::uint32_t dividend = " << reg(d.rs) << "; const std::uint32_t divisor = " << reg(d.rt) << "; "
-                << "if (divisor == 0u) { ctx.lo = 0xFFFFFFFFu; ctx.hi = dividend; } "
+                << "if (divisor == 0u) { ctx.lo = dividend <= 0xFFFFu ? 0xFFFFu : 0xFFFFFFFFu; ctx.hi = dividend; } "
                 << "else { ctx.lo = dividend / divisor; ctx.hi = dividend % divisor; } }\n";
         }
         break;
@@ -177,21 +177,19 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
         else out << "    rt.unsupported(" << psprecomp::hex32(pc) << "u, " << psprecomp::hex32(d.word) << "u, \"unsupported CTC1 control register\"); return;\n";
         break;
     case psprecomp::OpcodeKind::AddS:
-        out << "    ctx.fpr[" << d.sa << "] = ctx.fpr[" << d.rd << "] + ctx.fpr[" << d.rt << "];\n";
+        out << "    ctx.fpr[" << d.sa << "] = AllegrexContext::fpu_add(ctx.fpr[" << d.rd << "], ctx.fpr[" << d.rt << "]);\n";
         break;
     case psprecomp::OpcodeKind::SubS:
-        out << "    ctx.fpr[" << d.sa << "] = ctx.fpr[" << d.rd << "] - ctx.fpr[" << d.rt << "];\n";
+        out << "    ctx.fpr[" << d.sa << "] = AllegrexContext::fpu_sub(ctx.fpr[" << d.rd << "], ctx.fpr[" << d.rt << "]);\n";
         break;
     case psprecomp::OpcodeKind::MulS:
-        out << "    { const float fs = ctx.fpr[" << d.rd << "]; const float ft = ctx.fpr[" << d.rt << "]; "
-            << "if ((std::isinf(fs) && ft == 0.0f) || (std::isinf(ft) && fs == 0.0f)) ctx.set_fpr_bits(" << d.sa << ", 0x7FC00000u); "
-            << "else ctx.fpr[" << d.sa << "] = fs * ft; }\n";
+        out << "    ctx.fpr[" << d.sa << "] = AllegrexContext::fpu_mul(ctx.fpr[" << d.rd << "], ctx.fpr[" << d.rt << "]);\n";
         break;
     case psprecomp::OpcodeKind::DivS:
-        out << "    ctx.fpr[" << d.sa << "] = ctx.fpr[" << d.rd << "] / ctx.fpr[" << d.rt << "];\n";
+        out << "    ctx.fpr[" << d.sa << "] = ctx.fpu_div(ctx.fpr[" << d.rd << "], ctx.fpr[" << d.rt << "]);\n";
         break;
     case psprecomp::OpcodeKind::SqrtS:
-        out << "    ctx.fpr[" << d.sa << "] = std::sqrt(ctx.fpr[" << d.rd << "]);\n";
+        out << "    ctx.fpr[" << d.sa << "] = AllegrexContext::fpu_sqrt(ctx.fpr[" << d.rd << "]);\n";
         break;
     case psprecomp::OpcodeKind::AbsS:
         out << "    ctx.set_fpr_bits(" << d.sa << ", ctx.fpr_bits(" << d.rd << ") & 0x7FFFFFFFu);\n";

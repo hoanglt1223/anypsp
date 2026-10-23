@@ -52,13 +52,14 @@ DecodedInstruction decode_allegrex(std::uint32_t word) {
         switch (fn) {
         case 0x00: d.kind = OpcodeKind::Sll; d.mnemonic = "sll"; break;
         case 0x02:
-            if (d.rs == 1u) { d.kind = OpcodeKind::Rotr; d.mnemonic = "rotr"; }
+            // Only the low bit of the unused rs field counts (pspautotests cpu/cpu_alu/shift_encodings).
+            if ((d.rs & 1u) != 0u) { d.kind = OpcodeKind::Rotr; d.mnemonic = "rotr"; }
             else { d.kind = OpcodeKind::Srl; d.mnemonic = "srl"; }
             break;
         case 0x03: d.kind = OpcodeKind::Sra; d.mnemonic = "sra"; break;
         case 0x04: d.kind = OpcodeKind::Sllv; d.mnemonic = "sllv"; break;
         case 0x06:
-            if (d.sa == 1u) { d.kind = OpcodeKind::Rotrv; d.mnemonic = "rotrv"; }
+            if ((d.sa & 1u) != 0u) { d.kind = OpcodeKind::Rotrv; d.mnemonic = "rotrv"; }
             else { d.kind = OpcodeKind::Srlv; d.mnemonic = "srlv"; }
             break;
         case 0x07: d.kind = OpcodeKind::Srav; d.mnemonic = "srav"; break;

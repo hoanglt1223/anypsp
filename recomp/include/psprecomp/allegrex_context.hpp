@@ -60,13 +60,51 @@ struct alignas(16) AllegrexContext {
         return static_cast<std::int32_t>(value);
     }
 
+    // Half to even, computed as the reference interpreter does (through float).
     static double round_ties_to_even(double value) noexcept {
-        const double lower = std::floor(value);
+        const float lower = static_cast<float>(std::floor(value));
         const double fraction = value - lower;
-        if (fraction < 0.5) return lower;
-        if (fraction > 0.5) return lower + 1.0;
-        const auto integral = static_cast<std::int64_t>(lower);
-        return (integral & 1LL) == 0LL ? lower : lower + 1.0;
+        if (fraction < 0.5f) return lower;
+        if (fraction > 0.5f) return lower + 1.0f;
+        float whole;
+        std::modf(lower / 2.0f, &whole);
+        return 2.0f * whole == lower ? lower : lower + 1.0f;
+    }
+
+    // A NaN operand comes through quieted, the first one (fs) first, independent
+    // of the host compiler's operand order.
+    [[nodiscard]] static PSPRECOMP_CONTEXT_FORCEINLINE bool fpu_nan_operand(float fs, float ft, float &result) noexcept {
+        const std::uint32_t a = std::bit_cast<std::uint32_t>(fs), b = std::bit_cast<std::uint32_t>(ft);
+        if ((a & 0x7FFFFFFFu) > 0x7F800000u) { result = std::bit_cast<float>(a | 0x00400000u); return true; }
+        if ((b & 0x7FFFFFFFu) > 0x7F800000u) { result = std::bit_cast<float>(b | 0x00400000u); return true; }
+        return false;
+    }
+
+    [[nodiscard]] static PSPRECOMP_CONTEXT_FORCEINLINE float fpu_add(float fs, float ft) noexcept {
+        float nan;
+        return fpu_nan_operand(fs, ft, nan) ? nan : fs + ft;
+    }
+    [[nodiscard]] static PSPRECOMP_CONTEXT_FORCEINLINE float fpu_sub(float fs, float ft) noexcept {
+        float nan;
+        return fpu_nan_operand(fs, ft, nan) ? nan : fs - ft;
+    }
+    [[nodiscard]] static PSPRECOMP_CONTEXT_FORCEINLINE float fpu_mul(float fs, float ft) noexcept {
+        if ((std::isinf(fs) && ft == 0.0f) || (std::isinf(ft) && fs == 0.0f)) return std::bit_cast<float>(0x7FC00000u);
+        float nan;
+        return fpu_nan_operand(fs, ft, nan) ? nan : fs * ft;
+    }
+    // Sets the divide-by-zero cause (and, when masked, flag) bit like the reference.
+    PSPRECOMP_CONTEXT_FORCEINLINE float fpu_div(float fs, float ft) noexcept {
+        fcr31 &= ~(1u << 15u);
+        if (ft == 0.0f && fs != 0.0f && (std::bit_cast<std::uint32_t>(fs) & 0x7F800000u) != 0x7F800000u) {
+            fcr31 |= 1u << 15u;
+            if ((fcr31 & (1u << 10u)) == 0u) fcr31 |= 1u << 5u;
+        }
+        float nan;
+        return fpu_nan_operand(fs, ft, nan) ? nan : fs / ft;
+    }
+    [[nodiscard]] static PSPRECOMP_CONTEXT_FORCEINLINE float fpu_sqrt(float fs) noexcept {
+        return fs < 0.0f ? std::bit_cast<float>(0x7FC00000u) : std::sqrt(fs);
     }
 
     [[nodiscard]] std::uint32_t fpu_float_to_word(float value, std::uint32_t mode) const noexcept {
@@ -79,7 +117,7 @@ struct alignas(16) AllegrexContext {
 
         double converted{};
         switch (mode) {
-        case 0u: converted = std::floor(static_cast<double>(value) + 0.5); break; // ROUND.W.S
+        case 0u: converted = round_ties_to_even(static_cast<double>(value)); break; // ROUND.W.S
         case 1u: converted = std::trunc(static_cast<double>(value)); break;       // TRUNC.W.S
         case 2u: converted = std::ceil(static_cast<double>(value)); break;        // CEIL.W.S
         case 3u: converted = std::floor(static_cast<double>(value)); break;       // FLOOR.W.S
@@ -116,7 +154,7 @@ struct alignas(16) AllegrexContext {
             if (input >= max_value) return static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
             return static_cast<std::uint32_t>(static_cast<std::int32_t>(input));
         } else if constexpr (Mode == 0u) {
-            return static_cast<std::uint32_t>(clamp_fpu_word(std::floor(input + 0.5)));
+            return static_cast<std::uint32_t>(clamp_fpu_word(round_ties_to_even(input)));
         } else if constexpr (Mode == 2u) {
             return static_cast<std::uint32_t>(clamp_fpu_word(std::ceil(input)));
         } else {

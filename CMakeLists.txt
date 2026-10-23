@@ -125,6 +125,21 @@ if(ANYPSP_BUILD_HOST AND NOT ANYPSP_RUNNER_NAME STREQUAL "")
     endif()
 endif()
 
+# Differential test of the code generator against the reference interpreter.
+add_executable(anypsp-difftest-gen tests/cpu/difftest_gen.cpp)
+target_link_libraries(anypsp-difftest-gen PRIVATE anypsp_codegen)
+anypsp_warnings(anypsp-difftest-gen)
+add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/difftest_cases.cpp
+    COMMAND anypsp-difftest-gen ${CMAKE_CURRENT_BINARY_DIR}/difftest_cases.cpp
+    DEPENDS anypsp-difftest-gen)
+add_executable(anypsp_cpu_difftest tests/cpu/difftest_main.cpp ${CMAKE_CURRENT_BINARY_DIR}/difftest_cases.cpp)
+target_include_directories(anypsp_cpu_difftest PRIVATE tests/cpu)
+target_link_libraries(anypsp_cpu_difftest PRIVATE psprecomp_core)
+if(MSVC)
+    target_compile_options(anypsp_cpu_difftest PRIVATE /bigobj /EHsc)
+endif()
+add_test(NAME cpu_difftest COMMAND anypsp_cpu_difftest)
+
 # Corpus check (skipped until python tests/fetch-corpus.py has run).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)

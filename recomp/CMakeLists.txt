@@ -114,8 +114,12 @@ endif()
 add_executable(psp_analyze tools/analyzer_main.cpp)
 target_link_libraries(psp_analyze PRIVATE psprecomp_core)
 
-add_executable(psp_recomp tools/codegen_main.cpp codegen/emit_cpp.cpp)
-target_include_directories(psp_recomp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(anypsp_codegen STATIC codegen/emit_cpp.cpp)
+target_include_directories(anypsp_codegen PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(anypsp_codegen PUBLIC psprecomp_core)
+
+add_executable(psp_recomp tools/codegen_main.cpp)
+target_link_libraries(psp_recomp PRIVATE anypsp_codegen)
 target_link_libraries(psp_recomp PRIVATE psprecomp_core)
 
 add_executable(dump_function tools/dump_function.cpp)

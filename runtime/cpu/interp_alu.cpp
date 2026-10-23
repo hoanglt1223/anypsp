@@ -905,10 +905,12 @@ namespace MIPSInt {
 		switch (op & 0x3f)
 		{
 		case 4:	//sqrt
-			F(fd) = sqrtf(F(fs));
 			// A negative input gives a positive NaN, not the host's (cpu/fpu/roundmode).
+			// Tested before the write, which may replace fs.
 			if (F(fs) < 0.0f) {
 				FsI(fd) = 0x7FC00000;
+			} else {
+				F(fd) = sqrtf(F(fs));
 			}
 			break;
 		case 5:	F(fd)	= fabsf(F(fs)); break; //abs
@@ -1008,8 +1010,10 @@ namespace MIPSInt {
 
 		switch (op & 0x3f)
 		{
-		case 0: F(fd) = F(fs) + F(ft); break; // add.s
-		case 1: F(fd) = F(fs) - F(ft); break; // sub.s
+		// A NaN operand comes through quieted, fs first (cpu/fpu/roundmode); the host
+		// compiler may reorder the operands of these, so it is not left to it.
+		case 0: if (my_isnan(F(fs)) || my_isnan(F(ft))) FI(fd) = (my_isnan(F(fs)) ? FI(fs) : FI(ft)) | 0x00400000; else F(fd) = F(fs) + F(ft); break; // add.s
+		case 1: if (my_isnan(F(fs)) || my_isnan(F(ft))) FI(fd) = (my_isnan(F(fs)) ? FI(fs) : FI(ft)) | 0x00400000; else F(fd) = F(fs) - F(ft); break; // sub.s
 		case 2: // mul.s
 			if ((my_isinf(F(fs)) && F(ft) == 0.0f) || (my_isinf(F(ft)) && F(fs) == 0.0f)) {
 				// Must be positive NAN, see #12519.
@@ -1041,7 +1045,10 @@ namespace MIPSInt {
 					mips->fcr31 |= FCR31_FLAG_DIV_BY_ZERO;
 				}
 			}
-			F(fd) = F(fs) / F(ft);
+			if (my_isnan(F(fs)) || my_isnan(F(ft)))
+				FI(fd) = (my_isnan(F(fs)) ? FI(fs) : FI(ft)) | 0x00400000;
+			else
+				F(fd) = F(fs) / F(ft);
 			break;
 		}
 		default:
