@@ -1566,6 +1566,8 @@ void GeGl::present(std::uint32_t fb_address, std::uint32_t stride, std::uint32_t
     int ox = 0, oy = 0;
     Surface *s = offset != kNotVram ? find_surface(offset, stride, format, ox, oy) : nullptr;
     if (s != nullptr && !s->content.empty()) {
+        // Rows below what was drawn are shown from VRAM, not stretched from the surface edge.
+        if (static_cast<std::uint32_t>(oy) + height > s->height) grow(*s, static_cast<std::uint32_t>(oy) + height);
         apply_pending_uploads(*s);
         sync_overlaps(*s);
         texture = s->color;

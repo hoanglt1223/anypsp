@@ -97,6 +97,10 @@ private:
     void raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c);
     void draw_sprite(const Vertex &a, const Vertex &b);
     void emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c);
+    // Backface culling of the current primitive: 0 off, 1 removes positive (clockwise
+    // in drawing space) areas, -1 negative ones.
+    int cull_{};
+    [[nodiscard]] bool culls(float area) const noexcept { return cull_ != 0 && (area > 0.0f) == (cull_ > 0); }
     void emit_sprite(const Vertex &a, const Vertex &b);
     void submit_gl_state();
     void shade_pixel(int x, int y, float z, float u, float v, float r, float g, float b, float a);

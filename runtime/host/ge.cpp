@@ -438,7 +438,7 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
             col[3] = static_cast<float>(rgba >> 24u);
         }
         if (l.nrm != 0u) load(p + l.nrm_off, l.nrm, true, l.nrm == 1u ? 1.0f / 127.0f : 1.0f / 32767.0f, nrm, 3u);
-        if (l.pos != 0u) {
+        if (l.pos != 0u && !(l.through && l.pos == 1u)) { // 8-bit positions read as 0 in through mode
             if (!l.through) {
                 load(p + l.pos_off, l.pos, true, l.pos == 1u ? 1.0f / 128.0f : 1.0f / 32768.0f, pos, 3u);
             } else {
@@ -507,7 +507,7 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
                 nrm[i] = (m == 0u ? 0.0f : nrm[i]) + mw * value;
             }
         }
-        if (l.pos != 0u) {
+        if (l.pos != 0u && !(l.through && l.pos == 1u)) {
             for (std::uint32_t i = 0; i < 3u; ++i) {
                 float value;
                 if (l.through) {
@@ -727,6 +727,9 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     viewport_[5] = cmd_float(regs_[kViewportZCenter]);
     if (tex_dirty_) build_tex_setup();
     if (light_dirty_ && (regs_[kLightingEnable] & 1u) != 0u) build_light_setup();
+    // Culling applies in through mode too, but never to clears (gpu/commands/cull).
+    // In drawing space (y down) a positive area is clockwise; CULL bit 0 clear removes those.
+    cull_ = (regs_[kCullEnable] & 1u) == 0u || (regs_[kClearMode] & 1u) != 0u ? 0 : ((regs_[kCull] & 1u) == 0u ? 1 : -1);
     const bool was_wvp = use_wvp_;
     use_wvp_ = !layout_.through && layout_.weight == 0u && (regs_[kLightingEnable] & 1u) == 0u &&
                (regs_[kTexMapMode] & 3u) == 0u;
@@ -864,12 +867,6 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
                                           static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a))};
         }
         const bool flat = (regs_[kShadeMode] & 1u) == 0u;
-        // Backface culling (3D only), decided on the screen-space winding.  A
-        // zero-area triangle (common in strips) covers no pixels either way.
-        // In drawing space (y down) a positive area means clockwise; CULL bit 0 clear
-        // removes clockwise triangles (checked against frames: the other way empties the scene).
-        const bool cull = !layout_.through && (regs_[kCullEnable] & 1u) != 0u;
-        const bool cull_clockwise = (regs_[kCull] & 1u) == 0u;
         // Each decoded vertex enters the GL batch once, the first time a kept triangle uses it.
         if (scratch_batch_index_.size() < decoded) scratch_batch_index_.resize(decoded);
         std::fill(scratch_batch_index_.begin(), scratch_batch_index_.begin() + decoded, ~0u);
@@ -888,7 +885,7 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
             {
                 const GlVertex &p = scratch_screen_[a], &q = scratch_screen_[b], &r = scratch_screen_[c];
                 const float area = (q.x - p.x) * (r.y - p.y) - (r.x - p.x) * (q.y - p.y);
-                if (area == 0.0f || (cull && (area > 0.0f) == cull_clockwise)) {
+                if (area == 0.0f || culls(area)) {
                     ++stats_.culled;
                     return;
                 }
@@ -1702,6 +1699,10 @@ void Ge::submit_gl_state() {
 }
 
 void Ge::emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
+    if (culls((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y))) {
+        ++stats_.culled;
+        return;
+    }
     if (gl_ == nullptr) {
         raster_triangle(a, b, c);
         return;

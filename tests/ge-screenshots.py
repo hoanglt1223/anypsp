@@ -8,14 +8,16 @@ Each program runs headless in anypsp-interp-gpu (hidden GL context, no audio); t
 picture at its emulator: screenshot request is compared with <test>.expected.bmp the
 way PPSSPP's headless does (mean squared error over RGB of the 480x272 display, alpha
 ignored). A test passes when the MSE is at most --max-mse (default 0, PPSSPP's default).
-Text output is compared too, like tests/conformance.py. Exit code 1 when any selected
-test fails, 77 when the corpus is missing.
+Text output is compared too, like tests/conformance.py but without the [r]/[x] marker
+that starts each line (it records whether the kernel rescheduled, not GE behaviour).
+Exit code 1 when any selected test fails, 77 when the corpus is missing.
 """
 
 import argparse
 import concurrent.futures
 import json
 import pathlib
+import re
 import struct
 import subprocess
 import sys
@@ -100,7 +102,7 @@ def mse(actual_rows, expected_rows):
 
 
 def lines(text):
-    result = [line.rstrip("\r") for line in text.split("\n")]
+    result = [re.sub(r"^\[[rx]\] ", "", line.rstrip("\r")) for line in text.split("\n")]
     while result and result[-1] == "":
         result.pop()
     return result
