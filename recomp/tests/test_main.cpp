@@ -547,30 +547,15 @@ static void test_codegen_vh2f_lowering() {
         std::ifstream generated(cpp_path);
         text.assign((std::istreambuf_iterator<char>(generated)), std::istreambuf_iterator<char>());
     }
-    require(text.find("ctx.execute_vfpu_vh2f(0u, 0u, 1u)") != std::string::npos,
-            "VH2F was not lowered to the dedicated AOT helper");
-    require(text.find("const float vfpu_scale = std::ldexp(1.0f, -static_cast<int>(3u))") != std::string::npos,
-            "VI2F scale was not lowered into generated AOT code");
-    require(text.find("static_cast<std::int32_t>(std::bit_cast<std::uint32_t>(vfpu_s[vfpu_i]))") != std::string::npos,
-            "VI2F did not reinterpret source lanes as signed integers");
-    require(text.find("vh2f not lowered yet") == std::string::npos,
-            "VH2F codegen retained an unsupported fallback");
-    require(text.find("vi2f not lowered yet") == std::string::npos,
-            "VI2F codegen retained an unsupported fallback");
-    require(text.find("case 17u: vfpu_rounded = std::trunc(vfpu_scaled)") != std::string::npos,
-            "VF2IZ did not lower to truncation semantics");
-    require(text.find("std::numeric_limits<std::int32_t>::max()") != std::string::npos,
-            "VF2I saturation/NaN handling was not generated");
-    require(text.find("vf2iz not lowered yet") == std::string::npos,
-            "VF2IZ codegen retained an unsupported fallback");
-    require(text.find("ctx.execute_vfpu_vx2i(0u, 2u, 2u, 3u)") != std::string::npos,
-            "VS2I.P was not lowered to the dedicated AOT helper");
-    require(text.find("ctx.execute_vfpu_horizontal(8u, 36u, 3u, true)") != std::string::npos,
-            "VAVG.T was not lowered to the dedicated AOT helper");
-    require(text.find("ctx.execute_vfpu_vf2h(64u, 0u, 2u)") != std::string::npos,
-            "VF2H.P was not lowered to the dedicated AOT helper");
-    require(text.find("vfpu4 not lowered yet") == std::string::npos,
-            "VFPU horizontal codegen retained the generic VFPU4 fallback");
+    // VFPU conversions run in the reference interpreter (bit-exact with PPSSPP).
+    for (const char *name : {"vh2f", "vi2f", "vf2iz", "vs2i", "vavg", "vf2h"}) {
+        require(text.find(std::string("return; // ") + name) != std::string::npos,
+                (std::string(name) + " was not routed to the reference interpreter").c_str());
+        require(text.find(std::string(name) + " not lowered yet") == std::string::npos,
+                (std::string(name) + " codegen retained an unsupported fallback").c_str());
+    }
+    require(text.find("anypsp::cpu::execute(rt, ctx, ") != std::string::npos,
+            "VFPU fixture did not call the reference interpreter");
     std::filesystem::remove_all(root);
 #endif
 }
