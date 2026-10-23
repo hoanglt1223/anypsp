@@ -4,7 +4,11 @@ Game-agnostic static recompilation of PSP games to native Windows, Linux, macOS,
 
 ## Status
 
-Early. Phase 01 (choosing a base) is done; phase 02 (loader and analysis) is in progress. Nothing runs a commercial game yet.
+Early. Phases 01 (base) and 02 (loader and analysis) are done; 03 (code generation) and 04 (HLE) are in progress.
+
+- **CPU.** A reference Allegrex interpreter adapted from PPSSPP (`runtime/cpu/`) covers every integer, FPU and VFPU instruction, VFPU prefixes and PPSSPP's bit-exact special functions. Generated code translates the common integer, memory and FPU instructions inline and calls the interpreter for everything else; a random-state differential test checks the inline translations against it. With the interpreter, 37 of 55 pspautotests CPU tests match their expected output, the same set PPSSPP passes apart from three.
+- **First game.** A user's own unencrypted Naruto: Ultimate Ninja Heroes executable runs headless in the interpreter-only runner from boot through the menus into a battle (9,000 frames, no unimplemented HLE call reached). Game files never enter this repository.
+- **HLE.** Calling an imported function that has no implementation stops the run and names it, unless a per-game `--hle-stubs` file lists it.
 
 - **Base.** The [PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) framework at `f6e7d41` is under `recomp/`, with [psp-web-recomp](https://github.com/snuri00/psp-web-recomp)'s ten framework patches applied. psp-web-recomp's generic HLE host is under `runtime/`. Provenance is in [THIRD_PARTY.md](THIRD_PARTY.md); the decision is in [docs/dev/decision-base.md](docs/dev/decision-base.md).
 - **Loader and analysis** ([docs/dev/loader-and-analysis.md](docs/dev/loader-and-analysis.md)):
