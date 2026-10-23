@@ -18,6 +18,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <map>
+#include <set>
 #include <vector>
 
 namespace psprecomp {
@@ -29,10 +31,11 @@ namespace {
 const char *const kUsage =
     "usage: anypsp-run-<game> <EBOOT.BIN|module.prx> [--disc dir] [--ms dir] [--frames n]\n"
     "                         [--feedback file] [--dump frame.ppm] [--guest-path path]\n"
-    "                         [--output file]\n"
+    "                         [--output file] [--input frame:buttons,...] [--dump-at frame,...]\n"
     "Runs headless: no window, no audio. --feedback appends the code addresses that had no\n"
     "translated code (input for anypsp-analyze --feedback). --output writes what the program\n"
-    "sends to the emulator: device (test output; default: standard output).\n";
+    "sends to the emulator: device (test output; default: standard output). --input holds\n"
+    "the given sceCtrl button mask (hex) from that frame on; --dump-at writes frame<N>.ppm.\n";
 
 // Import stubs without a translated wrapper (always, in the interpreter-only
 // runner) are bound here, by address.
@@ -52,6 +55,21 @@ void import_by_address(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) 
         ctx.pc = return_address;
 }
 
+// "120:8,130:0" -> {{120, 0x8}, {130, 0}}.
+std::map<long, std::uint32_t> parse_input_script(const std::string &text) {
+    std::map<long, std::uint32_t> script;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const std::size_t end = std::min(text.find(',', start), text.size());
+        const std::string item = text.substr(start, end - start);
+        const std::size_t colon = item.find(':');
+        if (colon == std::string::npos) throw psprecomp::Error("--input item without frame:buttons: " + item);
+        script[std::stol(item.substr(0, colon))] = static_cast<std::uint32_t>(std::stoul(item.substr(colon + 1), nullptr, 16));
+        start = end + 1;
+    }
+    return script;
+}
+
 void write_ppm(const std::string &path, const std::vector<std::uint8_t> &rgba) {
     std::ofstream out(path, std::ios::binary);
     out << "P6\n480 272\n255\n";
@@ -66,7 +84,7 @@ int main(int argc, char **argv) {
         std::cerr << kUsage;
         return 2;
     }
-    std::string disc = ".", memstick = ".", feedback, dump, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
+    std::string disc = ".", memstick = ".", feedback, dump, output, input, dump_at, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     long frames = 600;
     for (int i = 2; i < argc; i += 2) {
         const std::string flag = argv[i];
@@ -80,6 +98,8 @@ int main(int argc, char **argv) {
         else if (flag == "--feedback") feedback = value;
         else if (flag == "--dump") dump = value;
         else if (flag == "--output") output = value;
+        else if (flag == "--input") input = value;
+        else if (flag == "--dump-at") dump_at = value;
         else if (flag == "--guest-path") guest_path = value;
         else if (flag == "--frames") {
             try {
@@ -141,9 +161,22 @@ int main(int argc, char **argv) {
 
         long frame = 0;
         bool running = true;
+        const auto input_script = parse_input_script(input);
+        std::set<long> dump_frames;
+        for (std::size_t start = 0; start < dump_at.size();) {
+            const std::size_t end = std::min(dump_at.find(',', start), dump_at.size());
+            dump_frames.insert(std::stol(dump_at.substr(start, end - start)));
+            start = end + 1;
+        }
+        std::vector<std::uint8_t> frame_pixels(480u * 272u * 4u);
         while (running && frame < frames) {
+            if (const auto press = input_script.find(frame); press != input_script.end()) kernel->set_pad(press->second);
             running = kernel->frame(50.0);
             ++frame;
+            if (dump_frames.contains(frame)) {
+                kernel->read_framebuffer(frame_pixels.data());
+                write_ppm("frame" + std::to_string(frame) + ".ppm", frame_pixels);
+            }
         }
         std::cout << "[anypsp] ran " << frame << " frames; "
                   << (running ? "frame limit reached" : "guest stopped: " + kernel->halt_reason()) << "\n";

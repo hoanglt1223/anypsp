@@ -2,6 +2,7 @@
 """Run the analysis -> translate -> run -> feedback loop on one homebrew module.
 
   python tests/feedback-pass.py <module.prx|.elf> [--frames 600] [--passes 2] [--base-first] [--tools out/msvc]
+                                [--disc folder] [--guest-path path] [--name work-name]
 
 Pass N: anypsp-analyze (with the feedback of earlier passes), psp_recomp --auto
 --seeds, a headless runner build (out/runners/<name>), then a run that appends
@@ -46,12 +47,16 @@ def main():
     parser.add_argument("--base-first", action="store_true",
                         help="translate pass 1 from the framework's own seeds only, to exercise the feedback loop")
     parser.add_argument("--tools", type=pathlib.Path, default=ROOT / "out" / "msvc")
+    parser.add_argument("--disc", type=pathlib.Path, help="extracted disc folder (for a game's EBOOT/BOOT.BIN)")
+    parser.add_argument("--guest-path", help="the program's path as the guest sees it, e.g. disc0:/PSP_GAME/SYSDIR/EBOOT.BIN")
+    parser.add_argument("--name", help="work folder name (default: from the module file name)")
     args = parser.parse_args()
 
     module = args.module.resolve()
     if not module.exists():
         raise SystemExit(f"{module} does not exist (run tests/fetch-corpus.py?)")
-    name = re.sub(r"[^A-Za-z0-9_]", "_", module.name)
+    name = args.name or re.sub(r"[^A-Za-z0-9_]", "_", module.name)
+    run_extra = (["--disc", str(args.disc.resolve())] if args.disc else []) + (["--guest-path", args.guest_path] if args.guest_path else [])
     analyze = exe(args.tools, "anypsp-analyze")
     recomp = exe(args.tools / "recomp", "psp_recomp")
     work = ROOT / "out" / "feedback" / name
@@ -77,7 +82,7 @@ def main():
         run([CMAKE, "--build", runner_build, "--config", "Release", "--target", f"anypsp-run-{name}"])
         runner = exe(runner_build, f"anypsp-run-{name}")
         before = len([line for line in feedback.read_text().splitlines() if line.strip()])
-        result = subprocess.run([str(runner), str(module), "--frames", str(args.frames), "--feedback", str(feedback)],
+        result = subprocess.run([str(runner), str(module), "--frames", str(args.frames), "--feedback", str(feedback)] + run_extra,
                                 capture_output=True, text=True, cwd=work)
         (work / f"pass{number}.log").write_text(result.stdout + result.stderr, encoding="utf-8")
         addresses = [line.split()[0] for line in feedback.read_text().splitlines() if line.strip()]
