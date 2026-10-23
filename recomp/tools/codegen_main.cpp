@@ -1137,7 +1137,10 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                     body << emit_regular(slot, pc + 4u);
                     if (decoded.kind == psprecomp::OpcodeKind::J) {
                         emit_target(body, target, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
-                    } else if (function.entry_labels.contains(target)) {
+                    } else if (function.entry_labels.contains(target) &&
+                               (function.import_stubs == nullptr || !function.import_stubs->contains(target))) {
+                        // Import stubs are excluded: they may share the caller's unit
+                        // in small modules, but must reach the HLE wrapper.
                         // Fixed same-unit JAL: the destination is already a C++
                         // label. Going through ctx.pc + LOCAL_DISPATCH needlessly
                         // re-decodes a dense entry id and burns the local-transfer
