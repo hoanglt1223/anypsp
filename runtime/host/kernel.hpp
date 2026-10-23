@@ -27,6 +27,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace pspweb {
@@ -224,6 +225,8 @@ public:
     [[nodiscard]] const DisplayState &display() const noexcept { return display_; }
     [[nodiscard]] bool halted() const noexcept { return halted_; }
     [[nodiscard]] const std::string &halt_reason() const noexcept { return halt_reason_; }
+    // Where text sent to the "emulator:" device goes (pspautotests' test output).
+    void set_test_output(std::function<void(std::string_view)> sink) { test_output_ = std::move(sink); }
     [[nodiscard]] std::uint64_t now_us() const;
     [[nodiscard]] Ge &ge() noexcept { return *ge_; }
     // Runs display lists (on a GE thread once started) and other GE-side work.
@@ -500,6 +503,7 @@ private:
     void sceRtcGetCurrentTick(Ctx &ctx);
     void sceRtcGetTickResolution(Ctx &ctx);
     void sceKernelVolatileMemLock(Ctx &ctx);
+    void sceIoDevctl(Ctx &ctx);
 
     psprecomp::Runtime &rt_;
     std::unique_ptr<Ge> ge_;
@@ -574,6 +578,7 @@ private:
     std::set<std::string> fallback_logged_;
     bool halted_{};
     std::string halt_reason_;
+    std::function<void(std::string_view)> test_output_;
 };
 
 } // namespace pspweb

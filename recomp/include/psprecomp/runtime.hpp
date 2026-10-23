@@ -95,6 +95,9 @@ public:
     void run(std::uint32_t entry, std::uint64_t max_dispatches = 10'000'000u);
     void stop(std::string reason);
     [[nodiscard]] bool stopped() const noexcept;
+    // The CPU interrupt enable flag (mfic/mtic, sceKernelCpuSuspendIntr/ResumeIntr).
+    [[nodiscard]] bool interrupts_enabled() const noexcept { return interrupts_enabled_; }
+    void set_interrupts_enabled(bool enabled) noexcept { interrupts_enabled_ = enabled; }
     [[nodiscard]] const std::string &stop_reason() const noexcept;
 
     void unsupported(std::uint32_t pc, std::uint32_t instruction, const std::string &reason);
@@ -329,6 +332,7 @@ private:
     std::vector<const HleFunction *> import_bindings_;
     std::filesystem::path game_root_;
     bool stopped_{};
+    bool interrupts_enabled_{true};
     std::string stop_reason_;
     bool hle_histogram_enabled_{};
     // keep high-frequency dispatch counters completely cold unless

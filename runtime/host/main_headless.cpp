@@ -16,6 +16,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace psprecomp {
@@ -27,8 +29,28 @@ namespace {
 const char *const kUsage =
     "usage: anypsp-run-<game> <EBOOT.BIN|module.prx> [--disc dir] [--ms dir] [--frames n]\n"
     "                         [--feedback file] [--dump frame.ppm] [--guest-path path]\n"
+    "                         [--output file]\n"
     "Runs headless: no window, no audio. --feedback appends the code addresses that had no\n"
-    "translated code (input for anypsp-analyze --feedback).\n";
+    "translated code (input for anypsp-analyze --feedback). --output writes what the program\n"
+    "sends to the emulator: device (test output; default: standard output).\n";
+
+// Import stubs without a translated wrapper (always, in the interpreter-only
+// runner) are bound here, by address.
+std::unordered_map<std::uint32_t, psprecomp::PspImport> g_stub_imports;
+
+void import_by_address(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
+    const auto found = g_stub_imports.find(ctx.pc);
+    if (found == g_stub_imports.end()) {
+        rt.stop("no import bound at " + psprecomp::hex32(ctx.pc));
+        return;
+    }
+    const auto caller_context = psprecomp::capture_runtime_execution_context();
+    const std::uint32_t import_pc = ctx.pc;
+    const std::uint32_t return_address = ctx.gpr[31];
+    rt.invoke_import(found->second.library, found->second.nid, ctx);
+    if (!rt.stopped() && psprecomp::runtime_execution_context_matches(caller_context) && ctx.pc == import_pc)
+        ctx.pc = return_address;
+}
 
 void write_ppm(const std::string &path, const std::vector<std::uint8_t> &rgba) {
     std::ofstream out(path, std::ios::binary);
@@ -44,7 +66,7 @@ int main(int argc, char **argv) {
         std::cerr << kUsage;
         return 2;
     }
-    std::string disc = ".", memstick = ".", feedback, dump, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
+    std::string disc = ".", memstick = ".", feedback, dump, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     long frames = 600;
     for (int i = 2; i < argc; i += 2) {
         const std::string flag = argv[i];
@@ -57,6 +79,7 @@ int main(int argc, char **argv) {
         else if (flag == "--ms") memstick = value;
         else if (flag == "--feedback") feedback = value;
         else if (flag == "--dump") dump = value;
+        else if (flag == "--output") output = value;
         else if (flag == "--guest-path") guest_path = value;
         else if (flag == "--frames") {
             try {
@@ -87,10 +110,25 @@ int main(int argc, char **argv) {
             if (!import.variable) imports.push_back({import.library, import.nid, import.stub_address});
 
         psprecomp::register_generated_functions(rt);
+        for (const auto &import : imports) {
+            if (rt.has_function(import.stub_address)) continue;
+            g_stub_imports[import.stub_address] = import;
+            rt.register_function(import.stub_address, &import_by_address, import.library + "::" + psprecomp::hex32(import.nid));
+        }
         psprecomp::register_dynamic_code();
         psprecomp::set_runtime_missing_code_handler(&psprecomp::run_dynamic_code);
 
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
+        std::ofstream output_file;
+        if (!output.empty()) {
+            output_file.open(output, std::ios::binary);
+            if (!output_file) throw psprecomp::Error("Cannot write " + output);
+        }
+        kernel->set_test_output([&output_file, to_file = !output.empty()](std::string_view text) {
+            std::ostream &out = to_file ? static_cast<std::ostream &>(output_file) : std::cout;
+            out.write(text.data(), static_cast<std::streamsize>(text.size()));
+            out.flush();
+        });
         kernel->reserve(module.base, module.end - module.base, "module:" + module.info->name);
         kernel->set_roots(disc, memstick);
         kernel->set_flash_root(std::filesystem::path(disc) / "flash0");

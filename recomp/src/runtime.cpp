@@ -1,5 +1,6 @@
 #include "psprecomp/runtime.hpp"
 #include "psprecomp/common.hpp"
+#include "cpu/interp.h"
 
 #include <algorithm>
 #include <array>
@@ -580,6 +581,10 @@ void Runtime::run(std::uint32_t entry, std::uint64_t max_dispatches) {
     stopped_ = false;
     stop_reason_.clear();
     cpu_.pc = entry;
+    anypsp::cpu::enter_guest(cpu_);
+    struct LeaveGuest {
+        ~LeaveGuest() { anypsp::cpu::leave_guest(); }
+    } leave_guest_on_return;
     load_counted_pcs();
     const bool profile_dispatch = std::getenv("PSPRECOMP_PROFILE_DISPATCH") != nullptr;
     const auto parse_environment_u64 = [](const char *name, std::uint64_t fallback = 0u) {
@@ -1251,7 +1256,9 @@ void Runtime::invoke_import_cached(std::uint32_t slot, std::string_view library,
         import_bindings_[slot] = bound;
     }
 
+    anypsp::cpu::leave_guest();
     (*bound)(*this, ctx);
+    anypsp::cpu::enter_guest(cpu_);
     if (!stopped_ && g_post_import_hook != nullptr) g_post_import_hook(*this, ctx);
 }
 
@@ -1270,7 +1277,9 @@ void Runtime::invoke_import(std::string_view library, std::uint32_t nid, Allegre
         stop("Missing HLE import " + library_name + "::" + name);
         return;
     }
+    anypsp::cpu::leave_guest();
     function_it->second(*this, ctx);
+    anypsp::cpu::enter_guest(cpu_);
     if (!stopped_ && g_post_import_hook != nullptr) g_post_import_hook(*this, ctx);
 }
 

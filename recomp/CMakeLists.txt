@@ -84,7 +84,24 @@ add_library(psprecomp_core STATIC
     src/runtime.cpp
     src/sha256.cpp
 )
-target_include_directories(psprecomp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# The reference Allegrex interpreter (adapted from PPSSPP, GPL-2.0-or-later).
+set(ANYPSP_CPU_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../runtime/cpu)
+target_sources(psprecomp_core PRIVATE
+    ${ANYPSP_CPU_DIR}/interp.cpp
+    ${ANYPSP_CPU_DIR}/interp_alu.cpp
+    ${ANYPSP_CPU_DIR}/interp_tables.cpp
+    ${ANYPSP_CPU_DIR}/interp_vfpu.cpp
+    ${ANYPSP_CPU_DIR}/vfpu_utils.cpp
+)
+if(MSVC)
+    set_source_files_properties(${ANYPSP_CPU_DIR}/interp_alu.cpp ${ANYPSP_CPU_DIR}/interp_vfpu.cpp
+        ${ANYPSP_CPU_DIR}/vfpu_utils.cpp PROPERTIES COMPILE_OPTIONS "/W3;/wd4244;/wd4805;/wd4018")
+else()
+    # The interpreter views the float register files as integers, as PPSSPP does.
+    set_source_files_properties(${ANYPSP_CPU_DIR}/interp_alu.cpp ${ANYPSP_CPU_DIR}/interp_vfpu.cpp
+        ${ANYPSP_CPU_DIR}/vfpu_utils.cpp PROPERTIES COMPILE_OPTIONS "-fno-strict-aliasing;-Wno-conversion;-Wno-shadow")
+endif()
+target_include_directories(psprecomp_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/../runtime)
 target_compile_definitions(psprecomp_core PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:_CRT_SECURE_NO_WARNINGS>)
 if(MSVC)

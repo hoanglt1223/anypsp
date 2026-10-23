@@ -115,7 +115,7 @@ void Kernel::install_devices() {
     hle("SysMemUserForUser", 0x91DE343Cu, "sceKernelSetCompiledSdkVersion500_505", &Kernel::return_zero);
     hle("SysMemUserForUser", 0xEBD5C3E6u, "sceKernelSetCompiledSdkVersion395", &Kernel::return_zero);
     // Memory stick callbacks and folders need no work: the memory stick is a host folder.
-    hle("IoFileMgrForUser", 0x54F5FB11u, "sceIoDevctl", &Kernel::return_zero);
+    hle("IoFileMgrForUser", 0x54F5FB11u, "sceIoDevctl", &Kernel::sceIoDevctl);
     hle("IoFileMgrForUser", 0x06A70004u, "sceIoMkdir", &Kernel::return_zero);
     hle("scePower", 0xEBD177D6u, "scePowerSetClockFrequency", &Kernel::return_zero);
     hle("scePower", 0x469989ADu, "scePowerSetClockFrequency2", &Kernel::return_zero);
@@ -133,6 +133,36 @@ void Kernel::install_devices() {
 void Kernel::sceKernelVolatileMemLock(Ctx &ctx) {
     if (ctx.gpr[5] != 0u) rt_.memory().store32(ctx.gpr[5], 0x08400000u);
     if (ctx.gpr[6] != 0u) rt_.memory().store32(ctx.gpr[6], 0x00400000u);
+    finish(ctx, 0u);
+}
+
+// The "emulator:" device test programs use to report (pspautotests common.c).
+// Other devices have nothing to configure here.
+void Kernel::sceIoDevctl(Ctx &ctx) {
+    auto &memory = rt_.memory();
+    const std::string device = memory.read_c_string(ctx.gpr[4], 32u);
+    if (device != "emulator:" && device != "kemulator:") {
+        finish(ctx, 0u);
+        return;
+    }
+    const std::uint32_t command = ctx.gpr[5], input = ctx.gpr[6], input_length = ctx.gpr[7], output = ctx.gpr[8];
+    switch (command) {
+    case 1u:  // has display: headless
+        if (output != 0u && memory.contains(output, 4u)) memory.store32(output, 0u);
+        break;
+    case 2u:  // send output
+        if (input_length != 0u && memory.contains(input, input_length)) {
+            std::string text(input_length, '\0');
+            memory.copy_out(input, std::span(reinterpret_cast<std::uint8_t *>(text.data()), text.size()));
+            if (test_output_) test_output_(text);
+        }
+        break;
+    case 3u:  // is emulator
+        if (output != 0u && memory.contains(output, 4u)) memory.store32(output, 1u);
+        break;
+    default:
+        break;
+    }
     finish(ctx, 0u);
 }
 

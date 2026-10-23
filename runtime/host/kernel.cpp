@@ -1,5 +1,7 @@
 #include "kernel.hpp"
 
+#include <bit>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
@@ -432,13 +434,21 @@ void Kernel::load_thread(Thread &t) {
     psprecomp::set_runtime_thread_identity(t.uid, t.name);
 }
 
+// A new thread's registers, as PPSSPP sets them (PSPThreadContext::reset): FPU and
+// VFPU registers hold a NaN, the VFPU control registers their power-on values.
 void Kernel::reset_context(Ctx &ctx) const {
     ctx = Ctx{};
+    ctx.gpr.fill(0xDEADBEEFu);
+    ctx.gpr[0] = 0u;
+    ctx.hi = ctx.lo = 0xDEADBEEFu;
+    ctx.fpr.fill(std::bit_cast<float>(0x7F800001u));
+    ctx.vfpu.fill(std::bit_cast<float>(0x7F800001u));
     ctx.fcr31 = 0x00000E00u;
-    ctx.vfpu_ctrl[0] = 0xE4u; // PFXS identity swizzle
-    ctx.vfpu_ctrl[1] = 0xE4u; // PFXT identity swizzle
-    ctx.vfpu_ctrl[2] = 0u;    // PFXD
-    ctx.vfpu_ctrl[3] = 0x3Fu; // CC
+    static constexpr std::uint32_t kVfpuControl[16] = {
+        0xE4u, 0xE4u, 0u, 0x3Fu, 0u, 0u, 0u, 0x7772CEABu,
+        0x3F800001u, 0x3F800002u, 0x3F800004u, 0x3F800008u, 0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u,
+    };
+    for (std::size_t i = 0; i < 16u; ++i) ctx.vfpu_ctrl[i] = kVfpuControl[i];
 }
 
 void Kernel::block(Ctx &ctx, WaitType wait, std::uint32_t result) {

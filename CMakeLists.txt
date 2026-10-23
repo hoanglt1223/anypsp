@@ -82,6 +82,16 @@ if(ANYPSP_BUILD_HOST)
     endif()
     find_package(Threads REQUIRED)
     target_link_libraries(anypsp_host PUBLIC Threads::Threads)
+
+    # Interpreter-only runner: no translated code, the reference interpreter runs
+    # everything. The oracle for the generated code and the conformance tests.
+    add_executable(anypsp-interp runtime/host/main_headless.cpp runtime/host/no_generated.cpp
+        runtime/host/no_modules.cpp runtime/host/no_dynamic_code.cpp)
+    target_link_libraries(anypsp-interp PRIVATE anypsp_host anypsp_loader)
+    if(MSVC)
+        target_compile_options(anypsp-interp PRIVATE /EHsc /permissive- /W3)
+        target_link_options(anypsp-interp PRIVATE /STACK:67108864)
+    endif()
 endif()
 
 # One runner per translated game: cmake -DANYPSP_RUNNER_NAME=<name> -DANYPSP_RUNNER_GENERATED=<psp_recomp --auto dir>
