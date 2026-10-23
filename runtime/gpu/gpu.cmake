@@ -1,0 +1,62 @@
+# Desktop GPU backend: the GE's GL renderer on OpenGL 3.3 core through SDL3,
+# with an offscreen (hidden-window) runner that writes PNG frames and hashes.
+# Included from the top-level CMakeLists.txt after the host library.
+
+option(ANYPSP_BUILD_GPU "Build the desktop OpenGL GE backend and its runners (fetches SDL3)" ON)
+if(NOT (ANYPSP_BUILD_HOST AND ANYPSP_BUILD_GPU))
+    return()
+endif()
+
+include(FetchContent)
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+# Same pinned release as the other anyport projects.
+FetchContent_Declare(SDL3
+    URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
+    URL_HASH SHA256=9c75cf16330322c217dedd2e0609f1124f1b54b8633e763467b4684d0f4334a3
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    EXCLUDE_FROM_ALL
+    SYSTEM)
+FetchContent_MakeAvailable(SDL3)
+
+set(ANYPSP_GPU_DIR ${CMAKE_CURRENT_LIST_DIR})
+add_library(anypsp_gpu STATIC
+    ${ANYPSP_GPU_DIR}/../host/ge_gl.cpp
+    ${ANYPSP_GPU_DIR}/gl_api.cpp
+    ${ANYPSP_GPU_DIR}/gl_host.cpp
+    ${ANYPSP_GPU_DIR}/frame_output.cpp)
+target_include_directories(anypsp_gpu PUBLIC ${ANYPSP_GPU_DIR})
+target_compile_definitions(anypsp_gpu PUBLIC ANYPSP_GL_DESKTOP)
+target_link_libraries(anypsp_gpu PUBLIC anypsp_host SDL3::SDL3-static)
+if(MSVC)
+    target_compile_options(anypsp_gpu PRIVATE /EHsc /permissive- /W3)
+    target_compile_definitions(anypsp_gpu PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# Interpreter-only runner with a renderer (pspautotests GE tests, frame dumps).
+add_executable(anypsp-interp-gpu ${ANYPSP_GPU_DIR}/main_gpu.cpp ${ANYPSP_GPU_DIR}/../host/no_generated.cpp
+    ${ANYPSP_GPU_DIR}/../host/no_modules.cpp ${ANYPSP_GPU_DIR}/../host/no_dynamic_code.cpp)
+target_link_libraries(anypsp-interp-gpu PRIVATE anypsp_gpu anypsp_loader)
+if(MSVC)
+    target_compile_options(anypsp-interp-gpu PRIVATE /EHsc /permissive- /W3)
+    target_link_options(anypsp-interp-gpu PRIVATE /STACK:67108864)
+endif()
+
+# Per-game runner with a renderer, next to anypsp-run-<name>.
+if(TARGET anypsp_generated_${ANYPSP_RUNNER_NAME})
+    set(ANYPSP_GPU_RUNNER anypsp-run-${ANYPSP_RUNNER_NAME}-gpu)
+    add_executable(${ANYPSP_GPU_RUNNER} ${ANYPSP_GPU_DIR}/main_gpu.cpp)
+    if(NOT EXISTS "${ANYPSP_RUNNER_GENERATED}/modules_table.cpp")
+        target_sources(${ANYPSP_GPU_RUNNER} PRIVATE ${ANYPSP_GPU_DIR}/../host/no_modules.cpp)
+    endif()
+    if(NOT EXISTS "${ANYPSP_RUNNER_GENERATED}/dynamic_code.cpp")
+        target_sources(${ANYPSP_GPU_RUNNER} PRIVATE ${ANYPSP_GPU_DIR}/../host/no_dynamic_code.cpp)
+    endif()
+    target_link_libraries(${ANYPSP_GPU_RUNNER} PRIVATE anypsp_generated_${ANYPSP_RUNNER_NAME} anypsp_gpu anypsp_loader)
+    if(MSVC)
+        target_compile_options(${ANYPSP_GPU_RUNNER} PRIVATE /EHsc /permissive- /W3)
+        target_link_options(${ANYPSP_GPU_RUNNER} PRIVATE /STACK:67108864)
+    endif()
+endif()

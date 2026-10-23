@@ -12,6 +12,8 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <string>
+#include <string_view>
 
 namespace pspweb {
 namespace {
@@ -224,6 +226,16 @@ void main() { o_color = vec4(texture(u_tex, v_uv).rgb, 1.0); }
 
 GLuint compile(GLenum type, const char *source) {
     const GLuint shader = glCreateShader(type);
+#ifdef ANYPSP_GL_DESKTOP
+    // The shaders are GLSL ES 3.00; GLSL 3.30 accepts them unchanged apart from
+    // the version line (precision qualifiers are allowed and ignored).
+    constexpr std::string_view es_version = "#version 300 es";
+    std::string desktop;
+    if (std::string_view(source).starts_with(es_version)) {
+        desktop = std::string("#version 330 core") + (source + es_version.size());
+        source = desktop.c_str();
+    }
+#endif
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
     GLint ok = 0;
@@ -1545,6 +1557,7 @@ void GeGl::after_transfer(const TransferRect &dst) {
 void GeGl::present(std::uint32_t fb_address, std::uint32_t stride, std::uint32_t format,
                    GLuint out_fbo, int out_width, int out_height) {
     flush();
+    if (coherent_) reload_changed_vram(); // the CPU may have drawn since the last list (debug text)
     reset_cache(); // the code below drives GL directly
     constexpr std::uint32_t width = 480u, height = 272u;
     GLuint texture = 0u;
@@ -1601,6 +1614,45 @@ void GeGl::present(std::uint32_t fb_address, std::uint32_t stride, std::uint32_t
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
     reset_cache();
+}
+
+std::uint64_t GeGl::hash_vram(const Surface &s) const {
+    const std::uint32_t end = std::min(surface_end(s), kVramSize);
+    const std::uint8_t *vram = memory_.raw_pointer(0x04000000u, kVramSize);
+    if (vram == nullptr || end <= s.offset) return 0u;
+    std::uint64_t h = 0xCBF29CE484222325ull;
+    std::uint32_t at = s.offset;
+    for (; at + 8u <= end; at += 8u) {
+        std::uint64_t word;
+        std::memcpy(&word, vram + at, 8u);
+        h = (h ^ word) * 0x100000001B3ull;
+        h ^= h >> 29u;
+    }
+    for (; at < end; ++at) h = (h ^ vram[at]) * 0x100000001B3ull;
+    return h;
+}
+
+void GeGl::list_started() {
+    if (coherent_) reload_changed_vram();
+}
+
+void GeGl::reload_changed_vram() {
+    for (auto &s : surfaces_) {
+        if (!s.alive || hash_vram(s) == s.vram_hash) continue;
+        s.pending_uploads.clear();
+        upload_rect(s, whole(s));
+    }
+}
+
+void GeGl::list_finished() {
+    if (!coherent_) return;
+    flush();
+    for (auto &s : surfaces_) {
+        if (!s.alive) continue;
+        apply_pending_uploads(s);
+        if (!s.gpu_dirty.empty()) download(s);
+        s.vram_hash = hash_vram(s);
+    }
 }
 
 void GeGl::report_targets() const {

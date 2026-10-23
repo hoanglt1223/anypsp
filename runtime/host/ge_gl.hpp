@@ -1,6 +1,6 @@
 #pragma once
 
-// OpenGL ES 3 / WebGL2 backend for the GE.  The Ge front end keeps vertex
+// OpenGL ES 3 / WebGL2 / desktop OpenGL 3.3 core backend for the GE.  The Ge front end keeps vertex
 // decoding, transform, lighting and clipping on the CPU and hands this class
 // drawing-space triangles plus the render state of each primitive.  Triangles
 // sharing a state are batched into one draw call.
@@ -16,7 +16,11 @@
 #include "ge_renderer.hpp"
 #include "psprecomp/guest_memory.hpp"
 
+#ifdef ANYPSP_GL_DESKTOP
+#include "gl_api.hpp"
+#else
 #include <GLES3/gl3.h>
+#endif
 
 #include <algorithm>
 #include <cstdint>
@@ -32,8 +36,15 @@ public:
     explicit GeGl(psprecomp::GuestMemory &memory);
     ~GeGl() override;
 
-    // Compiles shaders; a GL ES 3 context must be current.
+    // Compiles shaders; a GL ES 3 (or desktop GL 3.3 core) context must be current.
     bool init();
+    // Keeps guest VRAM the truth between display lists: GPU pixels are written
+    // back when a list ends, and surfaces whose VRAM the CPU changed meanwhile
+    // are reloaded when the next one starts. Needed when the guest reads or
+    // writes framebuffers with the CPU (tests, some games); costs a readback per list.
+    void set_coherent(bool on) { coherent_ = on; }
+    void list_started() override;
+    void list_finished() override;
 
     // True when a texture at `address` (format 0..3, buffer width in pixels)
     // lies inside GPU-drawn surface content and can be sampled from it.
@@ -132,6 +143,7 @@ private:
         std::vector<RowSpan> rows;
         // Newest draw of each overlapping surface already copied into this one.
         std::vector<std::pair<const Surface *, std::uint64_t>> synced;
+        std::uint64_t vram_hash{}; // coherent mode: VRAM contents when the last list ended
     };
     struct GlTexture {
         GLuint id{};
@@ -262,6 +274,9 @@ private:
     double flush_ms_{};
     std::vector<std::uint8_t> pixels_;
     std::function<void(std::uint32_t, std::uint32_t)> vram_write_hook_;
+    bool coherent_{};
+    [[nodiscard]] std::uint64_t hash_vram(const Surface &s) const;
+    void reload_changed_vram();
 };
 
 } // namespace pspweb

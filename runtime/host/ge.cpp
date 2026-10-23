@@ -201,6 +201,17 @@ bool Ge::run_list(std::uint32_t start, std::uint32_t stall) {
         }
     } timer{stats_, started};
     ++stats_.lists;
+    struct ListScope {
+        GeRenderer *gl;
+        explicit ListScope(GeRenderer *renderer) : gl(renderer) {
+            if (gl != nullptr) gl->list_started();
+        }
+        ~ListScope() {
+            if (gl != nullptr) gl->list_finished();
+        }
+        ListScope(const ListScope &) = delete;
+        ListScope &operator=(const ListScope &) = delete;
+    } list_scope{gl_};
     pc_ = start & 0x0FFFFFFFu;
     stall &= 0x0FFFFFFFu;
     call_stack_.clear();

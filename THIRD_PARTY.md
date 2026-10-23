@@ -23,6 +23,10 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 - FFmpeg code by way of PPSSPP's `at3_standalone`, as bundled by psp-web-recomp. Origin commit: `runtime/third_party/at3_standalone/SOURCE_COMMIT`. License text: `runtime/third_party/at3_standalone/COPYING.LGPLv2.1`.
 
+## SDL3 (zlib): fetched at build time, not in the repository
+
+- [libsdl-org/SDL](https://github.com/libsdl-org/SDL) release 3.4.18, pinned by SHA-256 in `runtime/gpu/gpu.cmake` and linked statically into the GPU runners (`anypsp-interp-gpu`, `anypsp-run-<name>-gpu`). It provides the hidden-window OpenGL context, the GL function lookup and PNG writing (SDL's bundled miniz, MIT). License text: `LICENSE.txt` in the fetched source.
+
 ## PPSSPP (GPL-2.0-or-later): behaviour reference and data source
 
 - [hrydgard/ppsspp](https://github.com/hrydgard/ppsspp). Files that adapt PPSSPP code or data say so in their header, and are listed here:

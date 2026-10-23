@@ -73,6 +73,9 @@ public:
     virtual void before_transfer(const TransferRect &src, const TransferRect &dst) = 0;
     virtual void after_transfer(const TransferRect &dst) = 0;
     virtual void set_vram_write_hook(std::function<void(std::uint32_t, std::uint32_t)> hook) = 0;
+    // Called around every display-list run; the guest CPU only touches memory in between.
+    virtual void list_started() {}
+    virtual void list_finished() {}
 };
 
 } // namespace pspweb

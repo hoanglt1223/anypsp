@@ -148,3 +148,6 @@ if(Python3_Interpreter_FOUND)
                      $<TARGET_FILE:anypsp-analyze> ${CMAKE_CURRENT_BINARY_DIR}/corpus-analysis)
     set_tests_properties(corpus_analysis PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# Desktop GPU backend and its offscreen runners.
+include(runtime/gpu/gpu.cmake)
