@@ -51,7 +51,6 @@ static_assert(sizeof(ModuleInfo32) == 52);
 static_assert(sizeof(Rel32) == 8);
 
 constexpr std::uint32_t kPtLoad = 1u;
-constexpr std::uint32_t kShtNobits = 8u;
 constexpr std::uint32_t kRMips32 = 2u;
 constexpr std::uint32_t kRMips26 = 4u;
 constexpr std::uint32_t kRMipsHi16 = 5u;
@@ -135,14 +134,16 @@ void Elf32Image::parse() {
         SectionHeader32 sh{};
         const auto data = checked_span(off, sizeof(sh));
         std::memcpy(&sh, data.data(), sizeof(sh));
-        if (sh.type != kShtNobits && sh.size > 0u) (void)checked_span(sh.offset, sh.size);
+        // Section data is checked where it is used: a PRX may be cut off before its
+        // relocation sections and still load.
         raw_sections.push_back(sh);
     }
 
     std::span<const std::uint8_t> string_table;
     if (header.shstrndx < raw_sections.size()) {
         const auto &sh = raw_sections[header.shstrndx];
-        string_table = checked_span(sh.offset, sh.size);
+        if (sh.offset <= bytes_.size() && sh.size <= bytes_.size() - sh.offset)
+            string_table = std::span<const std::uint8_t>(bytes_).subspan(sh.offset, sh.size);
     }
     sections_.clear();
     for (const auto &sh : raw_sections) {
