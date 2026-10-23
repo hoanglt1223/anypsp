@@ -114,3 +114,12 @@ if(ANYPSP_BUILD_HOST AND NOT ANYPSP_RUNNER_NAME STREQUAL "")
         target_link_options(anypsp-run-${ANYPSP_RUNNER_NAME} PRIVATE /STACK:67108864)
     endif()
 endif()
+
+# Corpus check (skipped until python tests/fetch-corpus.py has run).
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME corpus_analysis
+             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus-analysis.py
+                     $<TARGET_FILE:anypsp-analyze> ${CMAKE_CURRENT_BINARY_DIR}/corpus-analysis)
+    set_tests_properties(corpus_analysis PROPERTIES SKIP_RETURN_CODE 77)
+endif()

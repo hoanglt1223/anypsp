@@ -63,6 +63,12 @@ void add_gap_seeds(const psprecomp::GuestMemory &memory, const std::vector<Execu
                    const std::set<std::uint32_t> &covered, const std::set<std::uint32_t> &entries,
                    const std::set<std::uint32_t> &jump_targets, std::map<std::uint32_t, std::string> &found) {
     constexpr std::uint32_t kEret = 0x42000018u;
+    // A seeded gap function's own CFG tells where it ends, so a run of several
+    // unreferenced functions is found in one pass rather than one per iteration.
+    std::set<std::uint32_t> provisional;
+    CfgOptions cfg_options;
+    cfg_options.function_entries = &entries;
+    const auto is_covered = [&](std::uint32_t pc) { return covered.contains(pc) || provisional.contains(pc); };
     for (const auto &range : code) {
         bool after_end = true;
         bool after_eret = false;
@@ -70,7 +76,7 @@ void add_gap_seeds(const psprecomp::GuestMemory &memory, const std::vector<Execu
         for (std::uint32_t pc = range.start; pc + 4u <= range.end; pc += 4u) {
             if (pc == end_at) after_end = true;
             const auto d = psprecomp::decode_allegrex(memory.load32(pc));
-            if (covered.contains(pc)) {
+            if (is_covered(pc)) {
                 if (after_end && d.word == 0u) continue; // alignment nops
                 // Prologue + reached by a j also marks a function that follows a call
                 // to a function that does not return.
@@ -90,7 +96,12 @@ void add_gap_seeds(const psprecomp::GuestMemory &memory, const std::vector<Execu
             after_end = false;
             after_eret = false;
             if (d.kind == psprecomp::OpcodeKind::Unsupported) continue;
-            if (!entries.contains(pc)) found.try_emplace(pc, "gap_after_return");
+            if (entries.contains(pc)) continue;
+            found.try_emplace(pc, "gap_after_return");
+            provisional.insert(pc);
+            for (const auto &[start, block] : build_cfg(memory, code, pc, cfg_options).blocks)
+                for (std::uint32_t at = block.start; at < block.end; at += 4u) provisional.insert(at);
+            pc -= 4u; // rescan the seeded function as covered code
         }
     }
 }
