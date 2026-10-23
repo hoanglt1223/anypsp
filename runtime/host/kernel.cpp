@@ -351,6 +351,35 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(dp, 0x36CDFADEu, "sceDisplayWaitVblank", &Kernel::sceDisplayWaitVblankStart);
     hle(dp, 0x8EB9EC49u, "sceDisplayWaitVblankCB", &Kernel::sceDisplayWaitVblankStart);
     hle(dp, 0x9C6EAAD7u, "sceDisplayGetVcount", &Kernel::sceDisplayGetVcount);
+    {
+        // Small functions registered in place; behaviour follows PPSSPP (Core/HLE/sceDmac.cpp,
+        // sceDisplay.cpp, sceUmd.cpp; GPL-2.0-or-later).
+        const auto add = [this](const char *library, std::uint32_t nid, const char *name,
+                                std::function<std::uint32_t(Ctx &)> body) {
+            rt_.register_hle(library, nid, [this, body](psprecomp::Runtime &, Ctx &ctx) { finish(ctx, body(ctx)); });
+            rt_.nids().add(library, nid, name);
+            registered_.insert(std::string(library) + ":" + hex(nid));
+        };
+        const auto dmac_copy = [this](Ctx &ctx) -> std::uint32_t {
+            constexpr std::uint32_t kInvalidSize = 0x80000104u, kInvalidPointer = 0x80000103u, kPrivRequired = 0x80000023u;
+            const std::uint32_t dst = ctx.gpr[4], src = ctx.gpr[5], size = ctx.gpr[6];
+            auto &memory = rt_.memory();
+            if (size == 0u) return kInvalidSize;
+            if (!memory.contains(dst, 1u) || !memory.contains(src, 1u)) return kInvalidPointer;
+            if (dst + size >= 0x80000000u || src + size >= 0x80000000u || size >= 0x80000000u) return kPrivRequired;
+            std::uint8_t *to = memory.raw_pointer(dst, size);
+            const std::uint8_t *from = memory.raw_pointer(src, size);
+            if (to != nullptr && from != nullptr) std::memmove(to, from, size);
+            return 0u;
+        };
+        add("sceDmac", 0x617F3FE6u, "sceDmacMemcpy", dmac_copy);
+        add("sceDmac", 0xD97F94D8u, "sceDmacTryMemcpy", dmac_copy);
+        // 286 horizontal lines per frame.
+        add(dp, 0x210EAB3Au, "sceDisplayGetAccumulatedHcount",
+            [this](Ctx &) { return static_cast<std::uint32_t>(display_.vcount * 286u); });
+        add("sceUmdUser", 0x87533940u, "sceUmdReplaceProhibit", [](Ctx &) { return 0u; });
+        add("sceUmdUser", 0xCBE9F02Au, "sceUmdReplacePermit", [](Ctx &) { return 0u; });
+    }
 
     hle("sceGe_user", 0xE47E40E4u, "sceGeEdramGetAddr", &Kernel::sceGeEdramGetAddr);
     hle("sceGe_user", 0x1F6752ADu, "sceGeEdramGetSize", &Kernel::sceGeEdramGetSize);
