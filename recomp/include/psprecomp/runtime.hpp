@@ -359,6 +359,11 @@ void register_generated_functions(Runtime &runtime);
 using RuntimeHeartbeatHook = void (*)(std::uint64_t dispatch, std::uint32_t pc);
 void set_runtime_heartbeat_hook(RuntimeHeartbeatHook hook, std::uint64_t interval) noexcept;
 void set_runtime_missing_code_handler(Runtime::RecompiledFunction handler) noexcept;
+// Code addresses reached without translated code are appended, once each, to a
+// feedback file ("0x08804ABC missing_code" lines) for the next analysis pass.
+// PSPRECOMP_FEEDBACK_FILE names the file unless set_runtime_feedback_file is called.
+void set_runtime_feedback_file(const std::string &path);
+void record_missing_code(std::uint32_t address);
 
 // Execution-driven time and preemption.
 //

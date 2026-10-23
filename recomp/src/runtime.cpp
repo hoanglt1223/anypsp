@@ -3,11 +3,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace psprecomp {
@@ -85,6 +88,43 @@ void report_counted_pcs() {
 }
 
 void set_runtime_missing_code_handler(Runtime::RecompiledFunction handler) noexcept { g_missing_code_handler = handler; }
+
+namespace {
+std::mutex g_feedback_mutex;
+std::FILE *g_feedback_file = nullptr;
+bool g_feedback_environment_checked = false;
+std::unordered_set<std::uint32_t> g_feedback_seen;
+
+void open_feedback_file(const std::string &path) {
+    if (g_feedback_file != nullptr) std::fclose(g_feedback_file);
+    g_feedback_seen.clear();
+    g_feedback_file = std::fopen(path.c_str(), "a");
+    if (g_feedback_file == nullptr) throw Error("Cannot open feedback file " + path);
+}
+} // namespace
+
+void set_runtime_feedback_file(const std::string &path) {
+    std::lock_guard lock(g_feedback_mutex);
+    g_feedback_environment_checked = true;
+    open_feedback_file(path);
+}
+
+void record_missing_code(std::uint32_t address) {
+    std::lock_guard lock(g_feedback_mutex);
+    if (!g_feedback_environment_checked) {
+        g_feedback_environment_checked = true;
+        if (const char *path = std::getenv("PSPRECOMP_FEEDBACK_FILE"); path != nullptr && *path != '\0') {
+            try {
+                open_feedback_file(path);
+            } catch (const Error &e) {
+                std::cerr << "[feedback] " << e.what() << "\n";
+            }
+        }
+    }
+    if (g_feedback_file == nullptr || !g_feedback_seen.insert(address).second) return;
+    std::fprintf(g_feedback_file, "0x%08X missing_code\n", static_cast<unsigned>(address));
+    std::fflush(g_feedback_file);
+}
 
 void set_runtime_heartbeat_hook(RuntimeHeartbeatHook hook, std::uint64_t interval) noexcept {
     g_heartbeat_hook = interval != 0u ? hook : nullptr;
@@ -606,7 +646,10 @@ void Runtime::run(std::uint32_t entry, std::uint64_t max_dispatches) {
             chain_context_invalidated_ = false;
             const std::int32_t dispatch_thread_uid = g_runtime_thread_uid;
             RecompiledFunction function = lookup_function(before);
-            if (function == nullptr) function = g_missing_code_handler;
+            if (function == nullptr) {
+                record_missing_code(before);
+                function = g_missing_code_handler;
+            }
             if (function == nullptr) {
                 stop("No recompiled function registered at " + hex32(before));
                 return;
@@ -684,7 +727,10 @@ void Runtime::run(std::uint32_t entry, std::uint64_t max_dispatches) {
             // back to exact per-PC dispatch automatically.
             RecompiledFunction function = lookup_generated_unit(before);
             if (function == nullptr) function = lookup_function(before);
-            if (function == nullptr) function = g_missing_code_handler;
+            if (function == nullptr) {
+                record_missing_code(before);
+                function = g_missing_code_handler;
+            }
             if (function == nullptr) {
                 stop("No recompiled function registered at " + hex32(before));
                 break;
@@ -744,7 +790,10 @@ void Runtime::run(std::uint32_t entry, std::uint64_t max_dispatches) {
         chain_context_invalidated_ = false;
         RecompiledFunction function = lookup_function(before);
         const FunctionEntry *function_entry = lookup_entry(before);
-        if (function == nullptr) function = g_missing_code_handler;
+        if (function == nullptr) {
+            record_missing_code(before);
+            function = g_missing_code_handler;
+        }
         if (function == nullptr) {
             stop("No recompiled function registered at " + hex32(before));
             break;

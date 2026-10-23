@@ -655,6 +655,8 @@ void interpret(Runtime &rt, AllegrexContext &ctx) {
             if (taken) next = pc + 4u + static_cast<std::uint32_t>(static_cast<std::int32_t>(d.immediate) * 4);
         }
         ctx.pc = next;
+        if ((d.kind == K::J || d.kind == K::Jal || d.kind == K::Jr || d.kind == K::Jalr) && !rt.has_function(next))
+            record_missing_code(next);
     }
 }
 
