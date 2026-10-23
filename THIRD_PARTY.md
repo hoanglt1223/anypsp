@@ -32,6 +32,9 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 - [hrydgard/ppsspp](https://github.com/hrydgard/ppsspp). Files that adapt PPSSPP code or data say so in their header, and are listed here:
   - `recomp/loader/relocs.cpp`: HI16 pairing and the packed relocation format (program header type `0x700000A1`) follow `Core/ELF/ElfReader.cpp` (`LoadRelocations`, `LoadRelocations2`).
   - `data/nids.toml`: library, NID and function names extracted from PPSSPP's HLE function tables (`Core/HLE/*.cpp`) by `tools/gen-nids.py`; the PPSSPP commit is recorded in the file header.
+  - `runtime/cpu/` (the reference Allegrex interpreter), adapted from PPSSPP at `902e5ccd8c1400b4387b73942491cded655e5f9c`: `interp_alu.cpp` from `Core/MIPS/Interpreter.cpp`, `interp_vfpu.cpp` from `Core/MIPS/InterpreterVFPU.cpp`, `vfpu_utils.cpp`/`.h` from `Core/MIPS/MIPSVFPUUtils.cpp`/`.h`, `interp_tables.cpp` from `Core/MIPS/MIPSTables.cpp`; `interp.cpp`, `interp_ops.h`, `mips_state.h` and `ppsspp_compat.h` follow `Core/MIPS/MIPS.cpp`/`MIPS.h`, `MIPSTables.h` and `Common/Math/math_util.h`. The copied files keep PPSSPP's copyright header.
+  - `runtime/host/kernel.cpp`: `sceDmacMemcpy`, `sceDisplayGetAccumulatedHcount` and `sceUmdReplace*` follow `Core/HLE/sceDmac.cpp`, `sceDisplay.cpp` and `sceUmd.cpp`; the initial thread register state follows `PSPThreadContext::reset` in `Core/HLE/sceKernelThread.cpp`.
+  - `tests/conformance.py` compares output the way `headless/Compare.cpp` does.
 
 ## PSPSDK (BSD): data source
 
@@ -39,4 +42,4 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 ## Test corpus (not in the repository)
 
-- [hrydgard/pspautotests](https://github.com/hrydgard/pspautotests) binaries are fetched by `tests/fetch-corpus.py`, pinned by commit and SHA-256 in `tests/corpus-manifest.txt`, into the git-ignored `tests/corpus/`.
+- [hrydgard/pspautotests](https://github.com/hrydgard/pspautotests) binaries and their `.expected` output are fetched by `tests/fetch-corpus.py`, pinned by commit and SHA-256 in `tests/corpus-manifest.txt`, into the git-ignored `tests/corpus/`.
