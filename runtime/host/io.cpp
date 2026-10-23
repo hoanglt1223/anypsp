@@ -3,7 +3,6 @@
 // the cache parks the calling thread until its chunks arrive.
 
 #include "kernel.hpp"
-#include "pgd.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -25,6 +24,10 @@ constexpr std::uint32_t kErrorPgdInvalidHeader = 0x80510204u;
 constexpr std::uint32_t kErrorTooManyFiles = 0x80020320u;
 constexpr std::int32_t kMaxFds = 64;
 constexpr std::uint64_t kMaxWholeFileRead = 256u << 20u;
+
+bool is_pgd(std::span<const std::uint8_t> bytes) {
+    return bytes.size() >= 4u && bytes[0] == 0u && bytes[1] == 'P' && bytes[2] == 'G' && bytes[3] == 'D';
+}
 
 #if !defined(__EMSCRIPTEN__)
 const char *fopen_mode(std::uint32_t flags) {
@@ -668,22 +671,13 @@ void Kernel::sceIoIoctl(Ctx &ctx) {
         finish(ctx, 0u);
         return;
     }
-    // The game's version key; files that turn out not to be PGD are read as they are.
-    std::optional<std::array<std::uint8_t, 16>> key;
-    if (ctx.gpr[7] == 16u) {
-        key.emplace();
-        for (std::uint32_t i = 0; i < 16u; ++i) (*key)[i] = rt_.memory().load8(ctx.gpr[6] + i);
-    }
-    with_file_contents(ctx, fd, [key](OpenFile &open, std::span<const std::uint8_t> bytes) -> std::uint32_t {
-        if (open.pgd_offset >= bytes.size() || !pgd::is_pgd(bytes.subspan(open.pgd_offset))) return 0u;
-        auto plain = std::make_shared<std::vector<std::uint8_t>>();
-        if (!pgd::decrypt(bytes.subspan(open.pgd_offset), key ? key->data() : nullptr, *plain)) {
-            std::cerr << "[io] PGD decryption failed: " << open.path << "\n";
-            return kErrorPgdInvalidHeader;
-        }
-        open.plain = std::move(plain);
-        open.position = 0u;
-        return 0u;
+    // Files that turn out not to be PGD are read as they are. Decrypting PGD needs
+    // console key material, which this project does not ship.
+    with_file_contents(ctx, fd, [](OpenFile &open, std::span<const std::uint8_t> bytes) -> std::uint32_t {
+        if (open.pgd_offset >= bytes.size() || !is_pgd(bytes.subspan(open.pgd_offset))) return 0u;
+        std::cerr << "[io] " << open.path << " is PGD-encrypted, which is not supported; "
+                  << "decrypt the data files of your own dump with an external tool first\n";
+        return kErrorPgdInvalidHeader;
     });
 }
 
