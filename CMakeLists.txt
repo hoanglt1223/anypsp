@@ -53,3 +53,64 @@ anypsp_warnings(anypsp-analyze)
 
 # psp_recomp --auto loads modules through the AnyPSP loader.
 target_link_libraries(psp_recomp PRIVATE anypsp_loader)
+
+# Renderer-free native host: the HLE kernel and the software GE, no window, no audio.
+option(ANYPSP_BUILD_HOST "Build the headless native host library" ON)
+if(ANYPSP_BUILD_HOST)
+    set(ANYPSP_AT3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/runtime/third_party/at3_standalone)
+    add_library(anypsp_at3 STATIC
+        ${ANYPSP_AT3_DIR}/atrac.cpp ${ANYPSP_AT3_DIR}/atrac3.cpp ${ANYPSP_AT3_DIR}/atrac3plus.cpp
+        ${ANYPSP_AT3_DIR}/atrac3plusdec.cpp ${ANYPSP_AT3_DIR}/atrac3plusdsp.cpp ${ANYPSP_AT3_DIR}/get_bits.cpp
+        ${ANYPSP_AT3_DIR}/compat.cpp ${ANYPSP_AT3_DIR}/fft.cpp ${ANYPSP_AT3_DIR}/mem.cpp)
+    target_include_directories(anypsp_at3 PRIVATE runtime/third_party/at3_shim)
+    target_include_directories(anypsp_at3 PUBLIC ${ANYPSP_AT3_DIR})
+    if(MSVC)
+        target_compile_options(anypsp_at3 PRIVATE /w)
+    else()
+        target_compile_options(anypsp_at3 PRIVATE -w)
+    endif()
+
+    add_library(anypsp_host STATIC
+        runtime/host/atrac.cpp runtime/host/devices.cpp runtime/host/font.cpp runtime/host/ge.cpp
+        runtime/host/ge_worker.cpp runtime/host/io.cpp runtime/host/kernel.cpp runtime/host/modules.cpp
+        runtime/host/mpeg.cpp runtime/host/sas.cpp runtime/host/savedata.cpp runtime/host/webfs.cpp)
+    target_include_directories(anypsp_host PUBLIC runtime/host)
+    target_link_libraries(anypsp_host PUBLIC psprecomp_core anypsp_at3)
+    target_compile_definitions(anypsp_host PRIVATE _CRT_SECURE_NO_WARNINGS)
+    if(MSVC)
+        target_compile_options(anypsp_host PRIVATE /EHsc /permissive- /W3 /bigobj)
+    endif()
+    find_package(Threads REQUIRED)
+    target_link_libraries(anypsp_host PUBLIC Threads::Threads)
+endif()
+
+# One runner per translated game: cmake -DANYPSP_RUNNER_NAME=<name> -DANYPSP_RUNNER_GENERATED=<psp_recomp --auto dir>
+set(ANYPSP_RUNNER_NAME "" CACHE STRING "Name of the headless runner to build")
+set(ANYPSP_RUNNER_GENERATED "" CACHE PATH "Directory written by psp_recomp --auto for that runner")
+set(ANYPSP_RUNNER_OPT "1" CACHE STRING "Optimization level for the generated code: d (none, fastest build), 1 or 2")
+if(ANYPSP_BUILD_HOST AND NOT ANYPSP_RUNNER_NAME STREQUAL "")
+    file(GLOB_RECURSE ANYPSP_RUNNER_SOURCES CONFIGURE_DEPENDS "${ANYPSP_RUNNER_GENERATED}/*.cpp")
+    if(NOT ANYPSP_RUNNER_SOURCES)
+        message(FATAL_ERROR "No generated code in ${ANYPSP_RUNNER_GENERATED}; run psp_recomp --auto first")
+    endif()
+    add_library(anypsp_generated_${ANYPSP_RUNNER_NAME} STATIC ${ANYPSP_RUNNER_SOURCES})
+    target_link_libraries(anypsp_generated_${ANYPSP_RUNNER_NAME} PUBLIC psprecomp_core)
+    if(MSVC)
+        target_compile_options(anypsp_generated_${ANYPSP_RUNNER_NAME} PRIVATE /bigobj /w /O${ANYPSP_RUNNER_OPT})
+    else()
+        target_compile_options(anypsp_generated_${ANYPSP_RUNNER_NAME} PRIVATE -w -O$<IF:$<STREQUAL:${ANYPSP_RUNNER_OPT},d>,0,${ANYPSP_RUNNER_OPT}>)
+    endif()
+    add_executable(anypsp-run-${ANYPSP_RUNNER_NAME} runtime/host/main_headless.cpp)
+    if(NOT EXISTS "${ANYPSP_RUNNER_GENERATED}/modules_table.cpp")
+        target_sources(anypsp-run-${ANYPSP_RUNNER_NAME} PRIVATE runtime/host/no_modules.cpp)
+    endif()
+    if(NOT EXISTS "${ANYPSP_RUNNER_GENERATED}/dynamic_code.cpp")
+        target_sources(anypsp-run-${ANYPSP_RUNNER_NAME} PRIVATE runtime/host/no_dynamic_code.cpp)
+    endif()
+    target_link_libraries(anypsp-run-${ANYPSP_RUNNER_NAME} PRIVATE anypsp_generated_${ANYPSP_RUNNER_NAME} anypsp_host anypsp_loader)
+    if(MSVC)
+        target_compile_options(anypsp-run-${ANYPSP_RUNNER_NAME} PRIVATE /EHsc /permissive- /W3)
+        # Translated calls nest native frames (chained calls); 1 MiB is not enough.
+        target_link_options(anypsp-run-${ANYPSP_RUNNER_NAME} PRIVATE /STACK:67108864)
+    endif()
+endif()

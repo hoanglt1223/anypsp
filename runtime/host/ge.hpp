@@ -5,7 +5,7 @@
 // rasterized straight into guest VRAM, so the display path only has to read
 // the framebuffer the game points sceDisplay at.
 
-#include "ge_gl.hpp"
+#include "ge_renderer.hpp"
 #include "psprecomp/guest_memory.hpp"
 
 #include <array>
@@ -16,7 +16,6 @@
 
 namespace pspweb {
 
-class GeGl;
 
 class Ge {
 public:
@@ -58,7 +57,7 @@ public:
     [[nodiscard]] std::vector<std::uint32_t> save_context() const;
     void restore_context(const std::vector<std::uint32_t> &commands);
     // Routes primitives to the GL backend instead of the software rasterizer.
-    void set_gl(GeGl *gl);
+    void set_gl(GeRenderer *gl);
     // Marks guest VRAM bytes as rewritten so cached textures there revalidate.
     void touch_vram(std::uint32_t address, std::uint32_t bytes);
 
@@ -157,7 +156,7 @@ private:
     [[nodiscard]] std::uint32_t texture_bytes(std::uint32_t format, std::uint32_t buf_width, std::uint32_t height) const;
 
     PixelState ps_{};
-    GeGl *gl_{};
+    GeRenderer *gl_{};
     // Reused per-primitive buffers (avoids two heap allocations per primitive).
     std::vector<ClipVertex> scratch_vertices_;
     std::vector<std::uint32_t> scratch_indices_;

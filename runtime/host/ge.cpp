@@ -3,7 +3,6 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
-#include "ge_gl.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1553,7 +1552,7 @@ void Ge::block_transfer() {
         gl_->before_transfer(src_rect, dst_rect);
     }
     struct AfterTransfer {
-        GeGl *gl;
+        GeRenderer *gl;
         TransferRect rect;
         ~AfterTransfer() {
             if (gl == nullptr) return;
@@ -1573,7 +1572,7 @@ void Ge::block_transfer() {
 // ---------------------------------------------------------------------------
 // GL backend glue
 
-void Ge::set_gl(GeGl *gl) {
+void Ge::set_gl(GeRenderer *gl) {
     gl_ = gl;
     if (gl_ != nullptr) gl_->set_vram_write_hook([this](std::uint32_t address, std::uint32_t bytes) { touch_vram(address, bytes); });
 }

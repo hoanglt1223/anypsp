@@ -13,6 +13,7 @@
 // is only synchronized when a block transfer, a CPU-side texture decode, a
 // reinterpretation in another pixel format, or the display needs it.
 
+#include "ge_renderer.hpp"
 #include "psprecomp/guest_memory.hpp"
 
 #include <GLES3/gl3.h>
@@ -26,85 +27,39 @@
 
 namespace pspweb {
 
-struct GlVertex {
-    float x, y, z, w;   // drawing-space pixels, depth 0..65535, clip w
-    float u, v;         // texels
-    std::uint8_t r, g, b, a;
-};
-
-// A rectangle copied by a GE block transfer.
-struct TransferRect {
-    std::uint32_t base{}, stride{}, x{}, y{}, width{}, height{}, bpp{};
-};
-
-struct GlDrawState {
-    std::uint32_t fb_offset{}, fb_stride{}, fb_format{};
-    int sx1{}, sy1{}, sx2{}, sy2{};
-    bool clear{};
-    std::uint32_t clear_flags{};
-    bool z_test{}, z_write{};
-    std::uint32_t z_func{};
-    bool blend{};
-    std::uint32_t src_factor{}, dst_factor{}, equation{}, fix_a{}, fix_b{};
-    bool alpha_test{};
-    std::uint32_t alpha_func{}, alpha_ref{}, alpha_mask{};
-    bool stencil{};
-    std::uint32_t stencil_func{}, stencil_ops{}; // raw STST / SOP registers
-    std::uint32_t mask_rgb{}, mask_alpha{};
-    // Fog: factor = w * fog_w + fog_bias per vertex (w is the clip w, a fixed
-    // multiple of the eye-space depth under a perspective projection).
-    bool fog{};
-    float fog_w{}, fog_bias{};
-    std::uint32_t fog_color{};
-    bool texture{};
-    std::uint32_t tex_func{};
-    bool tex_alpha{}, tex_double{};
-    std::uint32_t env{};
-    bool clamp_u{}, clamp_v{}, linear{};
-    // Texture source: decoded texels, or a surface region at tex_address.
-    const std::uint32_t *texels{};
-    const void *texture_identity{};
-    std::uint64_t texture_hash{};
-    std::uint32_t tex_width{}, tex_height{};
-    bool tex_from_target{};
-    std::uint32_t tex_address{}, tex_format{}, tex_buf_width{};
-
-    bool operator==(const GlDrawState &) const = default;
-};
-
-class GeGl {
+class GeGl final : public GeRenderer {
 public:
     explicit GeGl(psprecomp::GuestMemory &memory);
-    ~GeGl();
+    ~GeGl() override;
 
     // Compiles shaders; a GL ES 3 context must be current.
     bool init();
 
     // True when a texture at `address` (format 0..3, buffer width in pixels)
     // lies inside GPU-drawn surface content and can be sampled from it.
-    [[nodiscard]] bool is_gpu_target(std::uint32_t address, std::uint32_t format, std::uint32_t buf_width) const;
+    [[nodiscard]] bool is_gpu_target(std::uint32_t address, std::uint32_t format, std::uint32_t buf_width) const override;
     // Makes VRAM current for a range the CPU is about to read (texture decode).
     // Returns true when GPU pixels were downloaded into the range.
-    bool prepare_vram_read(std::uint32_t address, std::uint32_t bytes);
+    bool prepare_vram_read(std::uint32_t address, std::uint32_t bytes) override;
 
-    void set_state(const GlDrawState &state);
-    void triangle(const GlVertex &a, const GlVertex &b, const GlVertex &c);
+    void set_state(const GlDrawState &state) override;
+    void triangle(const GlVertex &a, const GlVertex &b, const GlVertex &c) override;
     // Indexed form: add vertices once, then triangles by batch-relative index.
-    std::uint32_t vertex(const GlVertex &v) {
+    std::uint32_t vertex(const GlVertex &v) override {
         batch_.push_back(v);
         return static_cast<std::uint32_t>(batch_.size() - 1u);
     }
-    void indexed_triangle(std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+    void indexed_triangle(std::uint32_t a, std::uint32_t b, std::uint32_t c) override {
         indices_.push_back(a);
         indices_.push_back(b);
         indices_.push_back(c);
     }
-    void flush();
-    void forget_texture(const void *identity);
+    void flush() override;
+    void forget_texture(const void *identity) override;
 
     // Keep guest VRAM and surfaces coherent around a block transfer.
-    void before_transfer(const TransferRect &src, const TransferRect &dst);
-    void after_transfer(const TransferRect &dst);
+    void before_transfer(const TransferRect &src, const TransferRect &dst) override;
+    void after_transfer(const TransferRect &dst) override;
 
     // Draws the displayed framebuffer into `out_fbo` (0 = the canvas).
     void present(std::uint32_t fb_address, std::uint32_t stride, std::uint32_t format,
@@ -119,7 +74,7 @@ public:
     // Highest scale the GL implementation's size limits allow.
     [[nodiscard]] int max_render_scale() const;
     // Called whenever GPU pixels are written back into guest VRAM.
-    void set_vram_write_hook(std::function<void(std::uint32_t, std::uint32_t)> hook) { vram_write_hook_ = std::move(hook); }
+    void set_vram_write_hook(std::function<void(std::uint32_t, std::uint32_t)> hook) override { vram_write_hook_ = std::move(hook); }
 
     [[nodiscard]] std::uint64_t draw_calls() const noexcept { return draw_calls_; }
     [[nodiscard]] std::uint64_t downloads() const noexcept { return downloads_; }

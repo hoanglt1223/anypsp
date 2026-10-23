@@ -69,7 +69,7 @@ bool write_all(const fs::path &path, const std::uint8_t *data, std::size_t size)
 
 std::time_t modified(const fs::path &path) {
     struct stat info {};
-    return ::stat(path.c_str(), &info) == 0 ? info.st_mtime : 0;
+    return ::stat(path.string().c_str(), &info) == 0 ? info.st_mtime : 0;
 }
 
 void put16(std::vector<std::uint8_t> &out, std::size_t at, std::uint32_t v) {
@@ -424,7 +424,11 @@ private:
 
     void date(std::uint32_t at, std::time_t when) {
         std::tm t{};
+#ifdef _WIN32
+        localtime_s(&t, &when);
+#else
         localtime_r(&when, &t);
+#endif
         m_.store16(at, static_cast<std::uint16_t>(t.tm_year + 1900));
         m_.store16(at + 2u, static_cast<std::uint16_t>(t.tm_mon + 1));
         m_.store16(at + 4u, static_cast<std::uint16_t>(t.tm_mday));
