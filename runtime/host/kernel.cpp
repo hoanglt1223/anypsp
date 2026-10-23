@@ -217,12 +217,25 @@ void Kernel::install_fallback(const psprecomp::PspImport &import) {
     registered_.insert(key);
     const std::string name = import.library + "::" +
         rt_.nids().resolve(import.library, import.nid).value_or(hex(import.nid));
-    rt_.register_hle(import.library, import.nid, [this, name](psprecomp::Runtime &, Ctx &ctx) {
+    auto stub = hle_stubs_.find(name);
+    if (stub == hle_stubs_.end()) stub = hle_stubs_.find(import.library + "::" + hex(import.nid));
+    if (stub == hle_stubs_.end()) {
+        // Strict by default: an unimplemented function stops the guest when it is called.
+        const std::string message = "unimplemented HLE function " + name + " (" + import.library + " NID " +
+                                    hex(import.nid) + "); implement it or stub it with --hle-stubs";
+        rt_.register_hle(import.library, import.nid, [this, message](psprecomp::Runtime &, Ctx &) {
+            std::cerr << "[hle] " << message << "\n";
+            rt_.stop(message);
+        });
+        return;
+    }
+    const std::uint32_t result = stub->second;
+    rt_.register_hle(import.library, import.nid, [this, name, result](psprecomp::Runtime &, Ctx &ctx) {
         if (fallback_logged_.insert(name).second) {
-            std::cerr << "[hle] unimplemented " << name << "(" << hex(ctx.gpr[4]) << ", " << hex(ctx.gpr[5])
-                      << ", " << hex(ctx.gpr[6]) << ", " << hex(ctx.gpr[7]) << ") -> 0\n";
+            std::cerr << "[hle] stubbed " << name << "(" << hex(ctx.gpr[4]) << ", " << hex(ctx.gpr[5])
+                      << ", " << hex(ctx.gpr[6]) << ", " << hex(ctx.gpr[7]) << ") -> " << hex(result) << "\n";
         }
-        finish(ctx, 0u);
+        finish(ctx, result);
     });
 }
 
@@ -379,6 +392,14 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
             [this](Ctx &) { return static_cast<std::uint32_t>(display_.vcount * 286u); });
         add("sceUmdUser", 0x87533940u, "sceUmdReplaceProhibit", [](Ctx &) { return 0u; });
         add("sceUmdUser", 0xCBE9F02Au, "sceUmdReplacePermit", [](Ctx &) { return 0u; });
+        // Translated and interpreted code is found by address and the bytes in memory,
+        // so there is no instruction cache to invalidate.
+        add("UtilsForUser", 0xC2DF770Eu, "sceKernelIcacheInvalidateRange", [](Ctx &) { return 0u; });
+        add("UtilsForKernel", 0xC2DF770Eu, "sceKernelIcacheInvalidateRange", [](Ctx &) { return 0u; });
+        add("UtilsForUser", 0x920F104Au, "sceKernelIcacheInvalidateAll", [](Ctx &) { return 0u; });
+    }
+    hle("IoFileMgrForKernel", 0x54F5FB11u, "sceIoDevctl", &Kernel::sceIoDevctl);
+    {
     }
 
     hle("sceGe_user", 0xE47E40E4u, "sceGeEdramGetAddr", &Kernel::sceGeEdramGetAddr);
@@ -416,6 +437,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle("Kernel_Library", 0xA089ECA4u, "sceKernelMemset", &Kernel::sceKernelMemset);
 
     install_devices();
+    install_lwmutex();
     install_mpeg();
     install_sas();
     install_atrac();
@@ -547,7 +569,8 @@ void Kernel::poll_waits() {
             t.wake_time_us = 0u;
             wake(t, 0u);
         } else if (t.wait == WaitType::Sema || t.wait == WaitType::EventFlag || t.wait == WaitType::ThreadEnd ||
-                   t.wait == WaitType::Fpl || t.wait == WaitType::Mutex || t.wait == WaitType::Mbx) {
+                   t.wait == WaitType::Fpl || t.wait == WaitType::Mutex || t.wait == WaitType::Mbx ||
+                   t.wait == WaitType::LwMutex) {
             wake(t, kErrorWaitTimeout);
         }
     }

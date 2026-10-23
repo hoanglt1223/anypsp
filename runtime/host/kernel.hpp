@@ -42,7 +42,7 @@ inline constexpr std::uint32_t kVramAddress = 0x04000000u;
 inline constexpr std::uint32_t kVramSize = 0x00200000u;
 
 enum class ThreadState { Dormant, Ready, Running, Waiting, Dead };
-enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx, CtrlRead };
+enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx, CtrlRead, LwMutex };
 
 // PSP pad button bits (SceCtrlData::Buttons).
 namespace pad {
@@ -229,6 +229,9 @@ public:
     void set_test_output(std::function<void(std::string_view)> sink) { test_output_ = std::move(sink); }
     // Called when a test program asks the emulator: device for a screenshot (devctl 0x20).
     void set_screenshot_sink(std::function<void()> sink) { screenshot_sink_ = std::move(sink); }
+    // Imported functions with no HLE implementation stop the guest, naming the
+    // function, unless listed here ("Library::name" or "Library::0xNID" -> return value).
+    void set_hle_stubs(std::map<std::string, std::uint32_t> stubs) { hle_stubs_ = std::move(stubs); }
     [[nodiscard]] std::uint64_t now_us() const;
     [[nodiscard]] Ge &ge() noexcept { return *ge_; }
     // Runs display lists (on a GE thread once started) and other GE-side work.
@@ -353,6 +356,25 @@ private:
     void sceKernelLockMutex(Ctx &ctx);
     void sceKernelTryLockMutex(Ctx &ctx);
     void sceKernelUnlockMutex(Ctx &ctx);
+    // Lightweight mutexes keep their lock state in a guest workarea (kernel_lwmutex.cpp).
+    void install_lwmutex();
+    void sceKernelCreateLwMutex(Ctx &ctx);
+    void sceKernelDeleteLwMutex(Ctx &ctx);
+    void sceKernelLockLwMutex(Ctx &ctx);
+    void sceKernelTryLockLwMutex(Ctx &ctx);
+    void sceKernelTryLockLwMutex600(Ctx &ctx);
+    void sceKernelUnlockLwMutex(Ctx &ctx);
+    void sceKernelReferLwMutexStatus(Ctx &ctx);
+    void sceKernelReferLwMutexStatusByID(Ctx &ctx);
+    void refer_lwmutex(Ctx &ctx, std::int32_t uid, std::uint32_t info);
+    std::uint32_t lock_lwmutex(std::uint32_t workarea, std::int32_t count);
+    struct LwMutex {
+        std::string name;
+        std::uint32_t attr{};
+        std::uint32_t workarea{};
+        std::int32_t initial_count{};
+    };
+    std::map<std::int32_t, LwMutex> lwmutexes_;
     void sceKernelCreateMbx(Ctx &ctx);
     void sceKernelDeleteMbx(Ctx &ctx);
     void sceKernelSendMbx(Ctx &ctx);
@@ -582,6 +604,7 @@ private:
     std::string halt_reason_;
     std::function<void(std::string_view)> test_output_;
     std::function<void()> screenshot_sink_;
+    std::map<std::string, std::uint32_t> hle_stubs_;
 };
 
 } // namespace pspweb

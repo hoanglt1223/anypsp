@@ -7,6 +7,7 @@
 #include "kernel.hpp"
 
 #include "elf_prx.hpp"
+#include "nid_db.hpp"
 
 #include "psprecomp/common.hpp"
 #include "psprecomp/interpreter.hpp"
@@ -32,10 +33,13 @@ const char *const kUsage =
     "usage: anypsp-run-<game> <EBOOT.BIN|module.prx> [--disc dir] [--ms dir] [--frames n]\n"
     "                         [--feedback file] [--dump frame.ppm] [--guest-path path]\n"
     "                         [--output file] [--input frame:buttons,...] [--dump-at frame,...]\n"
+    "                         [--hle-stubs file]\n"
     "Runs headless: no window, no audio. --feedback appends the code addresses that had no\n"
     "translated code (input for anypsp-analyze --feedback). --output writes what the program\n"
     "sends to the emulator: device (test output; default: standard output). --input holds\n"
-    "the given sceCtrl button mask (hex) from that frame on; --dump-at writes frame<N>.ppm.\n";
+    "the given sceCtrl button mask (hex) from that frame on; --dump-at writes frame<N>.ppm.\n"
+    "Calling an imported function with no HLE implementation stops the run unless the\n"
+    "--hle-stubs file lists it: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
 // Import stubs without a translated wrapper (always, in the interpreter-only
 // runner) are bound here, by address.
@@ -70,6 +74,32 @@ std::map<long, std::uint32_t> parse_input_script(const std::string &text) {
     return script;
 }
 
+std::map<std::string, std::uint32_t> read_hle_stubs(const std::string &path) {
+    std::map<std::string, std::uint32_t> stubs;
+    std::ifstream in(path);
+    if (!in) throw psprecomp::Error("Cannot open " + path);
+    std::string line;
+    for (int number = 1; std::getline(in, line); ++number) {
+        const auto trim = [](std::string s) {
+            const auto first = s.find_first_not_of(" \t\r");
+            const auto last = s.find_last_not_of(" \t\r");
+            return first == std::string::npos ? std::string() : s.substr(first, last - first + 1);
+        };
+        line = trim(line.substr(0, line.find('#')));
+        if (line.empty()) continue;
+        const auto equals = line.find('=');
+        const std::string key = trim(line.substr(0, equals));
+        if (key.find("::") == std::string::npos)
+            throw psprecomp::Error(path + ":" + std::to_string(number) + ": expected Library::function = value");
+        try {
+            stubs[key] = equals == std::string::npos ? 0u : static_cast<std::uint32_t>(std::stoul(trim(line.substr(equals + 1)), nullptr, 0));
+        } catch (const std::exception &) {
+            throw psprecomp::Error(path + ":" + std::to_string(number) + ": bad value");
+        }
+    }
+    return stubs;
+}
+
 void write_ppm(const std::string &path, const std::vector<std::uint8_t> &rgba) {
     std::ofstream out(path, std::ios::binary);
     out << "P6\n480 272\n255\n";
@@ -84,7 +114,7 @@ int main(int argc, char **argv) {
         std::cerr << kUsage;
         return 2;
     }
-    std::string disc = ".", memstick = ".", feedback, dump, output, input, dump_at, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
+    std::string disc = ".", memstick = ".", feedback, dump, output, input, dump_at, hle_stubs, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     long frames = 600;
     for (int i = 2; i < argc; i += 2) {
         const std::string flag = argv[i];
@@ -100,6 +130,7 @@ int main(int argc, char **argv) {
         else if (flag == "--output") output = value;
         else if (flag == "--input") input = value;
         else if (flag == "--dump-at") dump_at = value;
+        else if (flag == "--hle-stubs") hle_stubs = value;
         else if (flag == "--guest-path") guest_path = value;
         else if (flag == "--frames") {
             try {
@@ -121,6 +152,8 @@ int main(int argc, char **argv) {
         if (!feedback.empty()) psprecomp::set_runtime_feedback_file(feedback);
         auto runtime = std::make_unique<psprecomp::Runtime>();
         auto &rt = *runtime;
+        // Names for messages about functions the HLE does not implement.
+        anypsp::loader::load_nid_toml(anypsp::loader::default_nid_database(), rt.nids());
         const std::uint32_t base = psprecomp::kDefaultPspUserLoadBase;
         const auto module = anypsp::loader::load_module(
             rt.memory(), psprecomp::Elf32Image::from_bytes(anypsp::loader::read_executable(argv[1]), argv[1]), argv[1], base);
@@ -139,6 +172,7 @@ int main(int argc, char **argv) {
         psprecomp::set_runtime_missing_code_handler(&psprecomp::run_dynamic_code);
 
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
+        if (!hle_stubs.empty()) kernel->set_hle_stubs(read_hle_stubs(hle_stubs));
         std::ofstream output_file;
         if (!output.empty()) {
             output_file.open(output, std::ios::binary);

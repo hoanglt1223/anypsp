@@ -72,7 +72,7 @@ if(ANYPSP_BUILD_HOST)
 
     add_library(anypsp_host STATIC
         runtime/host/atrac.cpp runtime/host/devices.cpp runtime/host/font.cpp runtime/host/ge.cpp
-        runtime/host/ge_worker.cpp runtime/host/io.cpp runtime/host/kernel.cpp runtime/host/modules.cpp
+        runtime/host/ge_worker.cpp runtime/host/io.cpp runtime/host/kernel.cpp runtime/host/kernel_lwmutex.cpp runtime/host/modules.cpp
         runtime/host/mpeg.cpp runtime/host/sas.cpp runtime/host/savedata.cpp runtime/host/webfs.cpp)
     target_include_directories(anypsp_host PUBLIC runtime/host)
     target_link_libraries(anypsp_host PUBLIC psprecomp_core anypsp_at3)
