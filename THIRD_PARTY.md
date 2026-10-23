@@ -25,7 +25,13 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 ## PPSSPP (GPL-2.0-or-later): behaviour reference and data source
 
-- [hrydgard/ppsspp](https://github.com/hrydgard/ppsspp). Files that adapt PPSSPP code or data say so in their header, and are listed here.
+- [hrydgard/ppsspp](https://github.com/hrydgard/ppsspp). Files that adapt PPSSPP code or data say so in their header, and are listed here:
+  - `recomp/loader/relocs.cpp`: HI16 pairing and the packed relocation format (program header type `0x700000A1`) follow `Core/ELF/ElfReader.cpp` (`LoadRelocations`, `LoadRelocations2`).
+  - `data/nids.toml`: library, NID and function names extracted from PPSSPP's HLE function tables (`Core/HLE/*.cpp`) by `tools/gen-nids.py`; the PPSSPP commit is recorded in the file header.
+
+## PSPSDK (BSD): data source
+
+- [pspdev/pspsdk](https://github.com/pspdev/pspsdk) import stubs (`IMPORT_FUNC` lines) supply the NIDs in `data/nids.toml` that PPSSPP does not list; the PSPSDK commit is recorded in the file header.
 
 ## Test corpus (not in the repository)
 
