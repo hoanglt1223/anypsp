@@ -1061,8 +1061,12 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
              << "    (void)direct_entry_id;\n"
              << "    std::uint32_t jump_target = 0u;\n"
              << "    std::uint32_t local_transfers = 0u;\n"
+             // Plain JR shares the dense path's local-transfer code, which sets
+             // local_pc and entry_id; the sparse switch only reads local_pc.
+             << "    std::uint32_t local_pc = ctx.pc;\n"
+             << "    [[maybe_unused]] std::uint32_t entry_id = 0u;\n"
              << "LOCAL_DISPATCH:\n"
-             << "    switch (ctx.pc) {\n";
+             << "    switch (local_pc) {\n";
         for (const auto label : function.entry_labels) {
             body << "    case " << psprecomp::hex32(label) << "u: goto L_"
                  << psprecomp::hex32(label).substr(2) << ";\n";
@@ -1644,6 +1648,10 @@ int generate_auto(const std::filesystem::path &elf_path,
     // destination id directly and skip the target unit's PC->entry table lookup.
     std::map<std::uint32_t, std::uint16_t> direct_entry_ids;
     for (const auto &unit : units) {
+        // Only dense dispatchers understand entry ids; a sparse unit (entries
+        // spread wider than the dense table) is entered by PC instead.
+        const bool dense = (static_cast<std::uint64_t>(*unit.entries.rbegin() - *unit.entries.begin()) / 4u + 1u) <= 8192u;
+        if (!dense) continue;
         std::uint16_t id = 1u;
         for (const auto label : unit.entries) direct_entry_ids[label] = id++;
     }
