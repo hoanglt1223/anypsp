@@ -227,6 +227,8 @@ public:
     [[nodiscard]] const std::string &halt_reason() const noexcept { return halt_reason_; }
     // Where text sent to the "emulator:" device goes (pspautotests' test output).
     void set_test_output(std::function<void(std::string_view)> sink) { test_output_ = std::move(sink); }
+    // Called when a test program asks the emulator: device for a screenshot (devctl 0x20).
+    void set_screenshot_sink(std::function<void()> sink) { screenshot_sink_ = std::move(sink); }
     [[nodiscard]] std::uint64_t now_us() const;
     [[nodiscard]] Ge &ge() noexcept { return *ge_; }
     // Runs display lists (on a GE thread once started) and other GE-side work.
@@ -579,6 +581,7 @@ private:
     bool halted_{};
     std::string halt_reason_;
     std::function<void(std::string_view)> test_output_;
+    std::function<void()> screenshot_sink_;
 };
 
 } // namespace pspweb

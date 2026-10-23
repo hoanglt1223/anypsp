@@ -160,6 +160,9 @@ void Kernel::sceIoDevctl(Ctx &ctx) {
     case 3u:  // is emulator
         if (output != 0u && memory.contains(output, 4u)) memory.store32(output, 1u);
         break;
+    case 0x20u:  // emit screenshot
+        if (screenshot_sink_) screenshot_sink_();
+        break;
     default:
         break;
     }
