@@ -38,12 +38,12 @@ def first_difference(expected, actual):
     return None
 
 
-def run_one(runner, program, frames, timeout):
+def run_one(runner, program, frames, timeout, extra=()):
     expected_path = program.with_suffix(".expected")
     with tempfile.TemporaryDirectory() as work:
         output = pathlib.Path(work) / "out.txt"
         try:
-            result = subprocess.run([str(runner), str(program), "--frames", str(frames), "--output", str(output)],
+            result = subprocess.run([str(runner), str(program), "--frames", str(frames), "--output", str(output)] + list(extra),
                                     capture_output=True, text=True, cwd=work, timeout=timeout)
             log = result.stdout + result.stderr
         except subprocess.TimeoutExpired:

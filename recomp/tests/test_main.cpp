@@ -512,7 +512,7 @@ static void test_codegen_zero_divisor_constant_folding() {
     }
     require(text.find("const std::int32_t dividend = static_cast<std::int32_t>(ctx.gpr[4]); ctx.lo = dividend >= 0 ? 0xFFFFFFFFu : 1u") != std::string::npos,
             "DIV with $zero divisor did not lower directly to Allegrex divide-by-zero semantics");
-    require(text.find("const std::uint32_t dividend = ctx.gpr[4]; ctx.lo = 0xFFFFFFFFu; ctx.hi = dividend") != std::string::npos,
+    require(text.find("const std::uint32_t dividend = ctx.gpr[4]; ctx.lo = dividend <= 0xFFFFu ? 0xFFFFu : 0xFFFFFFFFu; ctx.hi = dividend") != std::string::npos,
             "DIVU with $zero divisor did not lower directly to Allegrex divide-by-zero semantics");
     require(text.find("divisor = static_cast<std::int32_t>(0u)") == std::string::npos &&
                 text.find("const std::uint32_t divisor = 0u") == std::string::npos,
