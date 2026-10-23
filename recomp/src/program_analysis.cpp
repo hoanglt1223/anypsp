@@ -310,6 +310,37 @@ std::map<std::uint32_t, std::string> collect_initial_seeds(const Elf32Image &elf
         if (site.type != 2u || !memory.contains(site.patch_address, 4u)) continue;
         add_seed(seeds, ranges, memory.load32(site.patch_address), "relocated_r_mips32_code_pointer");
     }
+    std::uint32_t high_register = 0u, high_value = 0u;
+    for (const auto &site : elf.relocation_sites(load_base)) {
+        if (!memory.contains(site.patch_address, 4u)) continue;
+        const auto decoded = decode_allegrex(memory.load32(site.patch_address));
+        const auto uimm = static_cast<std::uint16_t>(decoded.immediate);
+        if (site.type == 5u) {
+            high_register = decoded.kind == OpcodeKind::Lui ? decoded.rt : 0u;
+            high_value = static_cast<std::uint32_t>(uimm) << 16u;
+        } else if (site.type == 6u && high_register != 0u && decoded.rs == high_register) {
+            if (decoded.kind == OpcodeKind::Addiu)
+                add_seed(seeds, ranges, high_value + static_cast<std::uint32_t>(static_cast<std::int32_t>(decoded.immediate)),
+                         "relocated_hi_lo_code_pointer");
+            else if (decoded.kind == OpcodeKind::Ori)
+                add_seed(seeds, ranges, high_value | uimm, "relocated_hi_lo_code_pointer");
+        }
+    }
+    // Functions reached only through pointers the analysis cannot materialize
+    // (built at run time, or stored without relocations) still start with the
+    // usual prologue right after the previous function's `jr ra` + delay slot.
+    for (const auto &range : ranges) {
+        for (std::uint32_t pc = range.start; pc + 12u <= range.end; pc += 4u) {
+            if (memory.load32(pc) != 0x03E00008u) continue; // jr ra
+            std::uint32_t next = pc + 8u;
+            while (next + 4u <= range.end && memory.load32(next) == 0u) next += 4u; // alignment nops
+            if (next + 4u > range.end) continue;
+            const std::uint32_t word = memory.load32(next);
+            // addiu sp, sp, -imm
+            if ((word & 0xFFFF0000u) == 0x27BD0000u && (word & 0x8000u) != 0u)
+                add_seed(seeds, ranges, next, "prologue_after_return");
+        }
+    }
     return seeds;
 }
 

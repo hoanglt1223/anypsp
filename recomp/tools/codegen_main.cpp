@@ -2,7 +2,9 @@
 #include "psprecomp/decoder.hpp"
 #include "psprecomp/codegen_policy.hpp"
 #include "psprecomp/elf32.hpp"
+#include "psprecomp/interpreter.hpp"
 #include "psprecomp/program_analysis.hpp"
+#include "psprecomp/runtime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +18,7 @@
 #include <iostream>
 #include <iomanip>
 #include <map>
+#include <optional>
 #include <regex>
 #include <string_view>
 #include <set>
@@ -773,6 +776,89 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
     return out.str();
 }
 
+// VFPU encodings the generic decoder leaves as OpcodeKind::Vfpu: the VFPU4
+// group-2 vector ops (vsrt/vbfy/vsocp/vsgn) and unaligned quad load/stores.
+std::optional<std::string> emit_extra_vfpu(const psprecomp::DecodedInstruction &d) {
+    const std::uint32_t w = d.word, major = w >> 26u;
+    std::ostringstream out;
+    if (const std::uint32_t op = (w >> 16u) & 31u; major == 0x34u && ((w >> 21u) & 31u) == 1u && (op <= 3u || op >= 28u)) {
+        const std::uint32_t size_code = ((w >> 7u) & 1u) | (((w >> 15u) & 1u) << 1u);
+        out << "    ctx.execute_vfpu_" << (op <= 3u ? "vrnd(" : "vi2x(") << (w & 0x7Fu) << "u, "
+            << ((w >> 8u) & 0x7Fu) << "u, " << size_code + 1u << "u, " << (op & 3u) << "u);\n";
+        return out.str();
+    }
+    if (const std::uint32_t op = (w >> 16u) & 31u; major == 0x34u && ((w >> 21u) & 31u) == 2u && op >= 25u && op <= 27u) {
+        const std::uint32_t size_code = ((w >> 7u) & 1u) | (((w >> 15u) & 1u) << 1u);
+        out << "    ctx.execute_vfpu_vt_color(" << (w & 0x7Fu) << "u, " << ((w >> 8u) & 0x7Fu) << "u, "
+            << size_code + 1u << "u, " << (op & 3u) << "u);\n";
+        return out.str();
+    }
+    if (major == 0x34u && ((w >> 21u) & 31u) == 2u) {
+        const std::uint32_t size_code = ((w >> 7u) & 1u) | (((w >> 15u) & 1u) << 1u);
+        const std::uint32_t length = size_code + 1u;
+        std::uint32_t out_length = length;
+        const std::uint32_t destination = w & 0x7Fu, source = (w >> 8u) & 0x7Fu;
+        std::string op;
+        switch ((w >> 16u) & 31u) {
+        case 0: op = "d[0] = s[0] < s[1] ? s[0] : s[1]; d[1] = s[0] < s[1] ? s[1] : s[0]; "
+                     "d[2] = s[2] < s[3] ? s[2] : s[3]; d[3] = s[2] < s[3] ? s[3] : s[2];"; break; // vsrt1
+        case 1: op = "d[0] = s[0] < s[3] ? s[0] : s[3]; d[1] = s[1] < s[2] ? s[1] : s[2]; "
+                     "d[2] = s[1] < s[2] ? s[2] : s[1]; d[3] = s[0] < s[3] ? s[3] : s[0];"; break; // vsrt2
+        case 2: op = "d[0] = s[0] + s[1]; d[1] = s[0] - s[1]; d[2] = s[2] + s[3]; d[3] = s[2] - s[3];"; break; // vbfy1
+        case 3: op = "d[0] = s[0] + s[2]; d[1] = s[1] + s[3]; d[2] = s[0] - s[2]; d[3] = s[1] - s[3];"; break; // vbfy2
+        case 5: // vsocp: (1 - x, x) per input lane, saturated to [0, 1]
+            op = "for (std::uint32_t i = 0; i < " + std::to_string(length) + "u && i < 2u; ++i) { "
+                 "const float a = 1.0f - s[i], b = s[i]; d[i * 2u] = a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a); "
+                 "d[i * 2u + 1u] = b < 0.0f ? 0.0f : (b > 1.0f ? 1.0f : b); }";
+            out_length = length * 2u > 4u ? 4u : length * 2u;
+            break;
+        case 8: op = "d[0] = s[0] < s[1] ? s[1] : s[0]; d[1] = s[0] < s[1] ? s[0] : s[1]; "
+                     "d[2] = s[2] < s[3] ? s[3] : s[2]; d[3] = s[2] < s[3] ? s[2] : s[3];"; break; // vsrt3
+        case 9: op = "d[0] = s[0] < s[3] ? s[3] : s[0]; d[1] = s[1] < s[2] ? s[2] : s[1]; "
+                     "d[2] = s[1] < s[2] ? s[1] : s[2]; d[3] = s[0] < s[3] ? s[0] : s[3];"; break; // vsrt4
+        case 10: // vsgn
+            op = "for (std::uint32_t i = 0; i < " + std::to_string(length) +
+                 "u; ++i) d[i] = s[i] > 0.0f ? 1.0f : (s[i] < 0.0f ? -1.0f : 0.0f);";
+            break;
+        default: return std::nullopt;
+        }
+        out << "    { float s[4]{}, d[4]{};\n"
+            << "      ctx.read_vfpu_vector_with_source_prefix(s, " << source << "u, " << length << "u, 0u);\n"
+            << "      " << op << "\n"
+            << "      ctx.write_vfpu_vector_with_destination_prefix(d, " << destination << "u, " << out_length << "u); }\n";
+        return out.str();
+    }
+    if (major == 0x35u || major == 0x3Du) { // lvl.q/lvr.q, svl.q/svr.q
+        const std::int32_t offset = static_cast<std::int16_t>(w & 0xFFFCu);
+        const std::uint32_t vector_register = ((w >> 16u) & 0x1Fu) | ((w & 1u) << 5u);
+        const bool right = (w & 2u) != 0u;
+        out << "    { const std::uint32_t vfpu_address = " << reg((w >> 21u) & 31u) << " + static_cast<std::uint32_t>("
+            << offset << ");\n"
+            << "      const std::uint32_t vfpu_lane = (vfpu_address >> 2u) & 3u;\n"
+            << "      float q[4]{};\n"
+            << "      ctx.read_vfpu_vector(q, " << vector_register << "u, 4u);\n";
+        if (major == 0x35u) {
+            if (!right)
+                out << "      for (std::uint32_t i = 0; i <= vfpu_lane; ++i) q[3u - i] = std::bit_cast<float>("
+                       "rt.memory().aot_load32(vfpu_address - 4u * i));\n";
+            else
+                out << "      for (std::uint32_t i = 0; i <= 3u - vfpu_lane; ++i) q[i] = std::bit_cast<float>("
+                       "rt.memory().aot_load32(vfpu_address + 4u * i));\n";
+            out << "      ctx.write_vfpu_vector(q, " << vector_register << "u, 4u); }\n";
+        } else {
+            if (!right)
+                out << "      for (std::uint32_t i = 0; i <= vfpu_lane; ++i) rt.memory().aot_store32("
+                       "vfpu_address - 4u * i, std::bit_cast<std::uint32_t>(q[3u - i]));\n";
+            else
+                out << "      for (std::uint32_t i = 0; i <= 3u - vfpu_lane; ++i) rt.memory().aot_store32("
+                       "vfpu_address + 4u * i, std::bit_cast<std::uint32_t>(q[i]));\n";
+            out << "    }\n";
+        }
+        return out.str();
+    }
+    return std::nullopt;
+}
+
 bool is_branch(psprecomp::OpcodeKind kind) {
     using K = psprecomp::OpcodeKind;
     switch (kind) {
@@ -845,6 +931,9 @@ std::string direct_unit_chain_expression(
                 std::to_string(unit) + "u, " + std::to_string(found->second) + "u, " +
                 psprecomp::hex32(target) + "u>(ctx, &aot_mem)";
         }
+        // Not a registered entry, so its bucket may not have been emitted at
+        // all (e.g. a decoded JAL into data). Use the exact per-PC chain path.
+        return "(ctx.pc = " + psprecomp::hex32(target) + "u, rt.invoke_chained_call(ctx, &aot_mem))";
     }
     return "rt.invoke_chained_direct<&" + generated_unit_cpp_name(unit) + ", " +
         std::to_string(unit) + "u>(ctx, &aot_mem)";
@@ -855,8 +944,11 @@ void emit_target(std::ostringstream &body, std::uint32_t target,
                  std::uint32_t executable_base = 0u,
                  std::uint32_t unit_span_bytes = 0u,
                  const std::map<std::uint32_t, std::uint16_t> *direct_entry_ids = nullptr,
-                 const std::set<std::uint32_t> *import_stubs = nullptr) {
+                 const std::set<std::uint32_t> *import_stubs = nullptr,
+                 std::uint32_t origin = 0u) {
     if (labels.contains(target)) {
+        if (target <= origin)
+            body << indent << "if (++local_transfers >= 2048u) { ctx.pc = " << psprecomp::hex32(target) << "u; return; }\n";
         body << indent << "goto L_" << psprecomp::hex32(target).substr(2) << ";\n";
         return;
     }
@@ -1019,14 +1111,14 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                     if (likely_branch) {
                         body << "    if (" << condition << ") {\n"
                              << emit_regular(slot, pc + 4u);
-                        emit_target(body, target, function.entry_labels, "        ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
+                        emit_target(body, target, function.entry_labels, "        ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
                         body << "    }\n";
                         emit_target(body, fallthrough, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
                     } else {
                         body << "    { const bool branch_taken = " << condition << ";\n"
                              << emit_regular(slot, pc + 4u)
                              << "      if (branch_taken) {\n";
-                        emit_target(body, target, function.entry_labels, "          ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
+                        emit_target(body, target, function.entry_labels, "          ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
                         body << "      }\n";
                         emit_target(body, fallthrough, function.entry_labels, "      ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
                         body << "    }\n";
@@ -1039,7 +1131,7 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                     }
                     body << emit_regular(slot, pc + 4u);
                     if (decoded.kind == psprecomp::OpcodeKind::J) {
-                        emit_target(body, target, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
+                        emit_target(body, target, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
                     } else if (function.entry_labels.contains(target)) {
                         // Fixed same-unit JAL: the destination is already a C++
                         // label. Going through ctx.pc + LOCAL_DISPATCH needlessly
@@ -1056,7 +1148,7 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                         if (target_is_import) {
                             body << "    ctx.pc = " << psprecomp::hex32(target) << "u;\n"
                                  << "    return;\n";
-                            continue;
+                            break;
                         }
                         // Otherwise run the callee inline and resume locally only
                         // if it came back to our return address.
@@ -1116,16 +1208,18 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                 break;
             }
 
-            if (decoded.kind == psprecomp::OpcodeKind::Syscall ||
-                decoded.kind == psprecomp::OpcodeKind::Vfpu ||
-                decoded.kind == psprecomp::OpcodeKind::Unsupported) {
+            const auto extra_vfpu = decoded.kind == psprecomp::OpcodeKind::Vfpu
+                ? emit_extra_vfpu(decoded) : std::optional<std::string>{};
+            if (!extra_vfpu && (decoded.kind == psprecomp::OpcodeKind::Syscall ||
+                                decoded.kind == psprecomp::OpcodeKind::Vfpu ||
+                                decoded.kind == psprecomp::OpcodeKind::Unsupported)) {
                 body << "    rt.unsupported(" << psprecomp::hex32(pc) << "u, "
                      << psprecomp::hex32(decoded.word) << "u, \""
                      << cpp_escape(decoded.mnemonic) << " not lowered yet\"); return;\n";
                 break;
             }
 
-            body << emit_regular(decoded, pc);
+            body << (extra_vfpu ? *extra_vfpu : emit_regular(decoded, pc));
             const std::uint32_t next = pc + 4u;
             if (!function.instructions.contains(next)) {
                 body << "    ctx.pc = " << psprecomp::hex32(next) << "u; return;\n";
@@ -1145,13 +1239,36 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
     return body.str();
 }
 
-void write_import_wrappers(std::ostream &out, const std::vector<psprecomp::PspImport> &imports) {
+// Options for code of a module that is loaded at run time next to the main
+// executable (a PRX the game loads with sceKernelLoadModule).
+struct AutoOptions {
+    // Wraps everything in psprecomp::<name>, so several modules link together.
+    std::string module_namespace;
+    // Origin of the fixed-span unit numbering. Using the main executable's
+    // origin keeps the runtime's dense unit table valid for both.
+    std::uint32_t unit_origin{};
+    // First import cache slot; each linked module needs a range of its own.
+    std::uint32_t import_slot_base{};
+};
+
+std::string open_namespace(const AutoOptions &options) {
+    return options.module_namespace.empty() ? "namespace psprecomp {\n"
+                                            : "namespace psprecomp {\nnamespace " + options.module_namespace + " {\n";
+}
+
+std::string close_namespace(const AutoOptions &options) {
+    return options.module_namespace.empty() ? "} // namespace psprecomp\n"
+                                            : "} // namespace " + options.module_namespace + "\n} // namespace psprecomp\n";
+}
+
+void write_import_wrappers(std::ostream &out, const std::vector<psprecomp::PspImport> &imports,
+                           std::uint32_t slot_base = 0u) {
     for (std::size_t i = 0; i < imports.size(); ++i) {
         out << "static void import_" << i << "(Runtime &rt, AllegrexContext &ctx) {\n"
             << "    const RuntimeExecutionContextToken caller_context = capture_runtime_execution_context();\n"
             << "    const std::uint32_t import_pc = ctx.pc;\n"
             << "    const std::uint32_t return_address = ctx.gpr[31];\n"
-            << "    rt.invoke_import_cached(" << i << "u, \"" << cpp_escape(imports[i].library) << "\", "
+            << "    rt.invoke_import_cached(" << (slot_base + i) << "u, \"" << cpp_escape(imports[i].library) << "\", "
             << psprecomp::hex32(imports[i].nid) << "u, ctx);\n"
             << "    if (!rt.stopped() && runtime_execution_context_matches(caller_context) &&\n"
             << "        ctx.pc == import_pc) ctx.pc = return_address;\n"
@@ -1435,7 +1552,8 @@ bool write_text_if_changed(const std::filesystem::path &path, const std::string 
 int generate_auto(const std::filesystem::path &elf_path,
                   const std::filesystem::path &output_dir,
                   std::uint32_t load_base,
-                  std::uint32_t unit_span_bytes) {
+                  std::uint32_t unit_span_bytes,
+                  const AutoOptions &options = {}) {
     const auto elf = psprecomp::Elf32Image::from_file(elf_path);
     psprecomp::GuestMemory memory;
     (void)elf.load_and_relocate(memory, load_base);
@@ -1447,7 +1565,10 @@ int generate_auto(const std::filesystem::path &elf_path,
     if (program.executable_ranges.empty()) throw psprecomp::Error("ELF has no executable ranges");
 
     std::filesystem::create_directories(output_dir);
-    const std::uint32_t executable_base = program.executable_ranges.front().start;
+    const std::uint32_t executable_base =
+        options.unit_origin != 0u ? options.unit_origin : program.executable_ranges.front().start;
+    if (executable_base > program.executable_ranges.front().start)
+        throw psprecomp::Error("--unit-origin must not lie above the module's code");
 
     // Emit every discovered guest instruction once. Function seeds remain analysis
     // metadata and dispatcher entries, but overlapping CFGs no longer duplicate C++.
@@ -1501,13 +1622,14 @@ int generate_auto(const std::filesystem::path &elf_path,
     const auto units_header_path = output_dir / "generated_units.hpp";
     std::ostringstream units_header;
     units_header << "#pragma once\n\n#include <cstdint>\n#include \"psprecomp/guest_memory.hpp\"\n\nnamespace psprecomp {\nclass Runtime;\nstruct AllegrexContext;\n";
+    if (!options.module_namespace.empty()) units_header << "namespace " << options.module_namespace << " {\n";
     for (const auto &unit : units) {
         units_header << "void " << generated_unit_cpp_name(unit.bucket)
                      << "(Runtime &, AllegrexContext &);\n";
         units_header << "void " << generated_unit_cpp_entry_name(unit.bucket)
                      << "(Runtime &, AllegrexContext &, std::uint16_t, GuestMemory::AotFastView &);\n";
     }
-    units_header << "} // namespace psprecomp\n";
+    units_header << close_namespace(options);
     (void)write_text_if_changed(units_header_path, units_header.str());
 
     std::set<std::filesystem::path> expected_cpp;
@@ -1532,7 +1654,8 @@ int generate_auto(const std::filesystem::path &elf_path,
         };
 
         std::ostringstream out;
-        out << "#include \"psprecomp/runtime.hpp\"\n#include \"generated_units.hpp\"\n#include <bit>\n#include <cmath>\n#include <cstdint>\n#include <limits>\n\nnamespace psprecomp {\n";
+        out << "#include \"psprecomp/runtime.hpp\"\n#include \"generated_units.hpp\"\n#include <bit>\n#include <cmath>\n#include <cstdint>\n#include <limits>\n\n"
+            << open_namespace(options);
         // The register-cache lowering passes (per-basic-block GPR/FPR caches and
         // the cross-unit hot-register cache) are deliberately absent.  They kept
         // large numbers of guest registers live in C++ locals and in a second
@@ -1556,17 +1679,17 @@ int generate_auto(const std::filesystem::path &elf_path,
                 << generated_unit.name << ", \"" << generated_unit.name << "\");\n";
             ++registered_entries;
         }
-        out << "}\n} // namespace psprecomp\n";
+        out << "}\n" << close_namespace(options);
         rewritten_units += write_text_if_changed(path, out.str()) ? 1u : 0u;
     }
 
     const auto registry_path = output_dir / "generated_registry.cpp";
     expected_cpp.insert(registry_path.filename());
     std::ostringstream registry;
-    registry << "#include \"psprecomp/runtime.hpp\"\n#include <cstdint>\n\nnamespace psprecomp {\n";
+    registry << "#include \"psprecomp/runtime.hpp\"\n#include <cstdint>\n\n" << open_namespace(options);
     for (const auto &unit : units) registry << "void register_generated_unit_" << unit.bucket << "(Runtime &runtime);\n";
     registry << "\n";
-    write_import_wrappers(registry, imports);
+    write_import_wrappers(registry, imports, options.import_slot_base);
     registry << "void register_generated_functions(Runtime &runtime) {\n";
     for (const auto &unit : units) registry << "    register_generated_unit_" << unit.bucket << "(runtime);\n";
     for (std::size_t i = 0; i < imports.size(); ++i) {
@@ -1574,7 +1697,7 @@ int generate_auto(const std::filesystem::path &elf_path,
                  << "u, &import_" << i << ", \"" << cpp_escape(imports[i].library)
                  << "::" << psprecomp::hex32(imports[i].nid) << "\");\n";
     }
-    registry << "}\n} // namespace psprecomp\n";
+    registry << "}\n" << close_namespace(options);
     const bool registry_rewritten = write_text_if_changed(registry_path, registry.str());
 
     for (const auto &entry : std::filesystem::directory_iterator(output_dir)) {
@@ -1612,26 +1735,86 @@ int generate_auto(const std::filesystem::path &elf_path,
 
 } // namespace
 
+int generate_dynamic(const std::filesystem::path &listing, const std::filesystem::path &output) {
+    std::ifstream in(listing);
+    if (!in) throw psprecomp::Error("cannot read " + listing.string());
+    psprecomp::Runtime runtime;
+    std::ostringstream functions, registry;
+    std::set<std::pair<std::uint32_t, std::uint64_t>> seen;
+    std::string line;
+    std::size_t count = 0u;
+    while (std::getline(in, line)) {
+        std::istringstream fields(line);
+        std::string token;
+        if (!(fields >> token)) continue;
+        const std::uint32_t address = parse_hex(token);
+        std::vector<std::uint32_t> words;
+        while (fields >> token) words.push_back(parse_hex(token));
+        if (words.empty()) continue;
+        const std::uint64_t hash = psprecomp::dynamic_code_hash(words.data(), words.size());
+        if (!seen.insert({address, hash}).second) continue;
+        GeneratedFunctionInput function;
+        std::ostringstream name;
+        name << "dynamic_" << std::hex << std::uppercase << address << "_" << hash;
+        function.name = name.str();
+        function.address = address;
+        for (std::size_t i = 0; i < words.size(); ++i) {
+            const std::uint32_t pc = address + static_cast<std::uint32_t>(i * 4u);
+            runtime.memory().store32(pc, words[i]);
+            function.instructions.insert(pc);
+            function.entry_labels.insert(pc);
+        }
+        functions << lower_constant_vfpu_accesses(
+            lower_aot_memory_accesses(
+                lower_constant_fpr_accesses(
+                    lower_constant_gpr_writes(emit_function_source(function, runtime.memory(), function.name)))));
+        registry << "    register_dynamic_function(" << psprecomp::hex32(address) << "u, 0x" << std::hex << hash
+                 << std::dec << "ull, &" << function.name << ");\n";
+        ++count;
+    }
+    std::ostringstream out;
+    out << "#include \"psprecomp/interpreter.hpp\"\n#include \"psprecomp/runtime.hpp\"\n#include <bit>\n#include <cmath>\n"
+        << "#include <cstdint>\n#include <limits>\n\nnamespace psprecomp {\n\n" << functions.str()
+        << "void register_dynamic_code() {\n" << registry.str() << "}\n\n} // namespace psprecomp\n";
+    write_text_if_changed(output, out.str());
+    std::cout << count << " dynamic code blocks written to " << output.string() << "\n";
+    return 0;
+}
+
 int main(int argc, char **argv) {
     try {
+        if (argc == 4 && std::string_view(argv[1]) == "--dynamic") return generate_dynamic(argv[2], argv[3]);
         if (argc >= 4 && std::string_view(argv[2]) == "--auto") {
-            if (argc > 6) {
-                std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n";
-                return 2;
+            // Positional load base and unit span, then optional module flags.
+            std::vector<std::string_view> positional;
+            AutoOptions options;
+            for (int i = 4; i < argc; ++i) {
+                const std::string_view arg = argv[i];
+                const bool has_value = i + 1 < argc;
+                if (arg == "--namespace" && has_value) options.module_namespace = argv[++i];
+                else if (arg == "--unit-origin" && has_value) options.unit_origin = static_cast<std::uint32_t>(std::stoul(argv[++i], nullptr, 0));
+                else if (arg == "--import-slot-base" && has_value) options.import_slot_base = static_cast<std::uint32_t>(std::stoul(argv[++i], nullptr, 0));
+                else if (!arg.starts_with("--") && positional.size() < 2u) positional.push_back(arg);
+                else {
+                    std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n"
+                                 "         [--namespace name] [--unit-origin address] [--import-slot-base n]\n";
+                    return 2;
+                }
             }
-            const std::uint32_t load_base = argc >= 5
-                ? static_cast<std::uint32_t>(std::stoul(argv[4], nullptr, 0))
+            const std::uint32_t load_base = !positional.empty()
+                ? static_cast<std::uint32_t>(std::stoul(std::string(positional[0]), nullptr, 0))
                 : psprecomp::kDefaultPspUserLoadBase;
-            const std::uint32_t unit_span = argc >= 6
-                ? static_cast<std::uint32_t>(std::stoul(argv[5], nullptr, 0))
+            const std::uint32_t unit_span = positional.size() >= 2u
+                ? static_cast<std::uint32_t>(std::stoul(std::string(positional[1]), nullptr, 0))
                 : 0x20000u;
             if (unit_span == 0u || (unit_span & 3u) != 0u) throw psprecomp::Error("unit_span_bytes must be non-zero and 4-byte aligned");
-            return generate_auto(argv[1], argv[3], load_base, unit_span);
+            return generate_auto(argv[1], argv[3], load_base, unit_span, options);
         }
         if (argc == 4) return generate_manual(argv[1], argv[2], argv[3]);
         std::cerr << "Usage:\n"
                   << "  psp_recomp <ELF> <functions.csv> <generated_manifest.cpp>\n"
-                  << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n";
+                  << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n"
+                  << "         [--namespace name] [--unit-origin address] [--import-slot-base n]\n";
         return 2;
     } catch (const std::exception &e) {
         std::cerr << "psp_recomp error: " << e.what() << "\n";

@@ -29,6 +29,8 @@ struct alignas(16) AllegrexContext {
     // register views overlap; the final lowering layer will provide S/V/M views.
     std::array<float, 128> vfpu{};
     std::array<std::uint32_t, 16> vfpu_ctrl{};
+    std::uint32_t vfpu_rng_w{0x13371337u};
+    std::uint32_t vfpu_rng_z{0xFFFFECC8u};
 
 
     [[nodiscard]] PSPRECOMP_CONTEXT_FORCEINLINE std::uint32_t fpr_bits(std::uint32_t index) const noexcept {
@@ -154,8 +156,11 @@ struct alignas(16) AllegrexContext {
     // branch and the PSP VFPU lane shuffle disappear from the AOT hot path.
     template <std::uint32_t ScalarRegister>
     PSPRECOMP_CONTEXT_FORCEINLINE void set_vfpu_scalar_bits_ct(std::uint32_t value) noexcept {
-        static_assert(ScalarRegister < 144u);
-        if constexpr (ScalarRegister < 128u) {
+        // Encodings past the control registers only appear when data is
+        // decoded as code; such paths never execute, so ignore the write.
+        if constexpr (ScalarRegister >= 144u) {
+            (void)value;
+        } else if constexpr (ScalarRegister < 128u) {
             constexpr std::size_t index = vfpu_scalar_index(ScalarRegister);
             vfpu[index] = std::bit_cast<float>(value);
         } else {
@@ -165,8 +170,9 @@ struct alignas(16) AllegrexContext {
 
     template <std::uint32_t ScalarRegister>
     [[nodiscard]] PSPRECOMP_CONTEXT_FORCEINLINE std::uint32_t vfpu_scalar_bits_ct() const noexcept {
-        static_assert(ScalarRegister < 144u);
-        if constexpr (ScalarRegister < 128u) {
+        if constexpr (ScalarRegister >= 144u) {
+            return 0u;
+        } else if constexpr (ScalarRegister < 128u) {
             constexpr std::size_t index = vfpu_scalar_index(ScalarRegister);
             return std::bit_cast<std::uint32_t>(vfpu[index]);
         } else {
@@ -611,6 +617,70 @@ struct alignas(16) AllegrexContext {
         }
 
         float result[4]{};
+        for (std::uint32_t lane = 0u; lane < destination_length; ++lane)
+            result[lane] = std::bit_cast<float>(result_bits[lane]);
+        write_vfpu_vector_with_destination_prefix(result, destination_register, destination_length);
+    }
+
+    void execute_vfpu_vt_color(std::uint32_t destination_register,
+                               std::uint32_t source_register,
+                               std::uint32_t length,
+                               std::uint32_t operation) noexcept {
+        float source[4]{};
+        read_vfpu_vector(source, source_register, 4u);
+        apply_vfpu_source_prefix(source, 4u, 0u);
+        std::uint32_t packed[2]{};
+        for (std::uint32_t lane = 0u; lane < 4u; ++lane) {
+            const std::uint32_t in = std::bit_cast<std::uint32_t>(source[lane]);
+            const std::uint32_t r = in & 0xFFu, g = (in >> 8u) & 0xFFu, b = (in >> 16u) & 0xFFu, a = in >> 24u;
+            std::uint32_t color = 0u;
+            if (operation == 1u) color = ((a >> 4u) << 12u) | ((b >> 4u) << 8u) | ((g >> 4u) << 4u) | (r >> 4u);
+            else if (operation == 2u) color = ((a >> 7u) << 15u) | ((b >> 3u) << 10u) | ((g >> 3u) << 5u) | (r >> 3u);
+            else if (operation == 3u) color = ((b >> 3u) << 11u) | ((g >> 2u) << 5u) | (r >> 3u);
+            packed[lane / 2u] |= color << ((lane & 1u) * 16u);
+        }
+        const float result[2]{std::bit_cast<float>(packed[0]), std::bit_cast<float>(packed[1])};
+        write_vfpu_vector_with_destination_prefix(result, destination_register, length == 1u ? 1u : 2u);
+    }
+
+    void execute_vfpu_vi2x(std::uint32_t destination_register,
+                           std::uint32_t source_register,
+                           std::uint32_t source_length,
+                           std::uint32_t operation) noexcept {
+        if (source_length == 0u || source_length > 4u || operation > 3u) return;
+
+        float source[4]{};
+        read_vfpu_vector(source, source_register, source_length);
+        apply_vfpu_source_prefix(source, source_length, 0u);
+
+        std::uint32_t value[4]{};
+        for (std::uint32_t lane = 0u; lane < 4u; ++lane) value[lane] = std::bit_cast<std::uint32_t>(source[lane]);
+        std::uint32_t result_bits[2]{};
+        std::uint32_t destination_length = 1u;
+        if (operation <= 1u) {
+            for (std::uint32_t lane = 0u; lane < 4u; ++lane) {
+                const std::int32_t signed_value = static_cast<std::int32_t>(value[lane]);
+                const std::uint32_t byte = operation == 0u
+                    ? static_cast<std::uint32_t>(signed_value < 0 ? 0 : signed_value) >> 23u
+                    : value[lane] >> 24u;
+                result_bits[0] |= (byte & 0xFFu) << (lane * 8u);
+            }
+        } else {
+            destination_length = source_length == 4u ? 2u : 1u;
+            for (std::uint32_t lane = 0u; lane < source_length / 2u; ++lane) {
+                std::uint32_t low = value[lane * 2u], high = value[lane * 2u + 1u];
+                if (operation == 2u) {
+                    low = static_cast<std::int32_t>(low) < 0 ? 0u : low >> 15u;
+                    high = static_cast<std::int32_t>(high) < 0 ? 0u : high >> 15u;
+                } else {
+                    low >>= 16u;
+                    high >>= 16u;
+                }
+                result_bits[lane] = (low & 0xFFFFu) | (high << 16u);
+            }
+        }
+
+        float result[2]{};
         for (std::uint32_t lane = 0u; lane < destination_length; ++lane)
             result[lane] = std::bit_cast<float>(result_bits[lane]);
         write_vfpu_vector_with_destination_prefix(result, destination_register, destination_length);
@@ -1172,6 +1242,31 @@ struct alignas(16) AllegrexContext {
         // saturation and write masking on the hardware.
         if (cosine_lane < 4u) {
             vfpu_ctrl[2] &= ~((3u << (cosine_lane * 2u)) | (1u << (8u + cosine_lane)));
+        }
+        write_vfpu_vector_with_destination_prefix(value, destination_register, length);
+    }
+
+    void execute_vfpu_vrnd(std::uint32_t destination_register, std::uint32_t source_register,
+                           std::uint32_t length, std::uint32_t operation) noexcept {
+        if (operation == 0u) {
+            float seed[4]{};
+            read_vfpu_vector(seed, source_register, 1u);
+            const std::uint32_t bits = std::bit_cast<std::uint32_t>(seed[0]);
+            vfpu_rng_w = bits ^ (bits << 16u);
+            if (vfpu_rng_w == 0u) vfpu_rng_w = 1337u;
+            vfpu_rng_z = ~bits;
+            if (vfpu_rng_z == 0u) vfpu_rng_z = 31337u;
+            eat_vfpu_prefixes();
+            return;
+        }
+        float value[4]{};
+        for (std::uint32_t i = 0; i < length && i < 4u; ++i) {
+            vfpu_rng_z = 36969u * (vfpu_rng_z & 0xFFFFu) + (vfpu_rng_z >> 16u);
+            vfpu_rng_w = 18000u * (vfpu_rng_w & 0xFFFFu) + (vfpu_rng_w >> 16u);
+            std::uint32_t bits = (vfpu_rng_z << 16u) + vfpu_rng_w;
+            if (operation == 2u) bits = 0x3F800000u | (bits & 0x007FFFFFu);
+            else if (operation == 3u) bits = 0x40000000u | (bits & 0x007FFFFFu);
+            value[i] = std::bit_cast<float>(bits);
         }
         write_vfpu_vector_with_destination_prefix(value, destination_register, length);
     }

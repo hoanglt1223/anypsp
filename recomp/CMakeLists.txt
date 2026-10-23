@@ -78,6 +78,7 @@ add_library(psprecomp_core STATIC
     src/deflate.cpp
     src/elf32.cpp
     src/guest_memory.cpp
+    src/interpreter.cpp
     src/nid_registry.cpp
     src/program_analysis.cpp
     src/runtime.cpp

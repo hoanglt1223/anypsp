@@ -81,6 +81,9 @@ public:
     const NidRegistry &nids() const noexcept;
 
     void register_function(std::uint32_t address, RecompiledFunction function, std::string name);
+    // Forgets every function and generated unit registered in [start, end), for
+    // a module that is unloaded so that another one can take its place.
+    void unregister_functions(std::uint32_t start, std::uint32_t end);
     void register_hle(std::string library, std::uint32_t nid, HleFunction function);
     [[nodiscard]] bool has_function(std::uint32_t address) const;
     [[nodiscard]] std::size_t function_count() const noexcept;
@@ -355,6 +358,7 @@ void register_generated_functions(Runtime &runtime);
 // null hook or a zero interval disables it and restores the previous loop.
 using RuntimeHeartbeatHook = void (*)(std::uint64_t dispatch, std::uint32_t pc);
 void set_runtime_heartbeat_hook(RuntimeHeartbeatHook hook, std::uint64_t interval) noexcept;
+void set_runtime_missing_code_handler(Runtime::RecompiledFunction handler) noexcept;
 
 // Execution-driven time and preemption.
 //
