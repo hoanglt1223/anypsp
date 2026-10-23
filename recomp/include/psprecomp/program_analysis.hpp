@@ -38,6 +38,19 @@ struct ProgramAnalysis {
 [[nodiscard]] bool is_executable_address(const std::vector<ExecutableRange> &ranges,
                                          std::uint32_t address) noexcept;
 
+struct AnalysisOptions {
+    // Seeds found by other passes (exports, thread entries, jump tables, runtime feedback).
+    std::map<std::uint32_t, std::string> extra_seeds;
+    // Relocations actually applied by the loader; null means elf.relocation_sites().
+    const std::vector<PspRelocationSite> *relocation_sites{};
+    std::size_t max_instructions_per_function{131072u};
+};
+
+[[nodiscard]] ProgramAnalysis analyze_program(const Elf32Image &elf,
+                                              const GuestMemory &memory,
+                                              std::uint32_t load_base,
+                                              const AnalysisOptions &options);
+
 [[nodiscard]] ProgramAnalysis analyze_program(const Elf32Image &elf,
                                               const GuestMemory &memory,
                                               std::uint32_t load_base,

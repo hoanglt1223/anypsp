@@ -46,6 +46,9 @@ struct LoadedModule {
     std::vector<Import> imports;
     std::vector<Export> exports;
     RelocationResult relocations;
+    // Tables that could not be read, e.g. in a PRX cut off before its relocations,
+    // which the PSP loads unrelocated.
+    std::vector<std::string> problems;
 };
 
 inline constexpr std::uint32_t kNidModuleStart = 0xD632ACDBu;

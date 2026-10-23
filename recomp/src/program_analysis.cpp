@@ -289,7 +289,8 @@ void collect_relocated_data_code_pointers(const Elf32Image &elf,
 std::map<std::uint32_t, std::string> collect_initial_seeds(const Elf32Image &elf,
                                                            const GuestMemory &memory,
                                                            std::uint32_t load_base,
-                                                           const std::vector<ExecutableRange> &ranges) {
+                                                           const std::vector<ExecutableRange> &ranges,
+                                                           const std::vector<PspRelocationSite> &relocation_sites) {
     std::map<std::uint32_t, std::string> seeds;
     const std::uint32_t entry = elf.runtime_entry(load_base);
     add_seed(seeds, ranges, entry, "elf_entry");
@@ -306,12 +307,12 @@ std::map<std::uint32_t, std::string> collect_initial_seeds(const Elf32Image &elf
     // R_MIPS_32 relocations are the authoritative source for function pointers
     // stored in read-only tables embedded in the executable segment (init arrays,
     // vtables, callbacks). Scanning raw RX words would confuse J opcodes with pointers.
-    for (const auto &site : elf.relocation_sites(load_base)) {
+    for (const auto &site : relocation_sites) {
         if (site.type != 2u || !memory.contains(site.patch_address, 4u)) continue;
         add_seed(seeds, ranges, memory.load32(site.patch_address), "relocated_r_mips32_code_pointer");
     }
     std::uint32_t high_register = 0u, high_value = 0u;
-    for (const auto &site : elf.relocation_sites(load_base)) {
+    for (const auto &site : relocation_sites) {
         if (!memory.contains(site.patch_address, 4u)) continue;
         const auto decoded = decode_allegrex(memory.load32(site.patch_address));
         const auto uimm = static_cast<std::uint16_t>(decoded.immediate);
@@ -442,9 +443,24 @@ ProgramAnalysis analyze_program(const Elf32Image &elf,
                                 const GuestMemory &memory,
                                 std::uint32_t load_base,
                                 std::size_t max_instructions_per_function) {
+    AnalysisOptions options;
+    options.max_instructions_per_function = max_instructions_per_function;
+    return analyze_program(elf, memory, load_base, options);
+}
+
+ProgramAnalysis analyze_program(const Elf32Image &elf,
+                                const GuestMemory &memory,
+                                std::uint32_t load_base,
+                                const AnalysisOptions &options) {
+    const std::size_t max_instructions_per_function = options.max_instructions_per_function;
     ProgramAnalysis program{};
     program.executable_ranges = executable_ranges_for(elf, load_base);
-    program.seeds = collect_initial_seeds(elf, memory, load_base, program.executable_ranges);
+    const auto own_sites = options.relocation_sites == nullptr ? elf.relocation_sites(load_base)
+                                                               : std::vector<PspRelocationSite>{};
+    program.seeds = collect_initial_seeds(elf, memory, load_base, program.executable_ranges,
+                                          options.relocation_sites != nullptr ? *options.relocation_sites : own_sites);
+    for (const auto &[address, source] : options.extra_seeds)
+        add_seed(program.seeds, program.executable_ranges, address, source.c_str());
     program.functions.reserve(program.seeds.size());
 
     std::unordered_map<std::uint32_t, std::size_t> label_owners;

@@ -30,8 +30,25 @@ anypsp_warnings(anypsp_loader)
 add_executable(anypsp_tests
     tests/unit/main.cpp
     tests/unit/loader_tests.cpp
+    tests/unit/analysis_tests.cpp
 )
 target_include_directories(anypsp_tests PRIVATE tests/unit)
-target_link_libraries(anypsp_tests PRIVATE anypsp_loader)
+target_link_libraries(anypsp_tests PRIVATE anypsp_analysis)
 anypsp_warnings(anypsp_tests)
 add_test(NAME anypsp_tests COMMAND anypsp_tests)
+
+add_library(anypsp_analysis STATIC
+    recomp/analysis/cfg.cpp
+    recomp/analysis/functions.cpp
+    recomp/analysis/jumptables.cpp
+)
+target_include_directories(anypsp_analysis PUBLIC recomp/analysis)
+target_link_libraries(anypsp_analysis PUBLIC anypsp_loader)
+anypsp_warnings(anypsp_analysis)
+
+add_executable(anypsp-analyze recomp/tools/anypsp_analyze.cpp)
+target_link_libraries(anypsp-analyze PRIVATE anypsp_analysis)
+anypsp_warnings(anypsp-analyze)
+
+# psp_recomp --auto loads modules through the AnyPSP loader.
+target_link_libraries(psp_recomp PRIVATE anypsp_loader)

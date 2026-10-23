@@ -181,9 +181,19 @@ LoadedModule load_module(GuestMemory &memory, Elf32Image elf, std::string path, 
     module.relocations = apply_relocations(image, memory, module.base);
     module.entry = image.runtime_entry(module.base);
     module.info = find_module_info(image, memory, module.base);
-    if (module.info) {
+    if (!module.info) {
+        module.problems.push_back("no module info");
+        return module;
+    }
+    try {
         module.imports = read_imports(memory, *module.info);
+    } catch (const Error &e) {
+        module.problems.push_back(std::string("imports: ") + e.what());
+    }
+    try {
         module.exports = read_exports(memory, *module.info);
+    } catch (const Error &e) {
+        module.problems.push_back(std::string("exports: ") + e.what());
     }
     return module;
 }

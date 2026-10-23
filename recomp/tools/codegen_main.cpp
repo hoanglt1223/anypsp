@@ -1,3 +1,4 @@
+#include "elf_prx.hpp"
 #include "psprecomp/common.hpp"
 #include "psprecomp/decoder.hpp"
 #include "psprecomp/codegen_policy.hpp"
@@ -1249,7 +1250,31 @@ struct AutoOptions {
     std::uint32_t unit_origin{};
     // First import cache slot; each linked module needs a range of its own.
     std::uint32_t import_slot_base{};
+    // Extra function seeds (name,address,source CSV, e.g. from anypsp-analyze).
+    std::filesystem::path seeds_csv;
 };
+
+std::map<std::uint32_t, std::string> load_seed_csv(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    if (!in) throw psprecomp::Error("Cannot open seed CSV: " + path.string());
+    std::map<std::uint32_t, std::string> seeds;
+    std::string line;
+    for (std::size_t number = 1; std::getline(in, line); ++number) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line.starts_with("name,") || line[0] == '#') continue;
+        const auto first = line.find(',');
+        const auto second = first == std::string::npos ? std::string::npos : line.find(',', first + 1u);
+        if (second == std::string::npos) throw psprecomp::Error(path.string() + ":" + std::to_string(number) + ": expected name,address,source");
+        const std::string address = line.substr(first + 1u, second - first - 1u);
+        std::size_t used = 0;
+        unsigned long value = 0;
+        try { value = std::stoul(address, &used, 0); } catch (const std::exception &) { used = 0; }
+        if (used == 0u || used != address.size() || value > 0xFFFFFFFFul)
+            throw psprecomp::Error(path.string() + ":" + std::to_string(number) + ": bad address '" + address + "'");
+        seeds.try_emplace(static_cast<std::uint32_t>(value), line.substr(second + 1u));
+    }
+    return seeds;
+}
 
 std::string open_namespace(const AutoOptions &options) {
     return options.module_namespace.empty() ? "namespace psprecomp {\n"
@@ -1554,14 +1579,21 @@ int generate_auto(const std::filesystem::path &elf_path,
                   std::uint32_t load_base,
                   std::uint32_t unit_span_bytes,
                   const AutoOptions &options = {}) {
-    const auto elf = psprecomp::Elf32Image::from_file(elf_path);
     psprecomp::GuestMemory memory;
-    (void)elf.load_and_relocate(memory, load_base);
+    const auto module = anypsp::loader::load_module(
+        memory, psprecomp::Elf32Image::from_bytes(anypsp::loader::read_executable(elf_path), elf_path.string()),
+        elf_path.string(), load_base);
+    const auto &elf = module.elf;
     std::vector<psprecomp::PspImport> imports;
-    if (const auto module = elf.find_module_info(memory, load_base)) imports = elf.scan_imports(memory, *module);
+    for (const auto &import : module.imports)
+        if (!import.variable) imports.push_back({import.library, import.nid, import.stub_address});
     std::set<std::uint32_t> import_stubs;
     for (const auto &import : imports) import_stubs.insert(import.stub_address);
-    const auto program = psprecomp::analyze_program(elf, memory, load_base);
+    const auto relocation_sites = anypsp::loader::analysis_sites(module.relocations);
+    psprecomp::AnalysisOptions analysis;
+    analysis.relocation_sites = &relocation_sites;
+    if (!options.seeds_csv.empty()) analysis.extra_seeds = load_seed_csv(options.seeds_csv);
+    const auto program = psprecomp::analyze_program(elf, memory, load_base, analysis);
     if (program.executable_ranges.empty()) throw psprecomp::Error("ELF has no executable ranges");
 
     std::filesystem::create_directories(output_dir);
@@ -1794,10 +1826,11 @@ int main(int argc, char **argv) {
                 if (arg == "--namespace" && has_value) options.module_namespace = argv[++i];
                 else if (arg == "--unit-origin" && has_value) options.unit_origin = static_cast<std::uint32_t>(std::stoul(argv[++i], nullptr, 0));
                 else if (arg == "--import-slot-base" && has_value) options.import_slot_base = static_cast<std::uint32_t>(std::stoul(argv[++i], nullptr, 0));
+                else if (arg == "--seeds" && has_value) options.seeds_csv = argv[++i];
                 else if (!arg.starts_with("--") && positional.size() < 2u) positional.push_back(arg);
                 else {
                     std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n"
-                                 "         [--namespace name] [--unit-origin address] [--import-slot-base n]\n";
+                                 "         [--namespace name] [--unit-origin address] [--import-slot-base n] [--seeds seeds.csv]\n";
                     return 2;
                 }
             }
@@ -1814,7 +1847,7 @@ int main(int argc, char **argv) {
         std::cerr << "Usage:\n"
                   << "  psp_recomp <ELF> <functions.csv> <generated_manifest.cpp>\n"
                   << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]\n"
-                  << "         [--namespace name] [--unit-origin address] [--import-slot-base n]\n";
+                  << "         [--namespace name] [--unit-origin address] [--import-slot-base n] [--seeds seeds.csv]\n";
         return 2;
     } catch (const std::exception &e) {
         std::cerr << "psp_recomp error: " << e.what() << "\n";
