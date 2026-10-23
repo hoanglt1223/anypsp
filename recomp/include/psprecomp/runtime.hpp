@@ -98,6 +98,9 @@ public:
     [[nodiscard]] const std::string &stop_reason() const noexcept;
 
     void unsupported(std::uint32_t pc, std::uint32_t instruction, const std::string &reason);
+    // ctx.pc has no translated code: records it as analysis feedback and runs the
+    // missing-code handler (the interpreter), or stops when none is set.
+    void run_missing_code(AllegrexContext &ctx);
     void arithmetic_overflow(std::uint32_t pc, std::uint32_t instruction);
     void invoke_import(std::string_view library, std::uint32_t nid, AllegrexContext &ctx);
     // Generated import wrappers have a stable numeric slot. Resolve the

@@ -33,3 +33,21 @@ TEST_CASE("runtime feedback: missing code is recorded once and reads back as see
     const auto addresses = anypsp::analysis::read_feedback(path);
     CHECK((addresses == std::vector<std::uint32_t>{0x08804100u, 0x08804200u}));
 }
+
+TEST_CASE("runtime feedback: run_missing_code records and hands over to the missing-code handler") {
+    const auto path = std::filesystem::temp_directory_path() / "anypsp_runtime_feedback_missing.txt";
+    std::filesystem::remove(path);
+    psprecomp::set_runtime_feedback_file(path.string());
+    psprecomp::Runtime runtime;
+    psprecomp::AllegrexContext ctx{};
+    ctx.pc = 0x08804300u;
+    runtime.run_missing_code(ctx);
+    CHECK(runtime.stopped()); // no handler: stops with a clear reason
+    psprecomp::set_runtime_missing_code_handler(&stop_here);
+    psprecomp::Runtime handled;
+    ctx.pc = 0x08804304u;
+    handled.run_missing_code(ctx);
+    CHECK_EQ(handled.stop_reason(), std::string("missing code reached"));
+    psprecomp::set_runtime_missing_code_handler(nullptr);
+    CHECK((anypsp::analysis::read_feedback(path) == std::vector<std::uint32_t>{0x08804300u, 0x08804304u}));
+}

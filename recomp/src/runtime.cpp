@@ -1177,6 +1177,12 @@ void Runtime::unsupported(std::uint32_t pc, std::uint32_t instruction, const std
     stop("Unsupported Allegrex instruction " + hex32(instruction) + " at " + hex32(pc) + ": " + reason);
 }
 
+void Runtime::run_missing_code(AllegrexContext &ctx) {
+    record_missing_code(ctx.pc);
+    if (g_missing_code_handler != nullptr) g_missing_code_handler(*this, ctx);
+    else unsupported(ctx.pc, 0u, "no translated code at this address");
+}
+
 void Runtime::arithmetic_overflow(std::uint32_t pc, std::uint32_t instruction) {
     stop("Allegrex arithmetic overflow for " + hex32(instruction) + " at " + hex32(pc));
 }

@@ -1044,7 +1044,9 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                  << psprecomp::hex32(label).substr(2) << ";\n";
         }
         body << "    default:\n"
-             << "        if (local_transfers == 0u) rt.unsupported(ctx.pc, 0u, \"invalid internal function entry\");\n"
+             // Entered at a PC inside the unit that was never translated: feedback
+             // and the interpreter rather than a halt.
+             << "        if (local_transfers == 0u) rt.run_missing_code(ctx);\n"
              // Local transfers advance local_pc without touching AllegrexContext.
              // Leaving the unit through this default arm hands control back to the
              // outer dispatcher, for which ctx.pc is the only statement of where to
@@ -1072,7 +1074,9 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                  << psprecomp::hex32(label).substr(2) << ";\n";
         }
         body << "    default:\n"
-             << "        if (local_transfers == 0u) rt.unsupported(ctx.pc, 0u, \"invalid internal function entry\");\n"
+             // Entered at a PC inside the unit that was never translated: feedback
+             // and the interpreter rather than a halt.
+             << "        if (local_transfers == 0u) rt.run_missing_code(ctx);\n"
              // Local transfers advance local_pc without touching AllegrexContext.
              // Leaving the unit through this default arm hands control back to the
              // outer dispatcher, for which ctx.pc is the only statement of where to
