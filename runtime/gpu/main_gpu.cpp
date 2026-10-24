@@ -8,6 +8,7 @@
 #include "desktop.hpp"
 #include "display.hpp"
 #include "display_loop.hpp"
+#include "patches.hpp"
 #include "disc.hpp"
 #include "frame_output.hpp"
 #include "gl_host.hpp"
@@ -62,6 +63,7 @@ const char *const kUsage =
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
     "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
     "         [--refresh auto|hz] [--vrr on|off] [--sync-to-monitor on|off] [--pause-fps 30|60] [--fps-cap off|n]\n"
+    "         [--patches auto|file.ini]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
@@ -82,6 +84,8 @@ const char *const kUsage =
 "each vblank when ready (F6); --sync-to-monitor runs vblanks at the monitor rate within 1% (F7); --fps-cap\n"
 "limits pictures shown (F8); --pause-fps limits them while paused (F4; Pause key pauses). They are kept in\n"
 "anypsp-display.ini next to the program or in the per-user data folder.\n"
+"--patches auto applies patches/<disc ID>.ini (next to the program or in the per-user data folder), for\n"
+"example the 60 fps patch for UNH 1; --patches file.ini names a patch file.\n"
     "--input holds the given sceCtrl button mask (hex) from that frame on. --hle-stubs lists imports\n"
     "without HLE that return a fixed value: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
@@ -149,7 +153,7 @@ std::map<std::string, std::uint32_t> read_hle_stubs(const std::string &path) {
 struct Options {
     std::string module, disc = ".", memstick = ".", feedback, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     std::string renderer = "gl", frames_dir, hashes, screenshot, dump, hle_stubs;
-    std::string wav, keymap, write_input, cache;
+    std::string wav, keymap, write_input, cache, patches;
     std::map<long, std::uint32_t> input;
     std::vector<std::pair<std::string, std::string>> display; // --smoothing ...: display setting overrides
     long frames = 600, png_every = 1;
@@ -206,6 +210,7 @@ Options parse(int argc, char **argv) {
         else if (flag == "--hle-stubs") o.hle_stubs = value;
         else if (flag == "--input") o.input = parse_input_script(value);
         else if (flag == "--smoothing") o.display.emplace_back("Smoothing", value);
+        else if (flag == "--patches") o.patches = value;
         else if (flag == "--refresh") o.display.emplace_back("Refresh", value);
         else if (flag == "--vrr") o.display.emplace_back("VRR", value);
         else if (flag == "--sync-to-monitor") o.display.emplace_back("SyncToMonitor", value);
@@ -365,6 +370,21 @@ int main(int argc, char **argv) {
         kernel->set_flash_root(std::filesystem::path(o.disc) / "flash0");
         kernel->add_main_module(*module.info, module.base, module.end - module.base);
         kernel->install(imports);
+        std::vector<anypsp::patches::Patch> game_patches;
+        if (!o.patches.empty()) {
+            std::filesystem::path file = o.patches;
+            if (o.patches == "auto") {
+                const std::string id = anypsp::patches::disc_id(o.disc);
+                file = anypsp::patches::find_file(id, program_dir(), user_dir);
+                if (file.empty()) std::cout << "[anypsp] no patch file for disc " << (id.empty() ? "(unknown)" : id) << "\n";
+            }
+            if (!file.empty()) {
+                game_patches = anypsp::patches::load(file);
+                std::cout << "[anypsp] " << game_patches.size() << " patch(es) from " << file.string() << "\n";
+            }
+        }
+        anypsp::patches::apply(game_patches, anypsp::patches::When::Load, rt.memory());
+        std::uint64_t patch_writes = 0;
         kernel->boot(module.entry, module.info->gp, o.guest_path);
         std::cout << "[anypsp] " << module.info->name << " at " << psprecomp::hex32(module.base) << "-"
                   << psprecomp::hex32(module.end) << ", " << imports.size() << " imports, " << module.relocations.applied
@@ -418,6 +438,7 @@ int main(int argc, char **argv) {
             if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
             running = kernel->frame(50.0);
             ++frame;
+            if (!game_patches.empty()) patch_writes += anypsp::patches::apply(game_patches, anypsp::patches::When::Vblank, rt.memory());
             if (window_loop) window_loop->after_vblank(kernel->display());
             if (!per_frame) continue;
             capture();
@@ -440,6 +461,7 @@ int main(int argc, char **argv) {
             wav->close();
             std::cout << "[anypsp] " << wav->frames() << " audio frames in " << o.wav << "\n";
         }
+        if (!game_patches.empty()) std::cout << "[anypsp] patches wrote " << patch_writes << " value(s) during the run\n";
         if (audio.dropped_frames() != 0u)
             std::cout << "[anypsp] dropped " << audio.dropped_frames() << " audio frames to keep latency down\n";
         if (!o.screenshot.empty())

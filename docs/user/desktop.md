@@ -89,6 +89,33 @@ are mixes of two real pictures, not motion estimates, so fast movement looks dou
 warped. Smoothing adds one vblank (about 17 ms) of input latency to the frames it blends. The window
 title shows `smoothing` while it is on.
 
+## Game patches
+
+`--patches auto` applies `patches/<disc ID>.ini` from the program's folder or the per-user data folder
+(the disc ID is the first field of the disc's `UMD_DATA.BIN`, for example `ULUS-10299`); `--patches
+file.ini` names a file. A patch file holds addresses and values only, one write per line:
+
+```
+# <when> <size> <address> = <value> [if <old>]
+load   u32 0x08812345     = 0x00000001          # once, after the executable is loaded
+vblank u8  [0x08C20C70]+1 = 1          if 2    # after every vblank, through a pointer
+```
+
+- `when` is `load` or `vblank`; `size` is `u8`, `u16` or `u32`; numbers are hex (`0x`) or decimal.
+- `[0x08C20C70]+1` follows the 32-bit pointer stored at 0x08C20C70 and adds 1; the write is skipped
+  while the pointer is not in user memory (0x08800000-0x09FFFFFF), so it waits until the game sets it up.
+- `if <old>` writes only while the current value is `<old>`, leaving values the game sets for other
+  reasons alone.
+- Patches change data, not code: per-game runners run their translated code whatever the bytes in
+  memory say, so `load` writes over instructions only affect `anypsp-play`.
+- A mistake in the file stops the program with the file name and line. The run ends with the number
+  of values the patches wrote.
+
+No patch files ship yet. UNH 1 (ULUS-10299) waits for a frame interval (two vblanks in most scenes) kept
+in a byte of its system object (`[0x08C20C70]+1`); setting it to 1 makes the game draw at 60 fps, but its
+logic counts drawn frames, so intros, menus and the title's idle timer then run twice as fast. A 60 fps
+patch for it needs per-frame speeds halved in game code, which a data patch cannot do.
+
 ## Input mapping
 
 A game looks for `anypsp-input.ini` next to the program, then in the per-user data folder. `--keymap FILE`

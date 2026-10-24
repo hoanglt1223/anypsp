@@ -31,7 +31,8 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/disc.cpp
     ${ANYPSP_GPU_DIR}/input_map.cpp
     ${ANYPSP_GPU_DIR}/display.cpp
-    ${ANYPSP_GPU_DIR}/display_loop.cpp)
+    ${ANYPSP_GPU_DIR}/display_loop.cpp
+    ${ANYPSP_GPU_DIR}/patches.cpp)
 target_include_directories(anypsp_gpu PUBLIC ${ANYPSP_GPU_DIR})
 target_compile_definitions(anypsp_gpu PUBLIC ANYPSP_GL_DESKTOP)
 target_link_libraries(anypsp_gpu PUBLIC anypsp_host SDL3::SDL3-static)
@@ -60,7 +61,8 @@ if(MSVC)
 endif()
 
 add_executable(anypsp_desktop_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/desktop_tests.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/display_tests.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/display_tests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/patches_tests.cpp)
 target_include_directories(anypsp_desktop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit)
 target_link_libraries(anypsp_desktop_tests PRIVATE anypsp_gpu)
 if(MSVC)
