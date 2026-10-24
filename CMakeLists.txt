@@ -92,6 +92,15 @@ if(ANYPSP_BUILD_HOST)
         target_compile_options(anypsp-interp PRIVATE /EHsc /permissive- /W3)
         target_link_options(anypsp-interp PRIVATE /STACK:67108864)
     endif()
+
+    add_executable(anypsp_hle_tests tests/unit/main.cpp tests/unit/hle_tests.cpp runtime/host/no_generated.cpp
+        runtime/host/no_modules.cpp runtime/host/no_dynamic_code.cpp)
+    target_include_directories(anypsp_hle_tests PRIVATE tests/unit)
+    target_link_libraries(anypsp_hle_tests PRIVATE anypsp_host anypsp_loader)
+    if(MSVC)
+        target_compile_options(anypsp_hle_tests PRIVATE /EHsc /permissive- /W3)
+    endif()
+    add_test(NAME anypsp_hle_tests COMMAND anypsp_hle_tests)
 endif()
 
 # One runner per translated game: cmake -DANYPSP_RUNNER_NAME=<name> -DANYPSP_RUNNER_GENERATED=<psp_recomp --auto dir>,
