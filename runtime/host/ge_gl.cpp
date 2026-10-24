@@ -30,10 +30,12 @@ const char *kVertexShader = R"(#version 300 es
 layout(location = 0) in vec4 a_pos;
 layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec4 a_color;
+layout(location = 3) in float a_q;
 uniform vec2 u_target;
 uniform vec2 u_origin;
 uniform vec2 u_fog;
 out vec2 v_uv;
+out float v_q;
 out vec4 v_color;
 out float v_fog;
 void main() {
@@ -43,6 +45,7 @@ void main() {
     float z = clamp(a_pos.z / 65535.0, 0.0, 1.0) * 2.0 - 1.0;
     gl_Position = vec4(ndc * w, z * w, w);
     v_uv = a_uv;
+    v_q = a_q;
     v_color = a_color;
 }
 )";
@@ -70,6 +73,7 @@ uniform bool u_tex_opaque; // sampling a 16-bit 565 surface: no alpha
 uniform bool u_fog_enable;
 uniform vec3 u_fog_color;
 in vec2 v_uv;
+in float v_q;
 in vec4 v_color;
 in float v_fog;
 out vec4 o_color;
@@ -90,7 +94,7 @@ void main() {
         return;
     }
     if (u_tex_enable) {
-        vec2 uv = v_uv;
+        vec2 uv = v_q != 0.0 ? v_uv / v_q : v_uv;
         if (u_tex_window.x > 0.0) {
             // Wrap or clamp inside the texture's own rectangle, never into neighbouring pixels.
             uv = mix(mod(uv, u_tex_window), clamp(uv, vec2(0.5), u_tex_window - 0.5), u_tex_clamp);
@@ -522,6 +526,8 @@ bool GeGl::init() {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(GlVertex), reinterpret_cast<void *>(offsetof(GlVertex, u)));
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(GlVertex), reinterpret_cast<void *>(offsetof(GlVertex, r)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, sizeof(GlVertex), reinterpret_cast<void *>(offsetof(GlVertex, q)));
     glGenVertexArrays(1, &present_vao_);
     glGenTextures(1, &scratch_texture_);
     // Bound whenever a draw samples nothing, so no framebuffer texture stays

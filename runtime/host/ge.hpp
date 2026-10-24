@@ -68,12 +68,14 @@ private:
         float w{1.0f};
         float u{}, v{};
         float r{}, g{}, b{}, a{};
+        float q{1.0f};
     };
     // Clip-space vertex (drawing space directly in through mode).
     struct ClipVertex {
         float cx{}, cy{}, cz{}, cw{1.0f};
         float u{}, v{};
         float r{}, g{}, b{}, a{};
+        float q{1.0f};
     };
     struct Layout {
         std::uint32_t tc{}, col{}, nrm{}, pos{}, weight{}, idx{};
@@ -94,6 +96,7 @@ private:
     void light_vertex(const float pos[3], const float normal[3], float color[4]) const;
 
     void draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c);
+    void draw_line(const ClipVertex &a, const ClipVertex &b);
     void raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c);
     void draw_sprite(const Vertex &a, const Vertex &b);
     void emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c);

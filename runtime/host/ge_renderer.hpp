@@ -13,6 +13,7 @@ struct GlVertex {
     float x, y, z, w;   // drawing-space pixels, depth 0..65535, clip w
     float u, v;         // texels
     std::uint8_t r, g, b, a;
+    float q{1.0f};      // projective texture divisor: the texel is (u, v) / q per pixel
 };
 
 // A rectangle copied by a GE block transfer.

@@ -398,6 +398,7 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
     float pos[3] = {0, 0, 0}, nrm[3] = {0, 0, 1}, uv[2] = {0, 0}, col[4] = {0, 0, 0, 0};
     float weights[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     bool has_color = l.col >= 4u;
+    out.q = 1.0f;
 
     // Common case (no morphing, vertex data directly addressable): one switch
     // per attribute instead of one per component.
@@ -597,12 +598,18 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
         const std::uint32_t source = (regs_[kTexMapMode] >> 8u) & 3u;
         float in[3] = {model[0], model[1], model[2]};
         if (source == 1u) { in[0] = uv[0]; in[1] = uv[1]; in[2] = 0.0f; }
-        else if (source >= 2u) { in[0] = normal[0]; in[1] = normal[1]; in[2] = normal[2]; }
+        else if (source >= 2u) {
+            in[0] = normal[0]; in[1] = normal[1]; in[2] = normal[2];
+            // Mode 2 normalizes; a zero normal stays zero.
+            const float len2 = in[0] * in[0] + in[1] * in[1] + in[2] * in[2];
+            if (source == 2u && len2 > 0.0f) for (float &c : in) c /= std::sqrt(len2);
+        }
         float projected[3];
         transform43(tgen_, in, projected);
-        const float q = projected[2] != 0.0f ? projected[2] : 1.0f;
-        s = projected[0] / q;
-        t = projected[1] / q;
+        // Divided per pixel: dividing here would interpolate s/q linearly.
+        s = projected[0];
+        t = projected[1];
+        out.q = projected[2];
     } else {
         s = (world_n[0] + 1.0f) * 0.5f;
         t = (world_n[1] + 1.0f) * 0.5f;
@@ -701,6 +708,9 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
         const float inv_w = 1.0f / cv.cw;
         v.x = cv.cx * inv_w * viewport_[0] + viewport_[3];
         v.y = cv.cy * inv_w * viewport_[1] + viewport_[4];
+        // The GE rasterizes at 1/16 pixel.
+        v.x = std::round(v.x * 16.0f) / 16.0f;
+        v.y = std::round(v.y * 16.0f) / 16.0f;
         v.z = cv.cz * inv_w * viewport_[2] + viewport_[5];
         v.w = cv.cw;
     }
@@ -710,6 +720,7 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
     v.g = cv.g;
     v.b = cv.b;
     v.a = cv.a;
+    v.q = cv.q;
     return v;
 }
 
@@ -864,7 +875,7 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
             const Vertex v = to_screen(cv);
             scratch_screen_[i] = GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
                                           static_cast<std::uint8_t>(clamp255(v.r)), static_cast<std::uint8_t>(clamp255(v.g)),
-                                          static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a))};
+                                          static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a)), v.q};
         }
         const bool flat = (regs_[kShadeMode] & 1u) == 0u;
         // Each decoded vertex enters the GL batch once, the first time a kept triangle uses it.
@@ -941,8 +952,59 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
             emit_sprite(v, w);
         }
         break;
-    default: // lines: not rasterized yet
+    case 1: // lines
+        for (std::uint32_t i = 0; i + 1u < count; i += 2u) draw_line(vert(i), vert(i + 1u));
         break;
+    case 2: // line strip
+        for (std::uint32_t i = 1; i < count; ++i) draw_line(vert(i - 1u), vert(i));
+        break;
+    default:
+        break;
+    }
+}
+
+// One pixel per step of the major axis, the minor coordinate floored at the
+// pixel center; the pixel holding the end vertex is left for the next segment.
+// Each pixel is drawn as a 1x1 sprite, so both renderers share this path.
+void Ge::draw_line(const ClipVertex &ca, const ClipVertex &cb) {
+    constexpr float kEpsilon = 1e-4f;
+    if (!layout_.through && (ca.cw < kEpsilon || cb.cw < kEpsilon || ca.cz + ca.cw < 0.0f || cb.cz + cb.cw < 0.0f)) return;
+    const Vertex a = to_screen(ca), b = to_screen(cb);
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    if (dx == 0.0f && dy == 0.0f) return;
+    const bool x_major = std::fabs(dx) > std::fabs(dy);
+    const float a0 = x_major ? a.x : a.y, a1 = x_major ? b.x : b.y;
+    const float b0 = x_major ? a.y : a.x, b1 = x_major ? b.y : b.x;
+    const int dir = a1 >= a0 ? 1 : -1;
+    // Pixels whose centers lie in [a0, a1) along the major axis.
+    const int first = dir > 0 ? static_cast<int>(std::ceil(a0 - 0.5f)) : static_cast<int>(std::floor(a0 - 0.5f));
+    const int last = dir > 0 ? static_cast<int>(std::ceil(a1 - 0.5f)) : static_cast<int>(std::floor(a1 - 0.5f));
+    const bool gouraud = (regs_[kShadeMode] & 1u) != 0u;
+    const float iwa = 1.0f / a.w, iwb = 1.0f / b.w;
+    for (int c = first; c != last; c += dir) {
+        const float center = static_cast<float>(c) + 0.5f;
+        const float t = std::clamp((center - a0) / (a1 - a0), 0.0f, 1.0f);
+        const int minor = static_cast<int>(std::floor(b0 + (b1 - b0) * t));
+        Vertex p;
+        p.x = static_cast<float>(x_major ? c : minor);
+        p.y = static_cast<float>(x_major ? minor : c);
+        p.z = a.z + (b.z - a.z) * t;
+        p.w = 1.0f;
+        // Texture coordinates are perspective-correct and divided by q here.
+        const float iw = iwa + (iwb - iwa) * t;
+        const float q = (a.q * iwa + (b.q * iwb - a.q * iwa) * t);
+        const float scale = q != 0.0f ? 1.0f / q : 1.0f / iw;
+        p.u = (a.u * iwa + (b.u * iwb - a.u * iwa) * t) * scale;
+        p.v = (a.v * iwa + (b.v * iwb - a.v * iwa) * t) * scale;
+        const Vertex &col = b;
+        p.r = gouraud ? a.r + (b.r - a.r) * t : col.r;
+        p.g = gouraud ? a.g + (b.g - a.g) * t : col.g;
+        p.b = gouraud ? a.b + (b.b - a.b) * t : col.b;
+        p.a = gouraud ? a.a + (b.a - a.a) * t : col.a;
+        Vertex e = p;
+        e.x += 1.0f;
+        e.y += 1.0f;
+        emit_sprite(p, e);
     }
 }
 
@@ -969,7 +1031,7 @@ void Ge::draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVerte
             auto lerp = [t](float x, float y) { return x + (y - x) * t; };
             out[out_count++] = ClipVertex{lerp(p.cx, q.cx), lerp(p.cy, q.cy), lerp(p.cz, q.cz), lerp(p.cw, q.cw),
                                           lerp(p.u, q.u), lerp(p.v, q.v), lerp(p.r, q.r), lerp(p.g, q.g),
-                                          lerp(p.b, q.b), lerp(p.a, q.a)};
+                                          lerp(p.b, q.b), lerp(p.a, q.a), lerp(p.q, q.q)};
         }
     }
     if (out_count < 3u) return;
@@ -1009,9 +1071,10 @@ void Ge::raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
             const float z = w0 * a.z + w1 * b.z + w2 * c.z;
             float u, v;
             if (perspective) {
-                const float q = w0 * iwa + w1 * iwb + w2 * iwc;
-                u = (w0 * a.u * iwa + w1 * b.u * iwb + w2 * c.u * iwc) / q;
-                v = (w0 * a.v * iwa + w1 * b.v * iwb + w2 * c.v * iwc) / q;
+                const float tq = w0 * a.q * iwa + w1 * b.q * iwb + w2 * c.q * iwc;
+                const float inv_q = tq != 0.0f ? 1.0f / tq : 1.0f / (w0 * iwa + w1 * iwb + w2 * iwc);
+                u = (w0 * a.u * iwa + w1 * b.u * iwb + w2 * c.u * iwc) * inv_q;
+                v = (w0 * a.v * iwa + w1 * b.v * iwb + w2 * c.v * iwc) * inv_q;
             } else {
                 u = w0 * a.u + w1 * b.u + w2 * c.u;
                 v = w0 * a.v + w1 * b.v + w2 * c.v;
@@ -1713,12 +1776,22 @@ void Ge::emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
         const Vertex &col = flat ? c : v;
         return GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
                         static_cast<std::uint8_t>(clamp255(col.r)), static_cast<std::uint8_t>(clamp255(col.g)),
-                        static_cast<std::uint8_t>(clamp255(col.b)), static_cast<std::uint8_t>(clamp255(col.a))};
+                        static_cast<std::uint8_t>(clamp255(col.b)), static_cast<std::uint8_t>(clamp255(col.a)), v.q};
     };
     gl_->triangle(convert(a), convert(b), convert(c));
 }
 
-void Ge::emit_sprite(const Vertex &a, const Vertex &b) {
+void Ge::emit_sprite(const Vertex &a_in, const Vertex &b_in) {
+    // Sprites and points have no per-pixel q: divide at the corners.
+    auto divided = [](Vertex v) {
+        if (v.q != 1.0f && v.q != 0.0f) {
+            v.u /= v.q;
+            v.v /= v.q;
+        }
+        v.q = 1.0f;
+        return v;
+    };
+    const Vertex a = divided(a_in), b = divided(b_in);
     if (gl_ == nullptr) {
         draw_sprite(a, b);
         return;
