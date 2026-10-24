@@ -217,6 +217,7 @@ void Kernel::install_fallback(const psprecomp::PspImport &import) {
     registered_.insert(key);
     const std::string name = import.library + "::" +
         rt_.nids().resolve(import.library, import.nid).value_or(hex(import.nid));
+    unimplemented_imports_.push_back(name);
     auto stub = hle_stubs_.find(name);
     if (stub == hle_stubs_.end()) stub = hle_stubs_.find(import.library + "::" + hex(import.nid));
     if (stub == hle_stubs_.end()) {

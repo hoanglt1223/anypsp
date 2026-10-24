@@ -188,6 +188,17 @@ int main(int argc, char **argv) {
         kernel->set_flash_root(std::filesystem::path(disc) / "flash0");
         kernel->add_main_module(*module.info, module.base, module.end - module.base);
         kernel->install(imports);
+        if (const auto &missing = kernel->unimplemented_imports(); !missing.empty()) {
+            std::map<std::string, std::vector<std::string>> by_library;
+            for (const auto &name : missing) by_library[name.substr(0, name.find("::"))].push_back(name.substr(name.find("::") + 2));
+            std::cout << "[anypsp] " << missing.size() << " of " << imports.size()
+                      << " imports have no HLE implementation (calling one stops the run):\n";
+            for (const auto &[library, names] : by_library) {
+                std::cout << "[anypsp]   " << library << " (" << names.size() << "):";
+                for (const auto &name : names) std::cout << " " << name;
+                std::cout << "\n";
+            }
+        }
         kernel->boot(module.entry, module.info->gp, guest_path);
         std::cout << "[anypsp] " << module.info->name << " at " << psprecomp::hex32(module.base) << "-"
                   << psprecomp::hex32(module.end) << ", " << imports.size() << " imports, " << module.relocations.applied

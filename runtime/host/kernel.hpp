@@ -232,6 +232,8 @@ public:
     // Imported functions with no HLE implementation stop the guest, naming the
     // function, unless listed here ("Library::name" or "Library::0xNID" -> return value).
     void set_hle_stubs(std::map<std::string, std::uint32_t> stubs) { hle_stubs_ = std::move(stubs); }
+    // Imports bound so far with no HLE implementation ("Library::name"), stubbed or not.
+    [[nodiscard]] const std::vector<std::string> &unimplemented_imports() const noexcept { return unimplemented_imports_; }
     [[nodiscard]] std::uint64_t now_us() const;
     [[nodiscard]] Ge &ge() noexcept { return *ge_; }
     // Runs display lists (on a GE thread once started) and other GE-side work.
@@ -605,6 +607,7 @@ private:
     std::function<void(std::string_view)> test_output_;
     std::function<void()> screenshot_sink_;
     std::map<std::string, std::uint32_t> hle_stubs_;
+    std::vector<std::string> unimplemented_imports_;
 };
 
 } // namespace pspweb
