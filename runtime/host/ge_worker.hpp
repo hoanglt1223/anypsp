@@ -34,6 +34,7 @@ public:
     // once.  `canvas` (web only) names the canvas whose rendering moves to the thread.
     void start(std::function<void()> init, const char *canvas = nullptr);
     [[nodiscard]] bool threaded() const noexcept { return threaded_; }
+    [[nodiscard]] bool on_ge_thread() const noexcept { return threaded_ && std::this_thread::get_id() == thread_id_.load(); }
 
     // Guest side.
     std::uint32_t enqueue(std::uint32_t list, std::uint32_t stall, std::int32_t callback = -1);
@@ -71,6 +72,7 @@ private:
 #endif
     std::function<void()> init_;
     std::atomic<bool> started_{false};
+    std::atomic<std::thread::id> thread_id_{};
 
     std::uint32_t queued_{};                 // guest side: newest list id
     std::atomic<std::uint32_t> completed_{}; // newest finished list id

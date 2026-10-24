@@ -65,10 +65,22 @@ constexpr std::uint32_t kEventWaitClear = 0x20u;
 
 Kernel *g_kernel = nullptr;
 psprecomp::Runtime *g_runtime = nullptr;
-Clock::time_point g_slice_deadline{};
+std::int64_t g_slice_deadline_ns{};
+bool g_deterministic = false;
+std::int64_t g_virtual_ns = 0;
+// Guest time one heartbeat (kHeartbeatInterval dispatches) stands for in deterministic mode.
+constexpr std::int64_t kVirtualNsPerHeartbeat = 100'000;
+// 2026-01-01 00:00:00 UTC.
+constexpr std::uint64_t kDeterministicEpochUs = 1767225600ull * 1000000ull;
+
+std::int64_t real_now_ns() {
+    if (g_deterministic) return g_virtual_ns;
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+}
 
 void slice_heartbeat(std::uint64_t, std::uint32_t) {
-    if (Clock::now() >= g_slice_deadline) g_runtime->stop("slice");
+    if (g_deterministic) g_virtual_ns += kVirtualNsPerHeartbeat;
+    if (real_now_ns() >= g_slice_deadline_ns) g_runtime->stop("slice");
     else if (g_kernel->interrupt_pending()) g_runtime->stop("interrupt");
 }
 
@@ -84,10 +96,6 @@ std::string hex(std::uint32_t value) {
 
 std::uint32_t align_up(std::uint32_t value, std::uint32_t alignment) {
     return (value + alignment - 1u) & ~(alignment - 1u);
-}
-
-std::int64_t real_now_ns() {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
 }
 
 std::string lower(std::string text) {
@@ -143,6 +151,18 @@ Kernel::Kernel(psprecomp::Runtime &runtime)
 void Kernel::set_roots(std::filesystem::path disc_root, std::filesystem::path memstick_root) {
     disc_root_ = std::move(disc_root);
     memstick_root_ = std::move(memstick_root);
+}
+
+void Kernel::set_deterministic(bool on) {
+    g_deterministic = on;
+    g_virtual_ns = 0;
+    frame_real_start_ns_ = real_now_ns();
+}
+
+std::uint64_t Kernel::unix_time_us() const {
+    if (g_deterministic) return kDeterministicEpochUs + now_us();
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
 std::uint64_t Kernel::now_us() const {
@@ -381,6 +401,8 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
             if (size == 0u) return kInvalidSize;
             if (!memory.contains(dst, 1u) || !memory.contains(src, 1u)) return kInvalidPointer;
             if (dst + size >= 0x80000000u || src + size >= 0x80000000u || size >= 0x80000000u) return kPrivRequired;
+            memory.note_raw_access(src, size, false);
+            memory.note_raw_access(dst, size, true);
             std::uint8_t *to = memory.raw_pointer(dst, size);
             const std::uint8_t *from = memory.raw_pointer(src, size);
             if (to != nullptr && from != nullptr) std::memmove(to, from, size);
@@ -745,8 +767,9 @@ bool Kernel::frame(double budget_ms) {
     }
     run_interrupts(kVblankInterrupt);
 
-    const auto deadline = Clock::now() + std::chrono::microseconds(static_cast<std::int64_t>(budget_ms * 1000.0));
-    while (!halted_ && Clock::now() < deadline) {
+    const std::int64_t deadline = real_now_ns() + static_cast<std::int64_t>(budget_ms * 1e6);
+    while (!halted_ && real_now_ns() < deadline) {
+        if (g_deterministic) g_virtual_ns += 1000; // scheduler passes that run no guest code still end the frame
         poll_waits();
         run_alarms();
         run_ge_callbacks();
@@ -780,7 +803,7 @@ bool Kernel::frame(double budget_ms) {
             load_thread(*next);
         }
 
-        g_slice_deadline = deadline;
+        g_slice_deadline_ns = deadline;
         try {
             rt_.run(rt_.cpu().pc, std::numeric_limits<std::uint64_t>::max());
         } catch (const std::exception &e) {
@@ -1752,13 +1775,27 @@ void Kernel::read_framebuffer(std::uint8_t *rgba) const {
 // UtilsForUser / Kernel_Library
 
 void Kernel::sceKernelLibcTime(Ctx &ctx) {
-    const auto now = static_cast<std::uint32_t>(std::time(nullptr));
+    const auto now = static_cast<std::uint32_t>(unix_time_us() / 1000000u);
     if (ctx.gpr[4] != 0u) rt_.memory().store32(ctx.gpr[4], now);
     finish(ctx, now);
 }
 
+void Kernel::track_gpu_vram() {
+    rt_.memory().set_vram_read_hook(
+        [](void *self, std::uint32_t offset, std::uint32_t length) {
+            auto &kernel = *static_cast<Kernel *>(self);
+            if (!kernel.ge_worker_->threaded() || kernel.ge_worker_->on_ge_thread()) {
+                kernel.ge_->sync_vram_for_cpu(offset, length);
+                return;
+            }
+            // Behind every list queued so far, as the guest synchronizes before reading what the GE drew.
+            kernel.ge_worker_->call([&] { kernel.ge_->sync_vram_for_cpu(offset, length); });
+        },
+        this);
+}
+
 void Kernel::sceKernelLibcGettimeofday(Ctx &ctx) {
-    const std::uint64_t now = static_cast<std::uint64_t>(std::time(nullptr)) * 1000000u + now_us() % 1000000u;
+    const std::uint64_t now = unix_time_us() / 1000000u * 1000000u + now_us() % 1000000u;
     if (ctx.gpr[4] != 0u) {
         rt_.memory().store32(ctx.gpr[4], static_cast<std::uint32_t>(now / 1000000u));
         rt_.memory().store32(ctx.gpr[4] + 4u, static_cast<std::uint32_t>(now % 1000000u));
@@ -1768,6 +1805,8 @@ void Kernel::sceKernelLibcGettimeofday(Ctx &ctx) {
 
 void Kernel::sceKernelMemcpy(Ctx &ctx) {
     const std::uint32_t dst = ctx.gpr[4], src = ctx.gpr[5], size = ctx.gpr[6];
+    rt_.memory().note_raw_access(src, size, false);
+    rt_.memory().note_raw_access(dst, size, true);
     std::uint8_t *to = rt_.memory().raw_pointer(dst, size);
     const std::uint8_t *from = rt_.memory().raw_pointer(src, size);
     if (to != nullptr && from != nullptr) {
@@ -1783,6 +1822,7 @@ void Kernel::sceKernelMemcpy(Ctx &ctx) {
 void Kernel::sceKernelMemset(Ctx &ctx) {
     const std::uint32_t dst = ctx.gpr[4], size = ctx.gpr[6];
     const auto value = static_cast<std::uint8_t>(ctx.gpr[5]);
+    rt_.memory().note_raw_access(dst, size, true);
     if (std::uint8_t *to = rt_.memory().raw_pointer(dst, size); to != nullptr) {
         std::memset(to, value, size);
     } else {

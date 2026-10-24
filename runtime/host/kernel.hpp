@@ -255,9 +255,17 @@ public:
     // Imports bound so far with no HLE implementation ("Library::name"), stubbed or not.
     [[nodiscard]] const std::vector<std::string> &unimplemented_imports() const noexcept { return unimplemented_imports_; }
     [[nodiscard]] std::uint64_t now_us() const;
+    // Deterministic timing: guest time and time slices follow executed guest
+    // code instead of the host clock, and the wall clock starts at a fixed date,
+    // so a scripted run repeats exactly.  Call before boot.
+    void set_deterministic(bool on);
+    // Seconds-resolution calendar time for the guest (fixed epoch when deterministic).
+    [[nodiscard]] std::uint64_t unix_time_us() const;
     [[nodiscard]] Ge &ge() noexcept { return *ge_; }
     // Runs display lists (on a GE thread once started) and other GE-side work.
     [[nodiscard]] GeWorker &ge_worker() noexcept { return *ge_worker_; }
+    // Routes CPU accesses to GPU-drawn VRAM pages to the GE, for a GL renderer in lazy coherence.
+    void track_gpu_vram();
     // Total milliseconds the guest has spent waiting for the GE.
     [[nodiscard]] double ge_wait_ms() const noexcept { return ge_wait_ms_; }
     // Serves disc0:/umd0: from a streamed manifest instead of host files.

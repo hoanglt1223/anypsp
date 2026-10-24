@@ -463,8 +463,7 @@ void Kernel::sceKernelLibcClock(Ctx &ctx) { finish(ctx, static_cast<std::uint32_
 
 void Kernel::sceRtcGetCurrentTick(Ctx &ctx) {
     constexpr std::uint64_t kUnixEpochTick = 62135596800000000ull;
-    static const std::uint64_t base = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count()) - now_us();
+    static const std::uint64_t base = unix_time_us() - now_us();
     const std::uint64_t tick = kUnixEpochTick + base + now_us();
     if (ctx.gpr[4] != 0u) {
         rt_.memory().store32(ctx.gpr[4], static_cast<std::uint32_t>(tick));
@@ -476,7 +475,7 @@ void Kernel::sceRtcGetCurrentTick(Ctx &ctx) {
 void Kernel::sceRtcGetTickResolution(Ctx &ctx) { finish(ctx, 1000000u); }
 
 void Kernel::sceRtcGetCurrentClockLocalTime(Ctx &ctx) {
-    const std::time_t now = std::time(nullptr);
+    const auto now = static_cast<std::time_t>(unix_time_us() / 1000000u);
     std::tm local{};
 #if defined(_WIN32)
     localtime_s(&local, &now);

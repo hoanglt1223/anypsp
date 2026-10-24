@@ -58,6 +58,10 @@ public:
     void restore_context(const std::vector<std::uint32_t> &commands);
     // Routes primitives to the GL backend instead of the software rasterizer.
     void set_gl(GeRenderer *gl);
+    // Writes GPU-only pixels in VRAM bytes [offset, offset + length) back before the CPU uses them.
+    void sync_vram_for_cpu(std::uint32_t offset, std::uint32_t length) {
+        if (gl_ != nullptr) gl_->prepare_vram_read(0x04000000u + offset, length);
+    }
     // Marks guest VRAM bytes as rewritten so cached textures there revalidate.
     void touch_vram(std::uint32_t address, std::uint32_t bytes);
 

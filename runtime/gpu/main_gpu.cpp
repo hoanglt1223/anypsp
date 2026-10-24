@@ -55,10 +55,10 @@ constexpr bool kWindowByDefault = false;
 const char *const kUsage =
     "usage: anypsp-<runner>-gpu <game.iso|disc folder|EBOOT.BIN|module.prx> [--window|--headless] [--fullscreen]\n"
     "         [--mute] [--wav file.wav] [--keymap file.ini] [--write-input file.ini] [--cache dir]\n"
-    "         [--renderer gl|soft] [--scale n] [--coherent 0|1]\n"
+    "         [--renderer gl|soft] [--scale n] [--coherent lazy|1|0]\n"
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
-    "         [--input frame:buttons,...] [--hle-stubs file]\n"
+    "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
@@ -70,7 +70,10 @@ const char *const kUsage =
     "--wav records the audio output. --frames-dir writes frame_NNNNNN.png every --png-every\n"
     "frames (default 1); --hashes writes '<frame> <hash>' lines for every frame; --screenshot writes the\n"
     "picture at the program's last emulator: screenshot request; --dump writes the last frame.\n"
-    "--coherent 1 (default) writes GPU pixels back to guest VRAM after every display list.\n"
+    "--coherent lazy (default) writes GPU pixels back to guest VRAM only when the CPU touches them and\n"
+    "reloads VRAM the CPU wrote into the GPU copy; 1 writes back after every display list (slow, for\n"
+    "debugging); 0 never writes back.\n"
+    "--deterministic drives guest time from executed code instead of the host clock, so scripted runs repeat.\n"
     "--input holds the given sceCtrl button mask (hex) from that frame on. --hle-stubs lists imports\n"
     "without HLE that return a fixed value: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
@@ -142,8 +145,8 @@ struct Options {
     std::map<long, std::uint32_t> input;
     long frames = 600, png_every = 1;
     int scale = 1;
-    bool coherent = true;
-    bool window = kWindowByDefault, fullscreen = false, mute = false;
+    pspweb::GeGl::Coherence coherence = pspweb::GeGl::Coherence::Lazy;
+    bool window = kWindowByDefault, fullscreen = false, mute = false, deterministic = false;
     bool frames_set = false, scale_set = false, disc_set = false, ms_set = false, guest_set = false;
 };
 
@@ -171,8 +174,8 @@ Options parse(int argc, char **argv) {
             --i;
             continue;
         }
-        if (flag == "--fullscreen" || flag == "--mute") {
-            (flag == "--mute" ? o.mute : o.fullscreen) = true;
+        if (flag == "--fullscreen" || flag == "--mute" || flag == "--deterministic") {
+            (flag == "--mute" ? o.mute : flag == "--deterministic" ? o.deterministic : o.fullscreen) = true;
             --i;
             continue;
         }
@@ -197,8 +200,10 @@ Options parse(int argc, char **argv) {
         else if (flag == "--png-every") o.png_every = parse_positive(flag, value);
         else if (flag == "--scale") o.scale = static_cast<int>(std::min(parse_positive(flag, value), 8L)), o.scale_set = true;
         else if (flag == "--coherent") {
-            if (value != "0" && value != "1") throw std::invalid_argument("--coherent takes 0 or 1");
-            o.coherent = value == "1";
+            if (value == "lazy") o.coherence = pspweb::GeGl::Coherence::Lazy;
+            else if (value == "1") o.coherence = pspweb::GeGl::Coherence::Full;
+            else if (value == "0") o.coherence = pspweb::GeGl::Coherence::Off;
+            else throw std::invalid_argument("--coherent takes lazy, 1 or 0");
         } else if (flag == "--renderer") {
             if (value != "gl" && value != "soft") throw std::invalid_argument("--renderer takes gl or soft");
             o.renderer = value;
@@ -295,11 +300,13 @@ int main(int argc, char **argv) {
         // Declared before the kernel so the renderer outlives the GE that points at it.
         std::unique_ptr<anypsp::gpu::GlHost> gl;
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
+        if (o.deterministic) kernel->set_deterministic(true);
         if (!o.hle_stubs.empty()) kernel->set_hle_stubs(read_hle_stubs(o.hle_stubs));
         if (o.renderer == "gl") {
             gl = std::make_unique<anypsp::gpu::GlHost>(rt.memory());
             gl->start(o.scale, o.window ? "AnyPSP - " + module.info->name : std::string());
-            gl->renderer().set_coherent(o.coherent);
+            gl->renderer().set_coherence(o.coherence);
+            if (o.coherence == pspweb::GeGl::Coherence::Lazy) kernel->track_gpu_vram();
             kernel->ge().set_gl(&gl->renderer());
             std::cout << "[anypsp] GL renderer: " << gl->device() << ", scale " << gl->scale() << "\n";
         } else {

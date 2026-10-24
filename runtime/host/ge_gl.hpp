@@ -23,6 +23,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -38,11 +39,18 @@ public:
 
     // Compiles shaders; a GL ES 3 (or desktop GL 3.3 core) context must be current.
     bool init();
-    // Keeps guest VRAM the truth between display lists: GPU pixels are written
-    // back when a list ends, and surfaces whose VRAM the CPU changed meanwhile
-    // are reloaded when the next one starts. Needed when the guest reads or
-    // writes framebuffers with the CPU (tests, some games); costs a readback per list.
-    void set_coherent(bool on) { coherent_ = on; }
+    // How guest VRAM follows the GPU surfaces outside block transfers, texture
+    // decodes and reinterpretation (which always synchronize):
+    //  - Off:  never; CPU reads of framebuffers see stale pixels.
+    //  - Lazy: GuestMemory page tracking.  GPU-drawn pages are downloaded when
+    //          the CPU touches them; pages the CPU wrote are reloaded into their
+    //          surfaces when the next list starts or the frame is presented.
+    //          Needs GuestMemory::set_vram_read_hook routed to prepare_vram_read.
+    //  - Full: GPU pixels are written back after every list and changed VRAM is
+    //          found by hashing; a readback per list, kept for debugging.
+    enum class Coherence { Off, Lazy, Full };
+    void set_coherence(Coherence mode) { coherence_ = mode; }
+    [[nodiscard]] Coherence coherence() const noexcept { return coherence_; }
     void list_started() override;
     void list_finished() override;
 
@@ -274,9 +282,17 @@ private:
     double flush_ms_{};
     std::vector<std::uint8_t> pixels_;
     std::function<void(std::uint32_t, std::uint32_t)> vram_write_hook_;
-    bool coherent_{};
+    Coherence coherence_{Coherence::Off};
     [[nodiscard]] std::uint64_t hash_vram(const Surface &s) const;
     void reload_changed_vram();
+    // Lazy coherence: GuestMemory page bits for VRAM bytes [begin, end).
+    void mark_vram_pages(std::uint32_t begin, std::uint32_t end, std::uint8_t bits);
+    // Rebuilds every page's GPU-dirty and watched bits from the surfaces.
+    void refresh_page_flags();
+    // Queues reloads of surface rows on pages the CPU wrote.
+    void apply_cpu_writes();
+    bool page_flags_stale_{};
+    std::array<bool, psprecomp::GuestMemory::kVramPages> cpu_written_{};
 };
 
 } // namespace pspweb

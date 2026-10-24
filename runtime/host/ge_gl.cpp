@@ -364,12 +364,23 @@ void GeGl::mark_drawn(Surface &s, const Rect &r) {
     s.content.add(c);
     s.gpu_dirty.add(c);
     if (s.rows.size() < s.height) s.rows.resize(s.height);
+    bool dirtier = false; // some pixel was not GPU-dirty yet, so its page may not be marked
     for (int y = c.y0; y <= c.y1; ++y) {
         auto &row = s.rows[static_cast<std::size_t>(y)];
         if (row.cx1 < row.cx0) { row.cx0 = c.x0; row.cx1 = c.x1; }
         else { row.cx0 = std::min(row.cx0, c.x0); row.cx1 = std::max(row.cx1, c.x1); }
-        if (row.dx1 < row.dx0) { row.dx0 = c.x0; row.dx1 = c.x1; }
-        else { row.dx0 = std::min(row.dx0, c.x0); row.dx1 = std::max(row.dx1, c.x1); }
+        if (row.dx1 < row.dx0) { row.dx0 = c.x0; row.dx1 = c.x1; dirtier = true; }
+        else {
+            dirtier = dirtier || c.x0 < row.dx0 || c.x1 > row.dx1;
+            row.dx0 = std::min(row.dx0, c.x0);
+            row.dx1 = std::max(row.dx1, c.x1);
+        }
+    }
+    if (coherence_ == Coherence::Lazy && dirtier) {
+        const std::uint32_t bpp = bpp_of(s.format), rb = row_bytes(s);
+        mark_vram_pages(s.offset + static_cast<std::uint32_t>(c.y0) * rb + static_cast<std::uint32_t>(c.x0) * bpp,
+                        s.offset + static_cast<std::uint32_t>(c.y1) * rb + static_cast<std::uint32_t>(c.x1 + 1) * bpp,
+                        psprecomp::GuestMemory::kVramGpuDirty | psprecomp::GuestMemory::kVramWatched);
     }
 }
 
@@ -586,6 +597,7 @@ int GeGl::set_render_scale(int scale) {
     surfaces_.clear();
     current_ = nullptr;
     scale_ = scale;
+    if (coherence_ == Coherence::Lazy) refresh_page_flags();
     reset_cache();
     return scale_;
 }
@@ -645,6 +657,7 @@ bool GeGl::is_gpu_target(std::uint32_t address, std::uint32_t format, std::uint3
 void GeGl::allocate(Surface &s, std::uint32_t height) {
     s.height = std::clamp(height, 1u, kMaxSurfaceHeight);
     s.rows.resize(s.height);
+    if (coherence_ == Coherence::Lazy) mark_vram_pages(s.offset, surface_end(s), psprecomp::GuestMemory::kVramWatched);
     glGenTextures(1, &s.color);
     glBindTexture(GL_TEXTURE_2D, s.color);
     const auto width = static_cast<GLsizei>(s.stride) * scale_, height_px = static_cast<GLsizei>(s.height) * scale_;
@@ -725,6 +738,7 @@ void GeGl::absorb(Surface &into, Surface &from) {
     into.stencil_bits |= from.stencil_bits;
     into.alpha_bits |= from.alpha_bits;
     from.alive = false;
+    page_flags_stale_ = true;
     glDeleteFramebuffers(1, &from.fbo);
     glDeleteTextures(1, &from.color);
     glDeleteRenderbuffers(1, &from.depth);
@@ -779,6 +793,7 @@ void GeGl::download(Surface &s) {
     std::uint8_t *vram = memory_.raw_pointer(0x04000000u, kVramSize);
     const Rect r = s.gpu_dirty.clip(Rect{0, 0, static_cast<int>(s.stride) - 1, static_cast<int>(s.height) - 1});
     s.gpu_dirty = Rect{};
+    page_flags_stale_ = true;
     std::vector<std::pair<int, int>> spans(s.rows.size(), {0, -1});
     for (std::size_t y = 0; y < s.rows.size(); ++y) {
         spans[y] = {s.rows[y].dx0, s.rows[y].dx1};
@@ -1102,6 +1117,9 @@ bool GeGl::prepare_vram_read(std::uint32_t address, std::uint32_t bytes) {
             downloaded = true;
         }
     }
+    // Also clears pages left marked by surfaces that were retired or absorbed,
+    // so the CPU stops calling in for them.
+    if (coherence_ == Coherence::Lazy && page_flags_stale_) refresh_page_flags();
     return downloaded;
 }
 
@@ -1544,7 +1562,10 @@ void GeGl::after_transfer(const TransferRect &dst) {
             }
             partial.add(std::max(x0, span.cx0), row, std::min(x1, span.cx1), row);
         });
-        if (retired) recompute_bounds(s);
+        if (retired) {
+            recompute_bounds(s);
+            page_flags_stale_ = true;
+        }
         if (!partial.empty()) {
             // One rectangle per copy keeps the number of GL uploads low.
             if (!s.pending_uploads.empty()) {
@@ -1564,7 +1585,9 @@ void GeGl::after_transfer(const TransferRect &dst) {
 void GeGl::present(std::uint32_t fb_address, std::uint32_t stride, std::uint32_t format,
                    GLuint out_fbo, int out_width, int out_height) {
     flush();
-    if (coherent_) reload_changed_vram(); // the CPU may have drawn since the last list (debug text)
+    // The CPU may have drawn since the last list (debug text).
+    if (coherence_ == Coherence::Full) reload_changed_vram();
+    else if (coherence_ == Coherence::Lazy) apply_cpu_writes();
     reset_cache(); // the code below drives GL directly
     constexpr std::uint32_t width = 480u, height = 272u;
     GLuint texture = 0u;
@@ -1642,7 +1665,73 @@ std::uint64_t GeGl::hash_vram(const Surface &s) const {
 }
 
 void GeGl::list_started() {
-    if (coherent_) reload_changed_vram();
+    if (coherence_ == Coherence::Full) reload_changed_vram();
+    else if (coherence_ == Coherence::Lazy) apply_cpu_writes();
+}
+
+void GeGl::mark_vram_pages(std::uint32_t begin, std::uint32_t end, std::uint8_t bits) {
+    using M = psprecomp::GuestMemory;
+    end = std::min(end, kVramSize);
+    if (begin >= end) return;
+    for (std::uint32_t page = begin >> M::kVramPageShift; page <= (end - 1u) >> M::kVramPageShift; ++page) {
+        const auto now = static_cast<std::uint8_t>(memory_.vram_page_state(page) & (M::kVramGpuDirty | M::kVramWatched));
+        if ((now | bits) != now) memory_.set_vram_page_state(page, static_cast<std::uint8_t>(now | bits));
+    }
+}
+
+void GeGl::refresh_page_flags() {
+    using M = psprecomp::GuestMemory;
+    std::array<std::uint8_t, M::kVramPages> want{};
+    auto mark = [&](std::uint32_t begin, std::uint32_t end, std::uint8_t bits) {
+        end = std::min(end, kVramSize);
+        if (begin >= end) return;
+        for (std::uint32_t page = begin >> M::kVramPageShift; page <= (end - 1u) >> M::kVramPageShift; ++page)
+            want[page] |= bits;
+    };
+    for (const auto &s : surfaces_) {
+        if (!s.alive) continue;
+        mark(s.offset, surface_end(s), M::kVramWatched);
+        if (s.gpu_dirty.empty()) continue;
+        const std::uint32_t bpp = bpp_of(s.format), rb = row_bytes(s);
+        for (std::size_t y = 0; y < s.rows.size(); ++y) {
+            const auto &row = s.rows[y];
+            if (row.dx1 < row.dx0) continue;
+            const std::uint32_t at = s.offset + static_cast<std::uint32_t>(y) * rb;
+            mark(at + static_cast<std::uint32_t>(row.dx0) * bpp, at + static_cast<std::uint32_t>(row.dx1 + 1) * bpp,
+                 M::kVramGpuDirty);
+        }
+    }
+    for (std::uint32_t page = 0; page < M::kVramPages; ++page)
+        if ((memory_.vram_page_state(page) & (M::kVramGpuDirty | M::kVramWatched)) != want[page])
+            memory_.set_vram_page_state(page, want[page]);
+    page_flags_stale_ = false;
+}
+
+void GeGl::apply_cpu_writes() {
+    using M = psprecomp::GuestMemory;
+    if (!memory_.take_vram_cpu_writes(cpu_written_)) return;
+    for (auto &s : surfaces_) {
+        if (!s.alive) continue;
+        const std::uint32_t rb = row_bytes(s), end = std::min(surface_end(s), kVramSize);
+        Rect rows;
+        auto queue = [&] {
+            if (rows.empty()) return;
+            if (batch_uses(s)) flush(); // draws recorded before the write must not see it
+            s.pending_uploads.push_back(rows);
+            rows = Rect{};
+        };
+        for (std::uint32_t page = s.offset >> M::kVramPageShift; s.offset < end && page <= (end - 1u) >> M::kVramPageShift; ++page) {
+            if (!cpu_written_[page]) {
+                queue();
+                continue;
+            }
+            const std::uint32_t from = std::max(page << M::kVramPageShift, s.offset) - s.offset;
+            const std::uint32_t to = std::min((page + 1u) << M::kVramPageShift, end) - s.offset; // exclusive
+            rows.add(0, static_cast<int>(from / rb), static_cast<int>(s.stride) - 1, static_cast<int>((to - 1u) / rb));
+        }
+        queue();
+        if (s.pending_uploads.size() > 64u) apply_pending_uploads(s);
+    }
 }
 
 void GeGl::reload_changed_vram() {
@@ -1654,8 +1743,12 @@ void GeGl::reload_changed_vram() {
 }
 
 void GeGl::list_finished() {
-    if (!coherent_) return;
-    flush();
+    if (coherence_ == Coherence::Off) return;
+    flush(); // draws mark their pages GPU-dirty only once issued
+    if (coherence_ == Coherence::Lazy) {
+        if (page_flags_stale_) refresh_page_flags();
+        return;
+    }
     for (auto &s : surfaces_) {
         if (!s.alive) continue;
         apply_pending_uploads(s);

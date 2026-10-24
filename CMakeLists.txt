@@ -32,6 +32,7 @@ add_executable(anypsp_tests
     tests/unit/loader_tests.cpp
     tests/unit/analysis_tests.cpp
     tests/unit/feedback_tests.cpp
+    tests/unit/vram_tracking_tests.cpp
 )
 target_include_directories(anypsp_tests PRIVATE tests/unit)
 target_link_libraries(anypsp_tests PRIVATE anypsp_analysis)

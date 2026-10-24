@@ -108,7 +108,7 @@ def lines(text):
     return result
 
 
-def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse):
+def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse, coherent=None):
     name = program.relative_to(TESTS).with_suffix("").as_posix()
     work = out_dir / name.replace("/", "_")
     work.mkdir(parents=True, exist_ok=True)
@@ -117,7 +117,8 @@ def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse):
         stale.unlink(missing_ok=True)
     try:
         result = subprocess.run([str(runner), str(program), "--renderer", renderer, "--frames", str(frames),
-                                 "--output", str(text), "--screenshot", str(shot)],
+                                 "--output", str(text), "--screenshot", str(shot)]
+                                + (["--coherent", coherent] if coherent else []),
                                 capture_output=True, text=True, cwd=work, timeout=timeout)
         log = (result.stdout + result.stderr).strip().splitlines()
     except subprocess.TimeoutExpired:
@@ -149,6 +150,7 @@ def main():
     parser.add_argument("--max-mse", type=float, default=0.0)
     parser.add_argument("--out", type=pathlib.Path, default=ROOT / "out" / "ge-screenshots")
     parser.add_argument("--json", type=pathlib.Path)
+    parser.add_argument("--coherent", choices=("lazy", "1", "0"), help="GL VRAM coherence (runner default: lazy)")
     args = parser.parse_args()
     args.out = args.out.resolve()
     args.runner = args.runner.resolve()
@@ -165,7 +167,7 @@ def main():
         return 77
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda p: run_one(args.runner, args.renderer, p, args.frames, args.timeout, args.out,
-                                                  args.max_mse), programs))
+                                                  args.max_mse, args.coherent), programs))
     for r in results:
         mse_text = "no screenshot" if r["mse"] is None else f"mse {r['mse']:.4f}"
         print(f"{'PASS' if r['passed'] else 'FAIL'} {r['test']}: {mse_text}, text {'ok' if r['text_matches'] else 'differs'}"

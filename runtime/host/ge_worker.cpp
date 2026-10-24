@@ -66,6 +66,7 @@ void GeWorker::start(std::function<void()> init, const char *canvas) {
 #else
     (void)canvas;
     thread_ = std::thread([this] {
+        thread_id_ = std::this_thread::get_id();
         init_();
         started_.store(true);
         loop();
@@ -191,6 +192,7 @@ void GeWorker::loop() {
 #ifdef __EMSCRIPTEN__
 void *GeWorker::thread_main(void *self_pointer) {
     auto *self = static_cast<GeWorker *>(self_pointer);
+    self->thread_id_ = std::this_thread::get_id();
     self->init_();
     self->started_.store(true);
     // A worker only shows WebGL frames after returning to its event loop, so

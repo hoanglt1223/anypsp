@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -241,6 +243,27 @@ public:
     void copy_out(std::uint32_t address, std::span<std::uint8_t> data) const;
     void zero(std::uint32_t address, std::size_t length);
 
+    // VRAM page tracking for a GPU renderer that keeps framebuffers outside
+    // guest VRAM.  While a read hook is set, a CPU-side access (guest code,
+    // HLE copies) to a page marked GPU-dirty first calls the hook so the
+    // renderer can write its pixels back, and a write to a watched page marks
+    // it CPU-written for the renderer to pick up.  Raw-pointer users report
+    // their accesses with note_raw_access; the renderer's own raw accesses are
+    // deliberately not observed.
+    static constexpr std::uint32_t kVramPageShift = 12u;
+    static constexpr std::uint32_t kVramPages = kVramSize >> kVramPageShift;
+    static constexpr std::uint8_t kVramGpuDirty = 1u, kVramWatched = 2u, kVramCpuWritten = 4u;
+    using VramReadHook = void (*)(void *context, std::uint32_t vram_offset, std::uint32_t length);
+    void set_vram_read_hook(VramReadHook hook, void *context) noexcept;
+    [[nodiscard]] bool vram_tracking() const noexcept { return vram_hook_ != nullptr; }
+    // Replaces the GPU-dirty and watched bits of `page`; keeps its CPU-written bit.
+    void set_vram_page_state(std::uint32_t page, std::uint8_t gpu_dirty_and_watched) noexcept;
+    [[nodiscard]] std::uint8_t vram_page_state(std::uint32_t page) const noexcept;
+    // Clears every CPU-written bit, setting written[page] for each one that was
+    // set; false when no page was written since the last call.
+    bool take_vram_cpu_writes(std::array<bool, kVramPages> &written) noexcept;
+    void note_raw_access(std::uint32_t address, std::size_t length, bool write) const;
+
     [[nodiscard]] std::string read_c_string(std::uint32_t address, std::size_t max_length = 256u) const;
     [[nodiscard]] const std::vector<std::uint8_t> &bytes() const noexcept;
     [[nodiscard]] const std::vector<std::uint8_t> &vram_bytes() const noexcept;
@@ -294,6 +317,11 @@ private:
         std::memcpy(destination, &value, sizeof(value));
     }
 
+    void observe_vram(std::size_t offset, std::size_t length, bool write) const {
+        if (vram_hook_ != nullptr) observe_vram_slow(offset, length, write);
+    }
+    void observe_vram_slow(std::size_t offset, std::size_t length, bool write) const;
+
     [[nodiscard]] std::uint8_t aot_load8_slow(std::uint32_t address) const;
     [[nodiscard]] std::uint16_t aot_load16_slow(std::uint32_t address) const;
     [[nodiscard]] std::uint32_t aot_load32_slow(std::uint32_t address) const;
@@ -317,6 +345,10 @@ private:
     std::uint32_t ram_limit16_{};
     std::uint32_t ram_limit32_{};
     bool write_watch_enabled_{};
+    VramReadHook vram_hook_{};
+    void *vram_hook_context_{};
+    mutable std::array<std::atomic<std::uint8_t>, kVramPages> vram_pages_{};
+    mutable std::atomic<bool> vram_cpu_written_{};
 };
 
 } // namespace psprecomp

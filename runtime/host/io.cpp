@@ -291,6 +291,7 @@ void Kernel::sceIoRead(Ctx &ctx) {
         web_read(ctx, fd, ctx.gpr[5], ctx.gpr[6], false);
         return;
     }
+    rt_.memory().note_raw_access(ctx.gpr[5], ctx.gpr[6], true);
     std::uint8_t *dst = rt_.memory().raw_pointer(ctx.gpr[5], ctx.gpr[6]);
     if (it->second.file == nullptr || dst == nullptr) {
         finish(ctx, kErrorBadFile);
@@ -550,6 +551,7 @@ void Kernel::sceIoReadAsync(Ctx &ctx) {
         web_read(ctx, fd, ctx.gpr[5], ctx.gpr[6], true);
         return;
     }
+    rt_.memory().note_raw_access(ctx.gpr[5], ctx.gpr[6], true);
     std::uint8_t *dst = rt_.memory().raw_pointer(ctx.gpr[5], ctx.gpr[6]);
     it->second.async_result = it->second.file != nullptr && dst != nullptr
         ? static_cast<std::int64_t>(std::fread(dst, 1u, ctx.gpr[6], it->second.file)) : 0;
@@ -629,6 +631,7 @@ std::uint32_t Kernel::plain_read(OpenFile &open, std::uint32_t buffer, std::uint
     const std::vector<std::uint8_t> &plain = *open.plain;
     const std::uint64_t position = std::min<std::uint64_t>(open.position, plain.size());
     const auto count = static_cast<std::uint32_t>(std::min<std::uint64_t>(length, plain.size() - position));
+    rt_.memory().note_raw_access(buffer, count, true);
     std::uint8_t *dst = rt_.memory().raw_pointer(buffer, count);
     if (count != 0u && dst == nullptr) return kErrorBadFile;
     if (count != 0u) std::memcpy(dst, plain.data() + position, count);

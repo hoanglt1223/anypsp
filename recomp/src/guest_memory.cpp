@@ -138,7 +138,11 @@ std::vector<std::uint8_t> &GuestMemory::region_bytes(Region region) noexcept {
 // an out-of-range address, a region-crossing width, or an armed write watch.
 std::uint8_t GuestMemory::aot_load8_slow(std::uint32_t address) const {
     const std::uint32_t c = canonical(address);
-    if (is_vram_window(c)) return vram_[vram_offset(c)];
+    if (is_vram_window(c)) {
+        const std::size_t offset = vram_offset(c);
+        observe_vram(offset, 1u, false);
+        return vram_[offset];
+    }
     if (c >= kPhysicalBase && c - kPhysicalBase < bytes_.size())
         return bytes_[static_cast<std::size_t>(c - kPhysicalBase)];
     return load8(address);
@@ -148,6 +152,7 @@ std::uint16_t GuestMemory::aot_load16_slow(std::uint32_t address) const {
     const std::uint32_t c = canonical(address);
     if (is_vram_window(c)) {
         const std::size_t offset = vram_offset(c);
+        observe_vram(offset, 2u, false);
         if (offset + 2u <= vram_.size())
             return static_cast<std::uint16_t>(vram_[offset]) |
                    static_cast<std::uint16_t>(static_cast<std::uint16_t>(vram_[offset + 1u]) << 8u);
@@ -167,6 +172,7 @@ std::uint32_t GuestMemory::aot_load32_slow(std::uint32_t address) const {
     if (is_vram_window(c)) {
         data = &vram_;
         offset = vram_offset(c);
+        observe_vram(offset, 4u, false);
     } else if (c >= kPhysicalBase) {
         data = &bytes_;
         offset = static_cast<std::size_t>(c - kPhysicalBase);
@@ -194,7 +200,12 @@ std::uint32_t GuestMemory::aot_load_word_right(std::uint32_t address, std::uint3
 void GuestMemory::aot_store8_slow(std::uint32_t address, std::uint8_t value) {
     if (write_watch_enabled_) { store8(address, value); return; }
     const std::uint32_t c = canonical(address);
-    if (is_vram_window(c)) { vram_[vram_offset(c)] = value; return; }
+    if (is_vram_window(c)) {
+        const std::size_t offset = vram_offset(c);
+        observe_vram(offset, 1u, true);
+        vram_[offset] = value;
+        return;
+    }
     if (c >= kPhysicalBase && c - kPhysicalBase < bytes_.size()) {
         bytes_[static_cast<std::size_t>(c - kPhysicalBase)] = value;
         return;
@@ -206,7 +217,7 @@ void GuestMemory::aot_store16_slow(std::uint32_t address, std::uint16_t value) {
     const std::uint32_t c = canonical(address);
     std::vector<std::uint8_t> *data = nullptr;
     std::size_t offset = 0u;
-    if (is_vram_window(c)) { data = &vram_; offset = vram_offset(c); }
+    if (is_vram_window(c)) { data = &vram_; offset = vram_offset(c); observe_vram(offset, 2u, true); }
     else if (c >= kPhysicalBase) { data = &bytes_; offset = static_cast<std::size_t>(c - kPhysicalBase); }
     if (data != nullptr && offset + 2u <= data->size()) {
         (*data)[offset] = static_cast<std::uint8_t>(value & 0xFFu);
@@ -220,7 +231,7 @@ void GuestMemory::aot_store32_slow(std::uint32_t address, std::uint32_t value) {
     const std::uint32_t c = canonical(address);
     std::vector<std::uint8_t> *data = nullptr;
     std::size_t offset = 0u;
-    if (is_vram_window(c)) { data = &vram_; offset = vram_offset(c); }
+    if (is_vram_window(c)) { data = &vram_; offset = vram_offset(c); observe_vram(offset, 4u, true); }
     else if (c >= kPhysicalBase) { data = &bytes_; offset = static_cast<std::size_t>(c - kPhysicalBase); }
     if (data != nullptr && offset + 4u <= data->size()) {
         (*data)[offset] = static_cast<std::uint8_t>(value & 0xFFu);
@@ -279,6 +290,10 @@ void GuestMemory::aot_copy_lz_match(std::uint32_t destination, std::uint32_t sou
         return;
     }
 
+    if (destination_resolved.region == Region::Vram) {
+        observe_vram(source_resolved.offset, length, false);
+        observe_vram(destination_resolved.offset, length, true);
+    }
     const std::size_t destination_offset = destination_resolved.offset;
     const std::size_t source_offset = source_resolved.offset;
     const std::size_t total = static_cast<std::size_t>(length);
@@ -319,6 +334,7 @@ const std::uint8_t *GuestMemory::raw_pointer(std::uint32_t address, std::size_t 
 
 std::uint8_t GuestMemory::load8(std::uint32_t address) const {
     const auto r = resolve(address, 1u);
+    if (r.region == Region::Vram) observe_vram(r.offset, 1u, false);
     return region_bytes(r.region)[r.offset];
 }
 std::uint16_t GuestMemory::load16(std::uint32_t address) const {
@@ -343,6 +359,7 @@ std::uint32_t GuestMemory::load_word_right(std::uint32_t address, std::uint32_t 
 }
 void GuestMemory::store8(std::uint32_t address, std::uint8_t value) {
     const auto r = resolve(address, 1u);
+    if (r.region == Region::Vram) observe_vram(r.offset, 1u, true);
     auto &data = region_bytes(r.region);
     const std::uint8_t old = data[r.offset];
     log_write_watch(address, 1u, "store8", old, value);
@@ -353,6 +370,7 @@ void GuestMemory::store16(std::uint32_t address, std::uint16_t value) {
     log_write_watch(address, 2u, "store16", old, value);
     const auto write_byte = [this](std::uint32_t byte_address, std::uint8_t byte) {
         const auto r = resolve(byte_address, 1u);
+        if (r.region == Region::Vram) observe_vram(r.offset, 1u, true);
         region_bytes(r.region)[r.offset] = byte;
     };
     write_byte(address, static_cast<std::uint8_t>(value & 0xFFu));
@@ -363,6 +381,7 @@ void GuestMemory::store32(std::uint32_t address, std::uint32_t value) {
     log_write_watch(address, 4u, "store32", old, value);
     const auto write_byte = [this](std::uint32_t byte_address, std::uint8_t byte) {
         const auto r = resolve(byte_address, 1u);
+        if (r.region == Region::Vram) observe_vram(r.offset, 1u, true);
         region_bytes(r.region)[r.offset] = byte;
     };
     write_byte(address, static_cast<std::uint8_t>(value & 0xFFu));
@@ -395,6 +414,7 @@ void GuestMemory::copy_in(std::uint32_t address, std::span<const std::uint8_t> s
         const auto r = resolve(current, 1u);
         auto &data = region_bytes(r.region);
         const std::size_t chunk = std::min(source.size() - copied, data.size() - r.offset);
+        if (r.region == Region::Vram) observe_vram(r.offset, chunk, true);
         std::copy_n(source.begin() + static_cast<std::ptrdiff_t>(copied), chunk,
                     data.begin() + static_cast<std::ptrdiff_t>(r.offset));
         copied += chunk;
@@ -409,6 +429,7 @@ void GuestMemory::copy_out(std::uint32_t address, std::span<std::uint8_t> destin
         const auto r = resolve(current, 1u);
         const auto &data = region_bytes(r.region);
         const std::size_t chunk = std::min(destination.size() - copied, data.size() - r.offset);
+        if (r.region == Region::Vram) observe_vram(r.offset, chunk, false);
         std::copy_n(data.begin() + static_cast<std::ptrdiff_t>(r.offset), chunk,
                     destination.begin() + static_cast<std::ptrdiff_t>(copied));
         copied += chunk;
@@ -424,6 +445,7 @@ void GuestMemory::zero(std::uint32_t address, std::size_t length) {
         const auto r = resolve(current, 1u);
         auto &data = region_bytes(r.region);
         const std::size_t chunk = std::min(length - cleared, data.size() - r.offset);
+        if (r.region == Region::Vram) observe_vram(r.offset, chunk, true);
         std::fill_n(data.begin() + static_cast<std::ptrdiff_t>(r.offset), chunk, 0u);
         cleared += chunk;
     }
@@ -440,5 +462,61 @@ std::string GuestMemory::read_c_string(std::uint32_t address, std::size_t max_le
 }
 const std::vector<std::uint8_t> &GuestMemory::bytes() const noexcept { return bytes_; }
 const std::vector<std::uint8_t> &GuestMemory::vram_bytes() const noexcept { return vram_; }
+
+void GuestMemory::set_vram_read_hook(VramReadHook hook, void *context) noexcept {
+    vram_hook_context_ = context;
+    vram_hook_ = hook;
+}
+
+void GuestMemory::set_vram_page_state(std::uint32_t page, std::uint8_t gpu_dirty_and_watched) noexcept {
+    if (page >= kVramPages) return;
+    const auto bits = static_cast<std::uint8_t>(gpu_dirty_and_watched & (kVramGpuDirty | kVramWatched));
+    std::uint8_t now = vram_pages_[page].load(std::memory_order_relaxed);
+    while (!vram_pages_[page].compare_exchange_weak(now, static_cast<std::uint8_t>((now & kVramCpuWritten) | bits),
+                                                    std::memory_order_acq_rel)) {
+    }
+}
+
+std::uint8_t GuestMemory::vram_page_state(std::uint32_t page) const noexcept {
+    return page < kVramPages ? vram_pages_[page].load(std::memory_order_acquire) : std::uint8_t{0u};
+}
+
+bool GuestMemory::take_vram_cpu_writes(std::array<bool, kVramPages> &written) noexcept {
+    written.fill(false);
+    if (!vram_cpu_written_.exchange(false, std::memory_order_acq_rel)) return false;
+    bool any = false;
+    for (std::uint32_t page = 0; page < kVramPages; ++page) {
+        const std::uint8_t was =
+            vram_pages_[page].fetch_and(static_cast<std::uint8_t>(~kVramCpuWritten), std::memory_order_acq_rel);
+        written[page] = (was & kVramCpuWritten) != 0u;
+        any = any || written[page];
+    }
+    return any;
+}
+
+void GuestMemory::note_raw_access(std::uint32_t address, std::size_t length, bool write) const {
+    if (vram_hook_ == nullptr || length == 0u) return;
+    const std::uint32_t c = canonical(address);
+    if (c < kVramPhysicalBase || c >= kVramPhysicalBase + kVramAddressSpan) return;
+    const std::size_t offset = vram_offset(c);
+    observe_vram(offset, std::min<std::size_t>(length, kVramSize - offset), write);
+}
+
+void GuestMemory::observe_vram_slow(std::size_t offset, std::size_t length, bool write) const {
+    if (offset >= kVramSize || length == 0u) return; // the scratchpad is never a framebuffer
+    const std::size_t last = std::min<std::size_t>(offset + length, kVramSize) - 1u;
+    const std::size_t first_page = offset >> kVramPageShift, last_page = last >> kVramPageShift;
+    std::uint8_t seen = 0u;
+    for (std::size_t page = first_page; page <= last_page; ++page) seen |= vram_pages_[page].load(std::memory_order_acquire);
+    // A write into GPU-drawn pixels needs them in VRAM first too: the renderer
+    // later reloads whole rows from VRAM, so the rest of each row must be current.
+    if ((seen & kVramGpuDirty) != 0u)
+        vram_hook_(vram_hook_context_, static_cast<std::uint32_t>(offset), static_cast<std::uint32_t>(last + 1u - offset));
+    if (!write || (seen & kVramWatched) == 0u) return;
+    for (std::size_t page = first_page; page <= last_page; ++page)
+        if ((vram_pages_[page].load(std::memory_order_relaxed) & kVramWatched) != 0u)
+            vram_pages_[page].fetch_or(kVramCpuWritten, std::memory_order_acq_rel);
+    vram_cpu_written_.store(true, std::memory_order_release);
+}
 
 } // namespace psprecomp

@@ -25,7 +25,15 @@ anypsp-play "Game.iso" --scale 3 --fullscreen
   --headless` does the reverse.
 
 Headless runs can still record what a window would play: `--wav out.wav` writes the audio output,
-`--frames-dir`/`--dump` write frames, and `--input frame:buttons,...` scripts the pad.
+`--frames-dir`/`--dump` write frames, and `--input frame:buttons,...` scripts the pad. `--deterministic`
+drives guest time from executed code instead of the host clock (and fixes the date), so two scripted
+runs produce the same frames.
+
+The GL renderer keeps framebuffers on the GPU. `--coherent lazy` (the default) copies GPU pixels back to
+guest memory only when the game's CPU or a DMA copy touches them, and reloads framebuffer memory the
+CPU wrote before the GPU uses it again. `--coherent 1` copies back after every display list, which is
+much slower and only useful to rule coherence out while debugging; `--coherent 0` never copies back and
+breaks games that read their framebuffers (UNH 1 draws its fighters as dark streaks).
 
 ## Input mapping
 
