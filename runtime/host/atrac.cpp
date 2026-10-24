@@ -358,6 +358,9 @@ void Kernel::install_atrac() {
         // The whole file is kept on the host side, so a second buffer is never needed.
         return a == nullptr ? kErrorBadId : kErrorSecondBufferNotNeeded;
     });
+    add(0x83BF7AFDu, "sceAtracSetSecondBuffer", [get](Ctx &ctx) {
+        return get(ctx.gpr[4]) == nullptr ? kErrorBadId : kErrorSecondBufferNotNeeded;
+    });
     add(0x36FAABFBu, "sceAtracGetNextSample", [get, put](Ctx &ctx) {
         Atrac *a = get(ctx.gpr[4]);
         if (a == nullptr) return kErrorBadId;

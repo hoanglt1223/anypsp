@@ -510,6 +510,10 @@ private:
     void sceUmdCheckMedium(Ctx &ctx);
     void sceUmdGetDriveStat(Ctx &ctx);
     void sceUtilityGetSystemParamInt(Ctx &ctx);
+    void sceUtilityGetSystemParamString(Ctx &ctx);
+    void sceRtcTickAddSeconds(Ctx &ctx);
+    void sceKernelResumeThread(Ctx &ctx);
+    void sceIoRename(Ctx &ctx);
     void sceCtrlReadLatch(Ctx &ctx);
     void sceCtrlPeekLatch(Ctx &ctx);
     void sceImposeGetLanguageMode(Ctx &ctx);
@@ -560,6 +564,7 @@ private:
 
     // mpeg.cpp: sceMpeg (movies are consumed without decoding for now).
     void install_mpeg();
+    void install_network();
     void install_sas();      // sas.cpp: the SAS voice synthesizer (sound effects)
     // Mixes a buffer that starts playing at `start_sample` into the output.
     void mix_audio(std::uint64_t start_sample, const std::int16_t *stereo, std::uint32_t frames,
@@ -579,6 +584,8 @@ private:
     AudioChannel audio_output2_{};
     AudioSink audio_sink_{};
     UtilityDialog msg_dialog_{};
+    UtilityDialog netconf_dialog_{};
+    UtilityDialog gamesharing_dialog_{};
     std::uint32_t pad_buttons_{};
     std::uint32_t latch_make_{}, latch_break_{}; // buttons pressed / released since the last sceCtrlReadLatch
     std::uint8_t pad_lx_{128u};

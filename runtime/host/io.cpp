@@ -20,6 +20,10 @@ namespace {
 constexpr std::uint32_t kErrorFileNotFound = 0x80010002u;
 constexpr std::uint32_t kErrorBadFile = 0x80020323u;
 constexpr std::uint32_t kErrorIo = 0x80010005u;
+constexpr std::uint32_t kErrorFileExists = 0x80010011u;
+constexpr std::uint32_t kErrorInvalidArgument = 0x80010016u;
+constexpr std::uint32_t kErrorReadOnly = 0x8001001Eu;
+constexpr std::uint32_t kErrorCrossDevice = 0x80020322u;
 constexpr std::uint32_t kErrorPgdInvalidHeader = 0x80510204u;
 constexpr std::uint32_t kErrorTooManyFiles = 0x80020320u;
 constexpr std::int32_t kMaxFds = 64;
@@ -361,6 +365,43 @@ void Kernel::sceIoGetstat(Ctx &ctx) {
     if (std::string relative; disc_relative(psp_path, relative)) entry.lbn = disc_lbn(relative, entry.size);
     write_stat(ctx.gpr[5], entry);
     finish(ctx, 0u);
+}
+
+void Kernel::sceIoRename(Ctx &ctx) {
+    const std::string from = read_string(ctx.gpr[4]);
+    std::string to = read_string(ctx.gpr[5]);
+    if (from.find_first_of("*?") != std::string::npos || to.find_first_of("*?") != std::string::npos) {
+        finish(ctx, kErrorInvalidArgument);
+        return;
+    }
+    // A destination without a device names a file in the source's directory.
+    if (to.find(':') == std::string::npos) {
+        const auto slash = from.find_last_of('/');
+        const auto colon = from.find(':');
+        const auto cut = slash != std::string::npos ? slash + 1u : (colon != std::string::npos ? colon + 1u : 0u);
+        to = from.substr(0, cut) + to;
+    }
+    const auto device = [](const std::string &path) { return path.substr(0, path.find(':')); };
+    if (device(from) != device(to)) {
+        finish(ctx, kErrorCrossDevice);
+        return;
+    }
+    DirectoryEntry entry;
+    if (!stat_path(from, entry)) {
+        finish(ctx, kErrorFileNotFound);
+        return;
+    }
+    if (stat_path(to, entry)) {
+        finish(ctx, kErrorFileExists);
+        return;
+    }
+    if (std::string relative; disc_relative(from, relative)) {
+        finish(ctx, kErrorReadOnly);
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::rename(host_path(from), host_path(to), ec);
+    finish(ctx, ec ? kErrorIo : 0u);
 }
 
 void Kernel::sceIoChdir(Ctx &ctx) {

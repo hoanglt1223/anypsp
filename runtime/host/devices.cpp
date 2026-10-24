@@ -81,11 +81,13 @@ void Kernel::install_devices() {
     hle("sceRtc", 0xE7C27D1Bu, "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
     hle("sceRtc", 0x3F7AD767u, "sceRtcGetCurrentTick", &Kernel::sceRtcGetCurrentTick);
     hle("sceRtc", 0xC41C2853u, "sceRtcGetTickResolution", &Kernel::sceRtcGetTickResolution);
+    hle("sceRtc", 0xF2A4AFE5u, "sceRtcTickAddSeconds", &Kernel::sceRtcTickAddSeconds);
     hle("UtilsForUser", 0x91E4F6A7u, "sceKernelLibcClock", &Kernel::sceKernelLibcClock);
     hle("Kernel_Library", 0xB55249D2u, "sceKernelIsCpuIntrEnable", &Kernel::return_one);
 
     const char *util = "sceUtility";
     hle(util, 0xA5DA2406u, "sceUtilityGetSystemParamInt", &Kernel::sceUtilityGetSystemParamInt);
+    hle(util, 0x34B78343u, "sceUtilityGetSystemParamString", &Kernel::sceUtilityGetSystemParamString);
     hle(util, 0x2AD8E239u, "sceUtilityMsgDialogInitStart", &Kernel::sceUtilityMsgDialogInitStart);
     hle(util, 0x9A1C91D7u, "sceUtilityMsgDialogGetStatus", &Kernel::sceUtilityMsgDialogGetStatus);
     hle(util, 0x95FC253Bu, "sceUtilityMsgDialogUpdate", &Kernel::return_zero);
@@ -102,6 +104,7 @@ void Kernel::install_devices() {
     hle(tm, 0x3AD58B8Cu, "sceKernelSuspendDispatchThread", &Kernel::return_one);
     hle(tm, 0x27E22EC2u, "sceKernelResumeDispatchThread", &Kernel::return_zero);
     hle(tm, 0xEDBA5844u, "sceKernelDeleteCallback", &Kernel::return_zero);
+    hle(tm, 0x75156E8Fu, "sceKernelResumeThread", &Kernel::sceKernelResumeThread);
 
     const char *suspend = "sceSuspendForUser";
     hle(suspend, 0x3E0271D3u, "sceKernelVolatileMemLock", &Kernel::sceKernelVolatileMemLock);
@@ -114,9 +117,11 @@ void Kernel::install_devices() {
     hle("SysMemUserForUser", 0x1B4217BCu, "sceKernelSetCompiledSdkVersion603_605", &Kernel::return_zero);
     hle("SysMemUserForUser", 0x91DE343Cu, "sceKernelSetCompiledSdkVersion500_505", &Kernel::return_zero);
     hle("SysMemUserForUser", 0xEBD5C3E6u, "sceKernelSetCompiledSdkVersion395", &Kernel::return_zero);
+    hle("SysMemUserForUser", 0x315AD3A0u, "sceKernelSetCompiledSdkVersion380_390", &Kernel::return_zero);
     // Memory stick callbacks and folders need no work: the memory stick is a host folder.
     hle("IoFileMgrForUser", 0x54F5FB11u, "sceIoDevctl", &Kernel::sceIoDevctl);
     hle("IoFileMgrForUser", 0x06A70004u, "sceIoMkdir", &Kernel::return_zero);
+    hle("IoFileMgrForUser", 0x779103A0u, "sceIoRename", &Kernel::sceIoRename);
     hle("scePower", 0xEBD177D6u, "scePowerSetClockFrequency", &Kernel::return_zero);
     hle("scePower", 0x469989ADu, "scePowerSetClockFrequency2", &Kernel::return_zero);
     // Firmware modules are all high-level emulated, so loading one is a no-op.
@@ -391,6 +396,36 @@ void Kernel::sceUtilityGetSystemParamInt(Ctx &ctx) {
         return;
     }
     if (ctx.gpr[5] != 0u) rt_.memory().store32(ctx.gpr[5], value);
+    finish(ctx, 0u);
+}
+
+void Kernel::sceUtilityGetSystemParamString(Ctx &ctx) {
+    if (ctx.gpr[4] != 1u) { // only the nickname is a string parameter
+        finish(ctx, kErrorInvalidSystemParam);
+        return;
+    }
+    const std::string_view nickname = "PSP";
+    const std::uint32_t buffer = ctx.gpr[5], size = ctx.gpr[6];
+    if (buffer != 0u && size != 0u) {
+        const auto n = std::min<std::uint32_t>(static_cast<std::uint32_t>(nickname.size()), size - 1u);
+        for (std::uint32_t i = 0; i < n; ++i) rt_.memory().store8(buffer + i, static_cast<std::uint8_t>(nickname[i]));
+        rt_.memory().store8(buffer + n, 0u);
+    }
+    finish(ctx, 0u);
+}
+
+void Kernel::sceRtcTickAddSeconds(Ctx &ctx) {
+    auto &m = rt_.memory();
+    if (ctx.gpr[4] == 0u || ctx.gpr[5] == 0u) {
+        finish(ctx, 0u);
+        return;
+    }
+    const std::uint64_t tick = m.load32(ctx.gpr[5]) | (static_cast<std::uint64_t>(m.load32(ctx.gpr[5] + 4u)) << 32u);
+    // The 64-bit seconds argument is aligned to the a2:a3 register pair.
+    const auto seconds = static_cast<std::int64_t>(ctx.gpr[6] | (static_cast<std::uint64_t>(ctx.gpr[7]) << 32u));
+    const std::uint64_t result = tick + static_cast<std::uint64_t>(seconds) * 1000000ull;
+    m.store32(ctx.gpr[4], static_cast<std::uint32_t>(result));
+    m.store32(ctx.gpr[4] + 4u, static_cast<std::uint32_t>(result >> 32u));
     finish(ctx, 0u);
 }
 

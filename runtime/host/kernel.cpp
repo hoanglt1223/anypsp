@@ -44,6 +44,7 @@ constexpr std::uint32_t kErrorUnknownThread = 0x80020198u;
 constexpr std::uint32_t kErrorUnknownSema = 0x80020199u;
 constexpr std::uint32_t kErrorUnknownEventFlag = 0x8002019Au;
 constexpr std::uint32_t kErrorNotDormant = 0x800201A4u;
+constexpr std::uint32_t kErrorNotSuspend = 0x800201A5u;
 constexpr std::uint32_t kErrorWaitTimeout = 0x800201A8u;
 constexpr std::uint32_t kErrorSemaZero = 0x800201ADu;
 constexpr std::uint32_t kErrorSemaOverflow = 0x800201AEu;
@@ -442,6 +443,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     install_mpeg();
     install_sas();
     install_atrac();
+    install_network();
     install_fonts();
     install_savedata();
     for (const auto &import : imports) install_fallback(import);
@@ -961,6 +963,11 @@ void Kernel::sceKernelWakeupThread(Ctx &ctx) {
     else ++t->wakeup_count;
     finish(ctx, 0u);
     maybe_preempt(ctx);
+}
+
+void Kernel::sceKernelResumeThread(Ctx &ctx) {
+    // sceKernelSuspendThread is not implemented, so no thread is ever suspended.
+    finish(ctx, thread(static_cast<std::int32_t>(ctx.gpr[4])) == nullptr ? kErrorUnknownThread : kErrorNotSuspend);
 }
 
 void Kernel::sceKernelDelayThread(Ctx &ctx) {

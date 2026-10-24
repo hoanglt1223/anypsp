@@ -21,6 +21,7 @@ constexpr int kVoices = 32;
 constexpr std::int64_t kEnvelopeMax = 0x40000000;
 constexpr std::int32_t kPitchBase = 0x1000;
 constexpr std::uint32_t kErrorInvalidVoice = 0x80420010u;
+constexpr std::uint32_t kErrorInvalidNoiseFreq = 0x80420011u;
 
 enum Curve { kLinearIncrease, kLinearDecrease, kLinearBent, kExponentDecrease, kExponentIncrease, kDirect };
 enum class EnvState { Off, Attack, Decay, Sustain, Release };
@@ -163,16 +164,41 @@ struct Voice {
     VagDecoder vag;
     std::uint32_t frac{};
     std::int16_t current{}, following{};
+    bool noise{};
+    std::uint32_t noise_freq{};
+    std::uint16_t noise_level{1};
+    std::int32_t noise_timer{};
 
     void key_on(const psprecomp::GuestMemory &memory) {
-        vag.start(vag_address, vag_size, loop);
         envelope.height = 0;
         envelope.state = EnvState::Attack;
         playing = on = true;
         paused = false;
         frac = 0u;
+        if (noise) {
+            noise_level = 1u;
+            noise_timer = 0;
+            return;
+        }
+        vag.start(vag_address, vag_size, loop);
         current = vag.next(memory);
         following = vag.next(memory);
+    }
+
+    // SPU noise generator as documented for the PS1/PS2 SPU (psx-spx): a 16-bit LFSR
+    // clocked at a rate set by the 6-bit frequency (2 bits step, 4 bits shift).
+    std::int16_t next_noise() {
+        const auto step = static_cast<std::int32_t>((noise_freq & 3u) + 4u);
+        const std::int32_t reload = 0x20000 >> (noise_freq >> 2u);
+        noise_timer -= step;
+        const std::uint16_t parity =
+            static_cast<std::uint16_t>(((noise_level >> 15) ^ (noise_level >> 12) ^ (noise_level >> 11) ^ (noise_level >> 10) ^ 1u) & 1u);
+        if (noise_timer < 0) {
+            noise_level = static_cast<std::uint16_t>((noise_level << 1u) | parity);
+            noise_timer += reload;
+            if (noise_timer < 0) noise_timer += reload;
+        }
+        return static_cast<std::int16_t>(noise_level);
     }
 };
 
@@ -232,6 +258,15 @@ void Kernel::install_sas() {
         v->vag_address = ctx.gpr[6];
         v->vag_size = ctx.gpr[7];
         v->loop = ctx.gpr[8] != 0u;
+        v->noise = false;
+        return 0u;
+    });
+    add(0xB7660A23u, "__sceSasSetNoise", [voice](Ctx &ctx) {
+        Voice *v = voice(ctx);
+        if (v == nullptr) return kErrorInvalidVoice;
+        if (ctx.gpr[6] >= 64u) return kErrorInvalidNoiseFreq;
+        v->noise = true;
+        v->noise_freq = ctx.gpr[6];
         return 0u;
     });
     add(0xAD84D37Fu, "__sceSasSetPitch", [voice](Ctx &ctx) {
@@ -352,9 +387,9 @@ void Kernel::install_sas() {
             if (!v.playing || v.paused) continue;
             for (std::uint32_t i = 0; i < frames; ++i) {
                 // Linear interpolation between the two source samples around the read position.
-                const std::int32_t sample =
+                const std::int32_t sample = v.noise ? v.next_noise() :
                     v.current + (((v.following - v.current) * static_cast<std::int32_t>(v.frac)) >> 12);
-                v.frac += static_cast<std::uint32_t>(v.pitch);
+                if (!v.noise) v.frac += static_cast<std::uint32_t>(v.pitch);
                 while (v.frac >= static_cast<std::uint32_t>(kPitchBase)) {
                     v.frac -= static_cast<std::uint32_t>(kPitchBase);
                     v.current = v.following;
@@ -367,7 +402,7 @@ void Kernel::install_sas() {
                 sas.mix[i * 2u] += (shaped * v.left) >> 12;
                 sas.mix[i * 2u + 1u] += (shaped * v.right) >> 12;
             }
-            if (v.vag.ended && v.current == 0 && v.following == 0) v.envelope.state = EnvState::Off;
+            if (!v.noise && v.vag.ended && v.current == 0 && v.following == 0) v.envelope.state = EnvState::Off;
             if (v.envelope.state == EnvState::Off) {
                 v.playing = false;
                 v.on = false;
