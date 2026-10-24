@@ -45,6 +45,7 @@ enum : std::uint32_t {
     kAlphaTest = 0xDB, kZTest = 0xDE, kBlendMode = 0xDF, kBlendFixA = 0xE0, kBlendFixB = 0xE1,
     kZWriteDisable = 0xE7, kMaskRgb = 0xE8, kMaskAlpha = 0xE9, kTransferStart = 0xEA,
     kTransferSrcPos = 0xEB, kTransferDstPos = 0xEC, kTransferSize = 0xEE,
+    kBezier = 0x05, kSpline = 0x06, kPatchDivision = 0x36, kPatchPrimitive = 0x37,
 };
 
 constexpr std::uint32_t kVramBase = 0x04000000u;
@@ -267,6 +268,8 @@ void Ge::execute(std::uint32_t op) {
     case kVaddr: vertex_address_ = relative_address(data); break;
     case kIaddr: index_address_ = relative_address(data); break;
     case kPrim: draw_primitive((data >> 16u) & 7u, data & 0xFFFFu); break;
+    case kBezier: draw_curve(data, false); break;
+    case kSpline: draw_curve(data, true); break;
     case kJump: pc_ = relative_address(data & 0xFFFFFCu); break;
     case kCall:
         call_stack_.push_back(pc_);
@@ -872,10 +875,15 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         bool active;
         ~GenerationBump() { if (active) ++generation; }
     } bump{vram_generation_, gl_ == nullptr};
+    const std::uint32_t decoded = decode_draw(count);
+    emit_vertices(type, count, decoded);
+}
+
+std::uint32_t Ge::decode_draw(std::uint32_t count) {
     const Layout &l = layout_;
     if (scratch_vertices_.size() < count) scratch_vertices_.resize(count);
     std::vector<ClipVertex> &vertices = scratch_vertices_;
-    const std::uint32_t index_size = l.idx == 1u ? 1u : (l.idx == 2u ? 2u : 0u);
+    const std::uint32_t index_size = l.idx == 0u ? 0u : (1u << (l.idx - 1u));
     SectionTimer decode_timer{0};
     const std::uint32_t stride = l.size * l.morphs;
     if (scratch_indices_.size() < count) scratch_indices_.resize(count);
@@ -888,7 +896,13 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         for (std::uint32_t i = 0; i < count; ++i) {
             std::uint32_t index;
             if (index_size == 1u) index = index_raw != nullptr ? index_raw[i] : memory_.load8(index_address_ + i);
-            else if (index_raw != nullptr) {
+            else if (index_size == 4u) {
+                // 32-bit indices: kept to 16 bits so a stray value cannot make the decode range huge.
+                std::uint32_t v32;
+                if (index_raw != nullptr) std::memcpy(&v32, index_raw + i * 4u, 4u);
+                else v32 = memory_.load32(index_address_ + i * 4u);
+                index = v32 & 0xFFFFu;
+            } else if (index_raw != nullptr) {
                 std::uint16_t v16;
                 std::memcpy(&v16, index_raw + i * 2u, 2u);
                 index = v16;
@@ -924,7 +938,254 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     vertex_raw_ = nullptr;
     if (index_size != 0u) index_address_ += count * index_size;
     else vertex_address_ += count * l.size * l.morphs;
-    emit_vertices(type, count, decoded);
+    return decoded;
+}
+
+// ---------------------------------------------------------------------------
+// Curves. Evaluation as the GE does it, adapted from PPSSPP GPU/Common/SplineCommon.cpp
+// (GPL-2.0-or-later). Control points are evaluated after the vertex transform, which is
+// exact in through mode and a close approximation (lighting, texture generation) otherwise.
+
+namespace {
+
+int bezier_param256(int i, int n) { return 2 * i <= n ? (256 * i) / n : 256 - (256 * (n - i)) / n; }
+
+float ge_curve_lerp(float a, float b, int k) {
+    if (k == 0) return a;
+    if (k == 256) return b;
+    std::uint32_t ba, bb;
+    std::memcpy(&ba, &a, 4);
+    std::memcpy(&bb, &b, 4);
+    const int ea = static_cast<int>((ba >> 23u) & 0xFFu), eb = static_cast<int>((bb >> 23u) & 0xFFu);
+    const int e = std::max(ea, eb);
+    if (e == 0) return 0.0f;
+    // Mantissas shifted to 16 bits at the larger exponent, truncated toward zero.
+    auto to_fixed = [e](std::uint32_t bits, int ex) -> int {
+        if (ex == 0 || e - ex >= 16) return 0;
+        const int m = static_cast<int>(((bits & 0x7FFFFFu) | 0x800000u) >> (e - ex + 8));
+        return (bits & 0x80000000u) != 0u ? -m : m;
+    };
+    const int fa = to_fixed(ba, ea), fb = to_fixed(bb, eb);
+    const int r = fa + (((fb - fa) * k) >> 8);
+    return std::ldexp(static_cast<float>(r), e - 127 - 15);
+}
+
+int color_lerp(int a, int b, int k) { return a + (((b - a) * k) >> 8); }
+
+struct CurveParam {
+    int seg{};
+    int alpha[6]{}; // spline blending factors (Bezier uses k for all)
+    int k{};
+};
+
+CurveParam spline_param(int index, int tess, int patches, int type) {
+    CurveParam p;
+    p.seg = index / tess;
+    p.k = bezier_param256(index % tess, tess);
+    if (p.seg == patches) {
+        p.seg = patches - 1;
+        p.k = 256;
+    }
+    auto knot = [&](int i) {
+        if (i < 3 && (type & 1)) return 0;
+        if (i > patches + 3 && (type & 2)) return patches;
+        return i - 3;
+    };
+    const int l = p.seg + 3;
+    const int is[6] = {l - 2, l - 1, l, l - 1, l, l};
+    const int rs[6] = {1, 1, 1, 2, 2, 3};
+    for (int n = 0; n < 6; ++n) {
+        const int i = is[n];
+        const int span = knot(i + 4 - rs[n]) - knot(i);
+        const int dl = 256 * (p.seg - knot(i)) + p.k;
+        const int dr = 256 * span - dl;
+        p.alpha[n] = span == 0 ? 0 : (dl <= dr ? dl / span : 256 - dr / span);
+    }
+    return p;
+}
+
+CurveParam bezier_param(int i, int tess) {
+    CurveParam p;
+    p.k = bezier_param256(i, tess);
+    for (int &a : p.alpha) a = p.k;
+    return p;
+}
+
+// One de Casteljau / de Boor evaluation of four values with the GE's lerp.
+float curve_eval(const float d[4], const int a[6]) {
+    const float l0 = ge_curve_lerp(d[0], d[1], a[0]);
+    const float l1 = ge_curve_lerp(d[1], d[2], a[1]);
+    const float l2 = ge_curve_lerp(d[2], d[3], a[2]);
+    return ge_curve_lerp(ge_curve_lerp(l0, l1, a[3]), ge_curve_lerp(l1, l2, a[4]), a[5]);
+}
+
+// Colours run in 15 bits: (c << 7) | 0x7F, result >> 7.
+int curve_eval_color(const int d[4], const int a[6]) {
+    const int l0 = color_lerp(d[0], d[1], a[0]);
+    const int l1 = color_lerp(d[1], d[2], a[1]);
+    const int l2 = color_lerp(d[2], d[3], a[2]);
+    return color_lerp(color_lerp(l0, l1, a[3]), color_lerp(l1, l2, a[4]), a[5]);
+}
+
+constexpr int kCurveFloats = 7; // cx, cy, cz, cw, u, v, q
+float &curve_float(Ge::ClipVertex &v, int j) {
+    float *const f[kCurveFloats] = {&v.cx, &v.cy, &v.cz, &v.cw, &v.u, &v.v, &v.q};
+    return *f[j];
+}
+float curve_float(const Ge::ClipVertex &v, int j) { return curve_float(const_cast<Ge::ClipVertex &>(v), j); }
+int curve_color(const Ge::ClipVertex &v, int j) {
+    const float c[4] = {v.r, v.g, v.b, v.a};
+    return (static_cast<int>(std::clamp(c[j], 0.0f, 255.0f)) << 7) | 0x7F;
+}
+
+// Evaluates four control columns (rows of `points` at the v parameter), then one row at the u parameter.
+Ge::ClipVertex curve_point(const Ge::ClipVertex *const rows[4], const CurveParam &pu, const CurveParam &pv) {
+    Ge::ClipVertex columns[4];
+    for (int c = 0; c < 4; ++c) {
+        for (int j = 0; j < kCurveFloats; ++j) {
+            const float p[4] = {curve_float(rows[0][c], j), curve_float(rows[1][c], j), curve_float(rows[2][c], j),
+                                curve_float(rows[3][c], j)};
+            curve_float(columns[c], j) = curve_eval(p, pv.alpha);
+        }
+        float *const col[4] = {&columns[c].r, &columns[c].g, &columns[c].b, &columns[c].a};
+        for (int j = 0; j < 4; ++j) {
+            const int p[4] = {curve_color(rows[0][c], j), curve_color(rows[1][c], j), curve_color(rows[2][c], j),
+                              curve_color(rows[3][c], j)};
+            *col[j] = static_cast<float>(curve_eval_color(p, pv.alpha)); // still 15-bit
+        }
+    }
+    Ge::ClipVertex out;
+    for (int j = 0; j < kCurveFloats; ++j) {
+        const float row[4] = {curve_float(columns[0], j), curve_float(columns[1], j), curve_float(columns[2], j),
+                              curve_float(columns[3], j)};
+        curve_float(out, j) = curve_eval(row, pu.alpha);
+    }
+    const float Ge::ClipVertex::*const members[4] = {&Ge::ClipVertex::r, &Ge::ClipVertex::g, &Ge::ClipVertex::b,
+                                                     &Ge::ClipVertex::a};
+    float *const dst[4] = {&out.r, &out.g, &out.b, &out.a};
+    for (int j = 0; j < 4; ++j) {
+        const int row[4] = {static_cast<int>(columns[0].*members[j]), static_cast<int>(columns[1].*members[j]),
+                            static_cast<int>(columns[2].*members[j]), static_cast<int>(columns[3].*members[j])};
+        *dst[j] = static_cast<float>(curve_eval_color(row, pu.alpha) >> 7);
+    }
+    return out;
+}
+
+} // namespace
+
+void Ge::draw_curve(std::uint32_t data, bool spline) {
+    const int points_u = static_cast<int>(data & 0xFFu), points_v = static_cast<int>((data >> 8u) & 0xFFu);
+    // Hardware draws nothing with fewer than four points along either axis.
+    if (points_u < 4 || points_v < 4) return;
+    const int patches_u = spline ? points_u - 3 : (points_u - 1) / 3;
+    const int patches_v = spline ? points_v - 3 : (points_v - 1) / 3;
+    int tess_u = std::max<int>(1, static_cast<int>(regs_[kPatchDivision] & 0x7Fu));
+    int tess_v = std::max<int>(1, static_cast<int>((regs_[kPatchDivision] >> 8u) & 0x7Fu));
+    const int type_u = static_cast<int>((data >> 16u) & 3u), type_v = static_cast<int>((data >> 18u) & 3u);
+    // Keep the output bounded like PPSSPP's decode buffer.
+    constexpr int kMaxVertices = 65536;
+    auto vertex_total = [&] {
+        return spline ? (patches_u * tess_u + 1) * (patches_v * tess_v + 1) : (tess_u + 1) * (tess_v + 1) * patches_u * patches_v;
+    };
+    while (vertex_total() > kMaxVertices && (tess_u > 1 || tess_v > 1)) {
+        if (tess_u >= tess_v) --tess_u;
+        else --tess_v;
+    }
+
+    prepare_draw();
+    struct GenerationBump {
+        std::uint64_t &generation;
+        bool active;
+        ~GenerationBump() { if (active) ++generation; }
+    } bump{vram_generation_, gl_ == nullptr};
+    const std::uint32_t point_count = static_cast<std::uint32_t>(points_u * points_v);
+    decode_draw(point_count);
+    std::vector<ClipVertex> points(point_count);
+    for (std::uint32_t i = 0; i < point_count; ++i) points[i] = scratch_vertices_[scratch_indices_[i]];
+    // Without texture coordinates the patch parameter is the coordinate.
+    const bool generated_uv = layout_.tc == 0u;
+    auto set_generated_uv = [&](ClipVertex &v, float s, float t) {
+        if (!generated_uv) return;
+        if (layout_.through) {
+            v.u = s;
+            v.v = t;
+        } else {
+            v.u = (s * tex_.su + tex_.ou) * tex_.tw;
+            v.v = (t * tex_.sv + tex_.ov) * tex_.th;
+        }
+        v.q = 1.0f;
+    };
+
+    std::vector<ClipVertex> out(static_cast<std::size_t>(vertex_total()));
+    if (spline) {
+        const int nu = patches_u * tess_u + 1, nv = patches_v * tess_v + 1;
+        std::vector<CurveParam> params_u(static_cast<std::size_t>(nu));
+        for (int i = 0; i < nu; ++i) params_u[i] = spline_param(i, tess_u, patches_u, type_u);
+        for (int iv = 0; iv < nv; ++iv) {
+            const CurveParam pv = spline_param(iv, tess_v, patches_v, type_v);
+            for (int iu = 0; iu < nu; ++iu) {
+                const CurveParam &pu = params_u[iu];
+                const ClipVertex *const rows[4] = {&points[(pv.seg + 0) * points_u + pu.seg], &points[(pv.seg + 1) * points_u + pu.seg],
+                                                   &points[(pv.seg + 2) * points_u + pu.seg], &points[(pv.seg + 3) * points_u + pu.seg]};
+                ClipVertex &v = out[iv * nu + iu];
+                v = curve_point(rows, pu, pv);
+                set_generated_uv(v, pu.seg + pu.k / 256.0f, pv.seg + pv.k / 256.0f);
+            }
+        }
+    } else {
+        const int per_patch = (tess_u + 1) * (tess_v + 1);
+        for (int patch_u = 0; patch_u < patches_u; ++patch_u) {
+            for (int patch_v = 0; patch_v < patches_v; ++patch_v) {
+                const ClipVertex *patch = &points[patch_v * 3 * points_u + patch_u * 3];
+                const ClipVertex *const rows[4] = {patch, patch + points_u, patch + points_u * 2, patch + points_u * 3};
+                const int base = (patch_v * patches_u + patch_u) * per_patch;
+                for (int tile_v = 0; tile_v <= tess_v; ++tile_v) {
+                    const CurveParam pv = bezier_param(tile_v, tess_v);
+                    for (int tile_u = 0; tile_u <= tess_u; ++tile_u) {
+                        const CurveParam pu = bezier_param(tile_u, tess_u);
+                        ClipVertex &v = out[base + tile_v * (tess_u + 1) + tile_u];
+                        v = curve_point(rows, pu, pv);
+                        set_generated_uv(v, patch_u + pu.k / 256.0f, patch_v + pv.k / 256.0f);
+                    }
+                }
+            }
+        }
+    }
+
+    // Index order from PPSSPP's Spline::BuildIndex: per quad (0, 2, 1), (1, 2, 3) for triangles and points,
+    // a zigzag for lines (left edge, diagonal up, and the right edge on a patch's last column).
+    const std::uint32_t patch_prim = regs_[kPatchPrimitive] & 3u;
+    std::vector<std::uint32_t> indices;
+    auto quads = [&](int num_u, int num_v, int patch_quads_u, int total) {
+        for (int v = 0; v < num_v; ++v) {
+            for (int u = 0; u < num_u; ++u) {
+                const auto i0 = static_cast<std::uint32_t>(v * (num_u + 1) + u + total);
+                const auto i2 = static_cast<std::uint32_t>((v + 1) * (num_u + 1) + u + total);
+                if (patch_prim == 1u) {
+                    indices.insert(indices.end(), {i0, i2, i2, i0 + 1u});
+                    if ((u + 1) % patch_quads_u == 0) indices.insert(indices.end(), {i0 + 1u, i2 + 1u});
+                } else {
+                    indices.insert(indices.end(), {i0, i2, i0 + 1u, i0 + 1u, i2, i2 + 1u});
+                }
+            }
+        }
+    };
+    if (spline) {
+        quads(patches_u * tess_u, patches_v * tess_v, tess_u, 0);
+    } else {
+        for (int patch_u = 0; patch_u < patches_u; ++patch_u)
+            for (int patch_v = 0; patch_v < patches_v; ++patch_v)
+                quads(tess_u, tess_v, tess_u, (patch_v * patches_u + patch_u) * (tess_u + 1) * (tess_v + 1));
+    }
+
+    const auto count = static_cast<std::uint32_t>(indices.size());
+    const auto decoded = static_cast<std::uint32_t>(out.size());
+    if (scratch_vertices_.size() < decoded) scratch_vertices_.resize(decoded);
+    if (scratch_indices_.size() < count) scratch_indices_.resize(count);
+    std::copy(out.begin(), out.end(), scratch_vertices_.begin());
+    std::copy(indices.begin(), indices.end(), scratch_indices_.begin());
+    // Patch primitive 0 triangles, 1 lines, anything else points.
+    emit_vertices(patch_prim == 0u ? 3u : (patch_prim == 1u ? 1u : 0u), count, decoded);
 }
 
 void Ge::emit_vertices(std::uint32_t type, std::uint32_t count, std::uint32_t decoded) {

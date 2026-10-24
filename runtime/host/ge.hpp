@@ -61,7 +61,7 @@ public:
     // Marks guest VRAM bytes as rewritten so cached textures there revalidate.
     void touch_vram(std::uint32_t address, std::uint32_t bytes);
 
-private:
+    // Vertex formats are public for the file-local curve evaluation in ge.cpp.
     // Drawing-space vertex: pixels, depth 0..65535, texels, colour 0..255.
     struct Vertex {
         float x{}, y{}, z{};
@@ -77,6 +77,8 @@ private:
         float r{}, g{}, b{}, a{};
         float q{1.0f};
     };
+
+private:
     struct Layout {
         std::uint32_t tc{}, col{}, nrm{}, pos{}, weight{}, idx{};
         std::uint32_t weights{1}, morphs{1};
@@ -88,6 +90,11 @@ private:
     [[nodiscard]] std::uint32_t relative_address(std::uint32_t data) const;
     void draw_primitive(std::uint32_t type, std::uint32_t count);
     void prepare_draw();
+    // Decodes `count` vertices (through the index buffer if any) into scratch_vertices_,
+    // addressed by scratch_indices_; returns how many vertices were decoded.
+    std::uint32_t decode_draw(std::uint32_t count);
+    // Bezier (spline == false) and spline patches, from the BEZIER/SPLINE command data.
+    void draw_curve(std::uint32_t data, bool spline);
     // Draws scratch_vertices_ through scratch_indices_ (count entries, `decoded` vertices).
     void emit_vertices(std::uint32_t type, std::uint32_t count, std::uint32_t decoded);
     void immediate_vertex(std::uint32_t data);
