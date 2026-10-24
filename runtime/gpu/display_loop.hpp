@@ -34,12 +34,16 @@ public:
     // The settings in use; the menu edits them, then calls settings_changed.
     [[nodiscard]] display::Settings &settings() noexcept { return settings_; }
     void settings_changed() { changed("display settings changed"); }
+    // The speed in effect (percent, speed::kUnlimited): the sound plays at it, the title shows it.
+    void set_speed(int percent) noexcept { speed_ = percent; }
+    // Unlimited speed: shows the latest picture now, without pacing.
+    void present_now(const pspweb::DisplayState &d, int vblanks);
     // Rates over the last second, for the menu's badge: PSP vblanks and game frames per second.
     [[nodiscard]] double vblank_rate() const noexcept { return vblank_rate_; }
     [[nodiscard]] double game_fps() const noexcept { return game_fps_; }
     // After each emulated PSP vblank: shows it on the display's vblanks (or when ready with
-    // VRR) and waits so the game keeps its rate. `game_frames` is the flip count (for the title).
-    void after_vblank(const pspweb::DisplayState &d);
+    // VRR) and waits so the game keeps its rate. `vblanks` PSP vblanks ran since the last call (speed).
+    void after_vblank(const pspweb::DisplayState &d, int vblanks = 1);
 
 private:
     void update_pacing();
@@ -54,6 +58,7 @@ private:
     std::filesystem::path save_path_;
     std::string name_;
     double vblank_rate_ = 0, game_fps_ = 0;
+    int speed_ = 100;
 
     std::optional<display::Cadence> cadence_;
     std::uint64_t cad_frame_ = 0, cad_vblank_ = 0, cad_base_ns_ = 0;

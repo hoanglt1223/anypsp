@@ -34,6 +34,7 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/display_loop.cpp
     ${ANYPSP_GPU_DIR}/patches.cpp
     ${ANYPSP_GPU_DIR}/menu.cpp
+    ${ANYPSP_GPU_DIR}/speed.cpp
     ${ANYPSP_GPU_DIR}/menu_host.cpp)
 target_include_directories(anypsp_gpu PUBLIC ${ANYPSP_GPU_DIR})
 # The menu's font and translations, compiled in.
@@ -79,7 +80,8 @@ endif()
 add_executable(anypsp_desktop_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/desktop_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/display_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/patches_tests.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/menu_tests.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/menu_tests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/speed_tests.cpp)
 target_include_directories(anypsp_desktop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit)
 target_link_libraries(anypsp_desktop_tests PRIVATE anypsp_gpu)
 target_compile_definitions(anypsp_desktop_tests PRIVATE ANYPSP_MENU_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/menu")

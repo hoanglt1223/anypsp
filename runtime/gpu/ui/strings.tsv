@@ -10,6 +10,11 @@ on	On	Bật
 off	Off	Tắt
 confirm	Press again to confirm	Nhấn lần nữa để xác nhận
 game.resume	Resume	Tiếp tục
+hdr.speed	Speed	Tốc độ
+hdr.game	Reset and exit	Chơi lại và thoát
+game.speed	Speed	Tốc độ
+game.ff	Fast-forward (hold)	Tua nhanh (giữ phím)
+game.keys	Keys	Phím
 game.reset	Reset	Khởi động lại
 game.reset.confirm	Press Cross again to start the game again	Nhấn X lần nữa để chạy lại trò chơi
 game.exit	Exit game	Thoát trò chơi

@@ -46,6 +46,8 @@ public:
     Result run(std::uint32_t address, std::uint32_t stride, std::uint32_t format);
     // Rates for the badge: vblanks per second and frames the game finished per second.
     void set_rates(double hz, double fps);
+    // The speed in effect (percent, speed::kUnlimited), shown in the badge when it is not 100%.
+    void set_speed(int percent);
     // The display settings the Video tab edits (its Menu FPS paces the menu); `changed` runs
     // after each edit.
     void set_display(display::Settings *settings, std::function<void()> changed);

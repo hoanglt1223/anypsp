@@ -4,6 +4,7 @@
 
 #include "desktop.hpp"
 #include "gl_host.hpp"
+#include "speed.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -134,6 +135,7 @@ struct MenuSession::State {
     std::vector<std::uint32_t> game;  // the paused game picture, internal resolution
     int game_w{}, game_h{};
     double hz{}, fps{};
+    int speed_percent{100};
     const display::Settings *display{};
     std::function<void()> display_changed;
     std::optional<std::int64_t> drag_finger;
@@ -226,10 +228,16 @@ struct MenuSession::State {
 
     // The frame-rate badge in the top-left corner of the window.
     void badge(int w, int h) {
-        if (!controls.map().player().show_fps || hz <= 0) return;
+        const bool rates = controls.map().player().show_fps && hz > 0;
+        if (!rates && speed_percent == 100) return;
         const float u = std::max(0.75f, std::min(static_cast<float>(w) / 960.f, static_cast<float>(h) / 540.f));
-        char text[64];
-        std::snprintf(text, sizeof text, "%.0f Hz  \xC2\xB7  %.0f fps", hz, fps);
+        std::string text;
+        if (rates) {
+            char line[64];
+            std::snprintf(line, sizeof line, "%.0f Hz  \xC2\xB7  %.0f fps", hz, fps);
+            text = line;
+        }
+        if (speed_percent != 100) text += (text.empty() ? "" : "  \xC2\xB7  ") + speed::format(speed_percent);
         const float px = 14 * u;
         const int bw = static_cast<int>(bold_font().measure(text, px) + 24 * u), bh = static_cast<int>(28 * u);
         const int x = static_cast<int>(10 * u), y = static_cast<int>(10 * u);
@@ -255,6 +263,8 @@ MenuSession::MenuSession(gpu::GlHost &gl, desktop::Controls &controls, fs::path 
 }
 
 MenuSession::~MenuSession() { s_->gl.set_overlay({}); }
+
+void MenuSession::set_speed(int percent) { s_->speed_percent = percent; }
 
 void MenuSession::set_rates(double hz, double fps) {
     s_->hz = hz;

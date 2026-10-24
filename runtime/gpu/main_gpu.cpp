@@ -14,6 +14,7 @@
 #include "gl_host.hpp"
 #include "input_map.hpp"
 #include "menu_host.hpp"
+#include "speed.hpp"
 
 #include "kernel.hpp"
 
@@ -414,9 +415,10 @@ int main(int argc, char **argv) {
             if (o.fullscreen) gl->set_fullscreen(true);
             if (!o.mute) audio_open = audio.open();
         }
+        int speed_percent = 100;  // the speed in effect (anypsp::speed)
         g_audio = [&](const std::int16_t *samples, std::uint32_t count) {
             if (wav) wav->write(samples, count);
-            if (audio_open) {
+            if (audio_open && anypsp::speed::audible(speed_percent)) {
                 const auto &player = controls->map().player();
                 audio.set_gain(player.mute ? 0.f : static_cast<float>(player.volume) / 100.f);
                 audio.push(samples, count);
@@ -437,6 +439,9 @@ int main(int argc, char **argv) {
         long frame = 0;
         bool running = true, closed = false;
         const auto started = std::chrono::steady_clock::now();
+        anypsp::speed::VblankBudget vblank_budget;
+        int vblanks_to_show = 0, vblanks_run = 0;  // before the next shown picture, and since the last
+        std::uint64_t shown_ns = 0;
         while (running && frame < frame_limit) {
             if (controls) {
                 if (!controls->poll(*gl)) {
@@ -455,6 +460,16 @@ int main(int argc, char **argv) {
                         break;
                     }
                 }
+                const auto &player = controls->map().player();
+                const int percent =
+                    anypsp::speed::effective(player.speed, controls->held(anypsp::input::Action::FastForward), player.fast_forward);
+                if (percent != speed_percent) {
+                    speed_percent = percent;
+                    vblank_budget.reset();
+                    vblanks_to_show = 0;
+                    window_loop->set_speed(percent);
+                    if (menu) menu->set_speed(percent);
+                }
                 if (o.input.empty()) {
                     const auto pad = controls->pad();
                     kernel->set_pad(pad.buttons, pad.lx, pad.ly);
@@ -466,8 +481,26 @@ int main(int argc, char **argv) {
             if (!game_patches.empty() && patches_on)
                 patch_writes += anypsp::patches::apply(game_patches, anypsp::patches::When::Vblank, rt.memory());
             if (window_loop) {
-                window_loop->after_vblank(kernel->display());
-                if (menu) menu->set_rates(window_loop->vblank_rate(), window_loop->game_fps());
+                // Faster speeds run several PSP vblanks per shown picture; unlimited shows one
+                // about every 1/60 s and runs vblanks in between as fast as it can.
+                ++vblanks_run;
+                bool shown = false;
+                if (speed_percent == anypsp::speed::kUnlimited) {
+                    const auto now = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+                    if (now - shown_ns >= 16'000'000u) {
+                        shown_ns = now;
+                        window_loop->present_now(kernel->display(), vblanks_run);
+                        shown = true;
+                    }
+                } else if (--vblanks_to_show <= 0) {
+                    window_loop->after_vblank(kernel->display(), vblanks_run);
+                    vblanks_to_show = vblank_budget.next(speed_percent);
+                    shown = true;
+                }
+                if (shown) {
+                    vblanks_run = 0;
+                    if (menu) menu->set_rates(window_loop->vblank_rate(), window_loop->game_fps());
+                }
             }
             if (!per_frame) continue;
             capture();

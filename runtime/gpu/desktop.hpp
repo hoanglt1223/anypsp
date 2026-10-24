@@ -118,6 +118,8 @@ public:
     // Handles pending events. Returns false when the user closed the window.
     bool poll(gpu::GlHost &gl);
     [[nodiscard]] input::PadState pad() const;
+    // True while a key or gamepad button bound to `a` is held (FastForward).
+    [[nodiscard]] bool held(input::Action a) const;
     // Display hotkeys (Smoothing...) pressed since the last call; Fullscreen is handled by poll.
     [[nodiscard]] std::vector<input::Action> take_hotkeys();
     [[nodiscard]] bool menu_requested() const noexcept { return ui_.menu; }
@@ -127,6 +129,9 @@ public:
     [[nodiscard]] input::InputMap &map() noexcept { return map_; }
 
 private:
+    static bool key_held(int code);
+    [[nodiscard]] bool button_held(int b) const;
+
     input::InputMap map_;
     std::vector<SDL_Gamepad *> pads_;
     std::vector<input::Action> hotkeys_;

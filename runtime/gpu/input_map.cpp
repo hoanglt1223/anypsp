@@ -2,6 +2,8 @@
 
 #include "input_map.hpp"
 
+#include "speed.hpp"
+
 #include "kernel.hpp"
 
 #include "psprecomp/common.hpp"
@@ -25,7 +27,7 @@ constexpr std::size_t kCount = static_cast<std::size_t>(Action::Count);
 constexpr std::array<const char *, kCount> kActionNames = {
     "Up", "Down", "Left", "Right", "Cross", "Circle", "Square", "Triangle", "L", "R", "Start", "Select",
     "AnalogUp", "AnalogDown", "AnalogLeft", "AnalogRight", "Fullscreen", "Smoothing",
-    "Refresh", "VRR", "SyncToMonitor", "FpsCap", "PauseFps", "Pause", "Menu"};
+    "Refresh", "VRR", "SyncToMonitor", "FpsCap", "PauseFps", "Pause", "Menu", "FastForward"};
 
 constexpr std::array<std::uint32_t, 12> kPadBits = {
     pspweb::pad::kUp, pspweb::pad::kDown, pspweb::pad::kLeft, pspweb::pad::kRight, pspweb::pad::kCross,
@@ -141,6 +143,7 @@ InputMap::InputMap() {
     bind(Action::Pause, {SDL_SCANCODE_PAUSE}, {});
     // Back+Start on a gamepad opens the menu too; it is a chord, so not a binding here.
     bind(Action::Menu, {SDL_SCANCODE_ESCAPE, SDL_SCANCODE_F1}, {});
+    bind(Action::FastForward, {SDL_SCANCODE_SPACE}, {kRightTrigger});
 }
 
 void InputMap::load(const fs::path &path) {
@@ -185,6 +188,12 @@ void InputMap::load(const fs::path &path) {
                 p.light_theme = same(value, "light");
                 continue;
             }
+            if (same(name, "FastForwardSpeed")) {
+                const auto ff = speed::parse_fast_forward(value);
+                if (!ff) throw psprecomp::Error(where() + "FastForwardSpeed is 150, 200, 300, 400, 500, 800 or unlimited");
+                p.fast_forward = *ff;
+                continue;
+            }
             int number_value = 0;
             try {
                 std::size_t used = 0;
@@ -203,6 +212,10 @@ void InputMap::load(const fs::path &path) {
                 if (number_value < 0 || number_value > 100 || number_value % 10 != 0)
                     throw psprecomp::Error(where() + "Volume is 0-100 in steps of 10");
                 p.volume = number_value;
+            } else if (same(name, "Speed")) {
+                if (std::find(speed::kSpeeds.begin(), speed::kSpeeds.end(), number_value) == speed::kSpeeds.end())
+                    throw psprecomp::Error(where() + "Speed is 100, 200, 300 or 400");
+                p.speed = number_value;
             } else if (same(name, "UiScale")) {
                 if (number_value < 75 || number_value > 150 || number_value % 25 != 0)
                     throw psprecomp::Error(where() + "UiScale is 75, 100, 125 or 150");
@@ -260,7 +273,8 @@ std::string InputMap::to_ini() const {
            "\n# The menu: language en|vi, theme dark|light, size 75|100|125|150, ReduceMotion on|off.\nLanguage = " +
            player_.language + "\nTheme = " + (player_.light_theme ? "light" : "dark") +
            "\nUiScale = " + std::to_string(player_.ui_scale) + "\nReduceMotion = " + (player_.reduce_motion ? "on" : "off") +
-           "\n";
+           "\n# Speed in percent: 100|200|300|400, and while FastForward is held 150|200|300|400|500|800|unlimited.\nSpeed = " +
+           std::to_string(player_.speed) + "\nFastForwardSpeed = " + speed::format(player_.fast_forward, false) + "\n";
     return out;
 }
 

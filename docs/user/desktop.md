@@ -50,8 +50,9 @@ window's resolution in its own font, in English or Vietnamese, with a dark or li
 
 The tabs:
 
-- **Game**: *Resume*, *Reset* (starts the program again with the same command line) and *Exit game*;
-  both ask for a second Cross. Game saves are written when the game saves, so nothing is lost.
+- **Game**: *Resume*; a *Speed* section with *Speed* and *Fast-forward (hold)* (see [Speed](#speed));
+  then *Reset* (starts the program again with the same command line) and *Exit game*; both ask for a
+  second Cross. Game saves are written when the game saves, so nothing is lost.
 - **Saves**: the game's saves on the memory stick (`PSP/SAVEDATA/<disc ID>*`), newest first, with their
   icons, titles and dates. AnyPSP has no save states yet, so there are no state slots.
 - **Video**: *Internal resolution* (1x-4x, from the next start), *Fullscreen*, *Scaling* (smooth or
@@ -67,6 +68,17 @@ The tabs:
   second).
 
 Changes are saved at once to the input file in use (or `anypsp-input.ini` in the per-user data folder).
+
+## Speed
+
+*Speed* (100, 200, 300 or 400%) sets how fast the game runs; while the FastForward key is held (Space
+or the right trigger by default, rebindable in the Controls tab or `anypsp-input.ini`) it runs at
+*Fast-forward (hold)* instead: 150-800% or unlimited. Faster speeds run several PSP vblanks for each
+picture shown, spread evenly (1 and 2 in turn at 150%), so frame pacing and smoothing work as at 100%
+(smoothing pauses while faster). The sound plays faster and higher to match up to 400%, and is muted
+above that and at unlimited, which shows a picture about every 1/60 s and runs the game as fast as the
+PC can in between. `--wav` recordings keep every sample. The window title and the frame-rate badge
+show the speed whenever it is not 100%. Both are `[player]` settings (`Speed`, `FastForwardSpeed`).
 
 ## Display settings
 
@@ -181,6 +193,7 @@ FpsCap = F8
 PauseFps = F4
 Pause = Pause
 Menu = Escape, F1
+FastForward = Space
 
 [gamepad]
 Up = DpadUp
@@ -195,6 +208,7 @@ L = LeftShoulder
 R = RightShoulder
 Start = Start
 Select = Back
+FastForward = RightTrigger
 
 [player]
 Scale = 2
@@ -207,6 +221,8 @@ Language = en
 Theme = dark
 UiScale = 100
 ReduceMotion = off
+Speed = 100
+FastForwardSpeed = 300
 ```
 
 - A value is a comma-separated list (`Cross = Z, Space`); an empty value unbinds. Names you leave out

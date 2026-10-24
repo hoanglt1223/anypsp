@@ -301,20 +301,30 @@ bool Controls::poll(gpu::GlHost &gl) {
 
 std::vector<input::Action> Controls::take_hotkeys() { return std::exchange(hotkeys_, {}); }
 
-input::PadState Controls::pad() const {
+bool Controls::key_held(int code) {
     const bool *keys = SDL_GetKeyboardState(nullptr);
-    const auto key = [keys](int code) { return keys != nullptr && keys[code]; };
-    const auto button = [this](int b) {
-        for (SDL_Gamepad *pad : pads_) {
-            if (b == input::kLeftTrigger || b == input::kRightTrigger) {
-                const auto axis = b == input::kLeftTrigger ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
-                if (SDL_GetGamepadAxis(pad, axis) > 16384) return true;
-            } else if (SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(b))) {
-                return true;
-            }
+    return keys != nullptr && keys[code];
+}
+
+bool Controls::button_held(int b) const {
+    for (SDL_Gamepad *pad : pads_) {
+        if (b == input::kLeftTrigger || b == input::kRightTrigger) {
+            const auto axis = b == input::kLeftTrigger ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER;
+            if (SDL_GetGamepadAxis(pad, axis) > 16384) return true;
+        } else if (SDL_GetGamepadButton(pad, static_cast<SDL_GamepadButton>(b))) {
+            return true;
         }
-        return false;
-    };
+    }
+    return false;
+}
+
+bool Controls::held(input::Action a) const {
+    return map_.held(a, &Controls::key_held, [this](int b) { return button_held(b); });
+}
+
+input::PadState Controls::pad() const {
+    const auto key = &Controls::key_held;
+    const auto button = [this](int b) { return button_held(b); };
     // The stick pushed furthest wins when several gamepads are connected.
     int x = 0, y = 0;
     for (SDL_Gamepad *pad : pads_) {

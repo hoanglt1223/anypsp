@@ -19,6 +19,7 @@ enum class Action {
     Smoothing,
     Refresh, Vrr, SyncToMonitor, FpsCap, PauseFps, Pause,
     Menu,
+    FastForward,  // held: run at the fast-forward speed
     Count
 };
 
@@ -32,6 +33,8 @@ struct PlayerSettings {
     bool light_theme{};       // Theme = dark|light
     int ui_scale{100};        // UiScale = 75|100|125|150 (the menu's size in percent)
     bool reduce_motion{};     // ReduceMotion = on|off: the menu does not animate
+    int speed{100};           // Speed = 100|200|300|400 (percent)
+    int fast_forward{300};    // FastForwardSpeed = 150|200|300|400|500|800|unlimited (0), while held
     bool operator==(const PlayerSettings &) const = default;
 };
 

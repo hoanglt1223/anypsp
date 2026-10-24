@@ -3,6 +3,7 @@
 #include "menu.hpp"
 
 #include "kernel.hpp"
+#include "speed.hpp"
 
 #include <SDL3/SDL_scancode.h>
 
@@ -263,6 +264,10 @@ void Menu::step(const Row &row, int dir, std::vector<Action> &out) {
         else return;
         out.push_back(Action::DisplayChanged);
         return;
+    } else if (id == "game.speed") {
+        p.speed = speed::cycle(speed::kSpeeds, p.speed, dir);
+    } else if (id == "game.ff") {
+        p.fast_forward = speed::cycle(speed::kFastForwardSpeeds, p.fast_forward, dir);
     } else if (id == "audio.volume") {
         const int next = std::clamp(p.volume + dir * 10, 0, 100);
         if (next == p.volume) return;
@@ -401,6 +406,16 @@ std::vector<Row> Menu::rows() const {
     switch (page_) {
     case Page::Game:
         row("game.resume", RowKind::Action, "", Icon::Resume);
+        row("hdr.speed", RowKind::Header, "", Icon::None);
+        row("game.speed", RowKind::Choice, speed::format(p.speed), Icon::Speed);
+        {
+            std::string keys = bindings(map_.keys(input::Action::FastForward), true);
+            const std::string pads = bindings(map_.buttons(input::Action::FastForward), false);
+            if (!pads.empty()) keys += (keys.empty() ? "" : ", ") + pads;
+            Row *ff = row("game.ff", RowKind::Choice, speed::format(p.fast_forward), Icon::Speed);
+            if (!keys.empty()) ff->detail = tr("game.keys") + ": " + keys;
+        }
+        row("hdr.game", RowKind::Header, "", Icon::None);
         row("game.reset", RowKind::Action, confirm_ == "game.reset" ? tr("confirm") : "", Icon::Reset);
         row("game.exit", RowKind::Action, confirm_ == "game.exit" ? tr("confirm") : "", Icon::Exit)->danger = true;
         break;

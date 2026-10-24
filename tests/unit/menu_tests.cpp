@@ -178,11 +178,29 @@ TEST_CASE("menu: tabs, settings, rebinding and the input file") {
     menu.open();
     CHECK(menu.lines()[0] == "== Game ==");
     CHECK(menu.lines()[1] == "> Resume");
+    // The Speed section: the set speed and the fast-forward speed, both saved as [player] settings.
+    CHECK(menu.lines()[2] == "  -- Speed --");
+    press(menu, pad::kDown);
+    CHECK(menu.lines()[3] == "> Speed  < 100% >");
+    auto speed_actions = press(menu, pad::kRight);
+    CHECK(map.player().speed == 200);
+    CHECK(speed_actions.size() == 1 && speed_actions[0] == anypsp::menu::Action::SettingsChanged);
+    press(menu, pad::kLeft);
+    press(menu, pad::kLeft);
+    CHECK(map.player().speed == 400);
+    press(menu, pad::kRight);
+    press(menu, pad::kDown);
+    CHECK(menu.lines()[4] == "> Fast-forward (hold)  < 300% >");
+    for (int i = 0; i < 4; ++i) press(menu, pad::kRight);
+    CHECK(map.player().fast_forward == 0);
+    CHECK(menu.lines()[4] == "> Fast-forward (hold)  < unlimited >");
+    for (int i = 0; i < 4; ++i) press(menu, pad::kLeft);
+    CHECK(map.player().fast_forward == 300);
     // Exit wants a second Cross.
     press(menu, pad::kDown);
     press(menu, pad::kDown);
     CHECK(press(menu, pad::kCross).empty());
-    CHECK(menu.lines()[3] == "> Exit game  Press again to confirm");
+    CHECK(menu.lines()[7] == "> Exit game  Press again to confirm");
     const auto exit = press(menu, pad::kCross);
     CHECK(exit.size() == 2 && exit[0] == anypsp::menu::Action::Exit);
     CHECK(!menu.is_open());
