@@ -87,6 +87,11 @@ private:
     void execute(std::uint32_t op);
     [[nodiscard]] std::uint32_t relative_address(std::uint32_t data) const;
     void draw_primitive(std::uint32_t type, std::uint32_t count);
+    void prepare_draw();
+    // Draws scratch_vertices_ through scratch_indices_ (count entries, `decoded` vertices).
+    void emit_vertices(std::uint32_t type, std::uint32_t count, std::uint32_t decoded);
+    void immediate_vertex(std::uint32_t data);
+    void flush_immediate();
     void block_transfer();
     void load_clut();
 
@@ -172,6 +177,10 @@ private:
     std::uint32_t prev_prim_type_{8};
     std::vector<ClipVertex> prim_carry_;
     std::uint32_t strip_parity_{};
+    // Immediate-mode vertices (commands 0xF0-0xF9), drawn when the primitive is complete
+    // or any other command arrives.
+    std::vector<ClipVertex> imm_vertices_;
+    std::uint32_t imm_prim_{8}, imm_flags_{};
     // Host view of the current primitive's vertex data (null: use GuestMemory).
     const std::uint8_t *vertex_raw_{};
     std::uint32_t vertex_raw_base_{};

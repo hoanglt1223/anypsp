@@ -212,6 +212,11 @@ bool Ge::run_list(std::uint32_t start, std::uint32_t stall) {
         ListScope(const ListScope &) = delete;
         ListScope &operator=(const ListScope &) = delete;
     } list_scope{gl_};
+    // Destroyed before list_scope: immediate vertices are drawn before the list's pixels are written back.
+    struct ImmediateFlush {
+        Ge &ge;
+        ~ImmediateFlush() { ge.flush_immediate(); }
+    } immediate_flush{*this};
     pc_ = start & 0x0FFFFFFFu;
     stall &= 0x0FFFFFFFu;
     call_stack_.clear();
@@ -256,6 +261,7 @@ bool Ge::run_list(std::uint32_t start, std::uint32_t stall) {
 void Ge::execute(std::uint32_t op) {
     const std::uint32_t cmd = op >> 24u;
     const std::uint32_t data = op & 0x00FFFFFFu;
+    if (!imm_vertices_.empty() && (cmd < 0xF0u || cmd > 0xF9u)) flush_immediate();
     switch (cmd) {
     case kNop: return;
     case kVaddr: vertex_address_ = relative_address(data); break;
@@ -320,6 +326,88 @@ void Ge::execute(std::uint32_t op) {
     }
     if (cmd == kLoadClut) load_clut();
     else if (cmd == kTransferStart) block_transfer();
+    else if (cmd == 0xF7u) immediate_vertex(data);
+}
+
+// Behaviour from PPSSPP's GPUCommon::Execute_ImmVertexAlphaPrim and FlushImm
+// (pspautotests gpu/primitives/immediate).
+void Ge::immediate_vertex(std::uint32_t data) {
+    const std::uint32_t prim = (data >> 8u) & 7u;
+    if (prim != 7u) flush_immediate();
+    if (imm_vertices_.size() >= 4096u) return;
+    const bool through = (regs_[kVertexType] & (1u << 23u)) != 0u;
+    const float offset_x = through ? 32768.0f : static_cast<float>(regs_[kOffsetX] & 0xFFFFu);
+    const float offset_y = through ? 32768.0f : static_cast<float>(regs_[kOffsetY] & 0xFFFFu);
+    ClipVertex v;
+    v.cx = (static_cast<float>(regs_[0xF0] & 0xFFFFu) - offset_x) / 16.0f;
+    v.cy = (static_cast<float>(regs_[0xF1] & 0xFFFFu) - offset_y) / 16.0f;
+    v.cz = static_cast<float>(regs_[0xF2] & 0xFFFFu);
+    const std::uint32_t color = regs_[0xF6];
+    v.r = static_cast<float>(color & 0xFFu);
+    v.g = static_cast<float>((color >> 8u) & 0xFFu);
+    v.b = static_cast<float>((color >> 16u) & 0xFFu);
+    v.a = static_cast<float>(data & 0xFFu);
+    // Secondary colour is added outside through mode when the light mode separates it.
+    if (!through && (regs_[0x5E] & 1u) != 0u) {
+        const std::uint32_t secondary = regs_[0xF9];
+        v.r = std::min(255.0f, v.r + static_cast<float>(secondary & 0xFFu));
+        v.g = std::min(255.0f, v.g + static_cast<float>((secondary >> 8u) & 0xFFu));
+        v.b = std::min(255.0f, v.b + static_cast<float>((secondary >> 16u) & 0xFFu));
+    }
+    // Texture coordinates are normalized; drawn as texels with q divided per pixel.
+    if (tex_dirty_) build_tex_setup();
+    v.u = cmd_float(regs_[0xF3]) * tex_.tw;
+    v.v = cmd_float(regs_[0xF4]) * tex_.th;
+    v.q = cmd_float(regs_[0xF5]);
+    imm_vertices_.push_back(v);
+    if (prim != 7u) {
+        imm_prim_ = prim;
+        imm_flags_ = data & 0x00FFF800u;
+    } else if (imm_prim_ <= 6u) {
+        static constexpr std::uint32_t kFlushCount[8] = {1, 2, 0, 3, 0, 0, 2, 0};
+        if (imm_vertices_.size() == kFlushCount[imm_prim_]) flush_immediate();
+    }
+}
+
+void Ge::flush_immediate() {
+    if (imm_vertices_.empty()) return;
+    const auto count = static_cast<std::uint32_t>(imm_vertices_.size());
+    if (imm_prim_ > 6u) {
+        imm_vertices_.clear();
+        return;
+    }
+    // The first vertex's flags replace shading, culling and texturing; positions are in drawing space.
+    constexpr std::uint32_t kSaved[] = {kVertexType, kShadeMode, kCullEnable, kCull, kTextureEnable};
+    std::uint32_t saved[std::size(kSaved)];
+    for (std::size_t i = 0; i < std::size(kSaved); ++i) saved[i] = regs_[kSaved[i]];
+    regs_[kVertexType] = 1u << 23u;
+    regs_[kShadeMode] = (imm_flags_ >> 18u) & 1u;
+    regs_[kCullEnable] = (imm_flags_ >> 19u) & 1u;
+    regs_[kCull] = (imm_flags_ >> 20u) & 1u;
+    regs_[kTextureEnable] = (imm_flags_ >> 21u) & 1u;
+    state_dirty_ = true;
+    if (scratch_vertices_.size() < count) scratch_vertices_.resize(count);
+    if (scratch_indices_.size() < count) scratch_indices_.resize(count);
+    std::copy(imm_vertices_.begin(), imm_vertices_.end(), scratch_vertices_.begin());
+    for (std::uint32_t i = 0; i < count; ++i) scratch_indices_[i] = i;
+    imm_vertices_.clear();
+    {
+        prepare_draw();
+        struct GenerationBump {
+            std::uint64_t &generation;
+            bool active;
+            ~GenerationBump() { if (active) ++generation; }
+        } bump{vram_generation_, gl_ == nullptr};
+        const std::uint32_t saved_prev = prev_prim_type_;
+        auto saved_carry = prim_carry_;
+        const std::uint32_t saved_parity = strip_parity_;
+        emit_vertices(imm_prim_, count, count);
+        prev_prim_type_ = saved_prev;
+        prim_carry_ = std::move(saved_carry);
+        strip_parity_ = saved_parity;
+    }
+    for (std::size_t i = 0; i < std::size(kSaved); ++i) regs_[kSaved[i]] = saved[i];
+    state_dirty_ = true;
 }
 
 std::vector<std::uint32_t> Ge::save_context() const {
@@ -727,7 +815,7 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
 // ---------------------------------------------------------------------------
 // Primitives
 
-void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
+void Ge::prepare_draw() {
     ++stats_.prims;
     compute_layout();
     viewport_[0] = cmd_float(regs_[kViewportXScale]);
@@ -774,6 +862,10 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         state_dirty_ = false;
         submitted_through_ = layout_.through;
     }
+}
+
+void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
+    prepare_draw();
     // Software drawing writes VRAM, which may hold textures; GL drawing does not.
     struct GenerationBump {
         std::uint64_t &generation;
@@ -832,6 +924,12 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     vertex_raw_ = nullptr;
     if (index_size != 0u) index_address_ += count * index_size;
     else vertex_address_ += count * l.size * l.morphs;
+    emit_vertices(type, count, decoded);
+}
+
+void Ge::emit_vertices(std::uint32_t type, std::uint32_t count, std::uint32_t decoded) {
+    std::vector<ClipVertex> &vertices = scratch_vertices_;
+    std::vector<std::uint32_t> &indices = scratch_indices_;
     std::uint32_t decoded_count = decoded;
     if (type == 7u) {
         type = prev_prim_type_;
