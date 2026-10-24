@@ -480,8 +480,9 @@ static void test_codegen_link_branch_before_delay_slot() {
     require(link != std::string::npos, "Generated BLTZAL link write was not found");
     require(condition != std::string::npos, "Generated BLTZAL condition was not found");
     require(delay_slot != std::string::npos, "Generated BLTZAL delay slot was not found");
-    require(link < condition && condition < delay_slot,
-            "BLTZAL must write RA before capturing the condition and executing the delay slot");
+    // pspautotests cpu/cpu_alu/branch_link_ra: on hardware, bltzal $ra tests the old $ra.
+    require(condition < link && link < delay_slot,
+            "BLTZAL must capture the condition, then write RA before executing the delay slot");
     std::filesystem::remove_all(root);
 #endif
 }

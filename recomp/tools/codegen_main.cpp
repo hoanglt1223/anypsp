@@ -295,19 +295,20 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                         static_cast<std::int32_t>(decoded.immediate) * 4);
                     const std::uint32_t fallthrough = pc + 8u;
                     const bool likely_branch = is_likely_branch(decoded.kind);
-                    const std::string condition = branch_condition(decoded);
+                    // The condition is read before the link write: bltzal $ra tests the old $ra.
+                    body << "    { const bool branch_taken = " << branch_condition(decoded) << ";\n";
                     if (is_link_branch(decoded.kind)) {
-                        body << "    ctx.set_gpr(31, " << psprecomp::hex32(pc + 8u) << "u);\n";
+                        body << "      ctx.set_gpr(31, " << psprecomp::hex32(pc + 8u) << "u);\n";
                     }
                     if (likely_branch) {
-                        body << "    if (" << condition << ") {\n"
+                        body << "      if (branch_taken) {\n"
                              << emit_instruction(slot, pc + 4u);
-                        emit_target(body, target, function.entry_labels, "        ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                        emit_target(body, target, function.entry_labels, "          ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                        body << "      }\n";
+                        emit_target(body, fallthrough, function.entry_labels, "      ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
                         body << "    }\n";
-                        emit_target(body, fallthrough, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
                     } else {
-                        body << "    { const bool branch_taken = " << condition << ";\n"
-                             << emit_instruction(slot, pc + 4u)
+                        body << emit_instruction(slot, pc + 4u)
                              << "      if (branch_taken) {\n";
                         emit_target(body, target, function.entry_labels, "          ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
                         body << "      }\n";
