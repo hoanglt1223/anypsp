@@ -15,9 +15,9 @@ anypsp-play "Game.iso" --scale 3 --fullscreen
   reclaim the space; it is extracted again on the next run.
 - Saves go to the memory stick folder `memstick/PSP/SAVEDATA/` in the per-user data folder, so they
   persist between runs. `--ms DIR` uses another memory stick folder.
-- The game runs at the PSP's 59.94 vblanks per second. The window title shows both rates reached, for
-  example `60 Hz / game 30 fps`: `Hz` is the emulation speed (60 is full speed), `game fps` the frames the
-  game itself finishes (many PSP games, UNH 1's menus included, draw at 30). Audio is 44.1 kHz stereo; when the host runs ahead of the sound card, new audio is dropped
+- The game runs at the PSP's 59.94 vblanks per second. The window title shows the rates reached
+  ([Display settings](#display-settings)): `vblank/s` is the emulation speed (60 is full speed), `game fps`
+  the frames the game itself finishes (many PSP games, UNH 1's menus included, draw at 30). Audio is 44.1 kHz stereo; when the host runs ahead of the sound card, new audio is dropped
   rather than queued past 100 ms, so sound never lags behind the picture. `--mute` disables sound.
 - `--scale 1`-`4` sets the internal resolution (multiples of 480x272; default 2). The window is
   resizable and the picture keeps its aspect ratio. F11 toggles fullscreen.
@@ -45,11 +45,38 @@ the file for one run.
 ```ini
 [display]
 Smoothing = off
+Refresh = auto
+VRR = off
+SyncToMonitor = off
+PauseFps = 30
+FpsCap = off
 ```
 
 | Setting | Option | Hotkey | |
 |---|---|---|---|
 | `Smoothing` | `--smoothing on\|off` | F9 | Off by default. See below. |
+| `Refresh` | `--refresh auto\|60\|75\|90\|120\|144\|165\|240` | F5 cycles | `auto` reads the refresh of the monitor the window is on (again every second, so moving the window is followed). |
+| `VRR` | `--vrr on\|off` | F6 | Variable refresh monitor (G-Sync, FreeSync): no vsync, each vblank presented as soon as it is ready. |
+| `SyncToMonitor` | `--sync-to-monitor on\|off` | F7 | Runs the PSP's vblanks at the monitor's rate when it (or a half, third, quarter of it) is within 1% of 59.94. |
+| `PauseFps` | `--pause-fps 30\|60` | F4 | Pictures per second while paused (Pause key). |
+| `FpsCap` | `--fps-cap off\|30\|60\|120` | F8 cycles | Most pictures shown per second. |
+
+### Refresh and frame pacing
+
+The game always runs at the PSP's 59.94 vblanks per second: a faster monitor makes motion smoother,
+never the game faster. Each PSP vblank is shown from the first monitor refresh at or after its time,
+with vsync, so vblanks stay up for evenly spread numbers of refreshes (on 60 Hz one each with a repeat
+about every 17 s; on 144 Hz 2-3-2-2-3). When `Refresh` is set to a rate the monitor does not run at, a
+timer keeps the same schedule without vsync. If a picture would be late its refresh is skipped rather
+than slowing the game. Sound follows the display's clock through resampling of at most 0.5%.
+`SyncToMonitor` removes the 60 Hz repeat by running vblanks at exactly 60 (0.1% faster, sound pitched
+to match); it has no effect on 75, 144 or 165 Hz. With `VRR` the game is timed at 59.94 and the monitor
+follows it. AnyPSP cannot ask the monitor whether it has variable refresh, so it is a setting. The
+Pause key pauses the game; the picture is then redrawn at `PauseFps`.
+
+The window title shows the monitor rate (`auto` or `set`) and pacing (`vsync`, `timer` or `VRR`), the
+frames the game finished (`game`), the pictures shown (`shown`) and the PSP vblanks run per second
+(59.94 is full speed), for example `144 Hz auto vsync / game 30 fps / shown 144 fps / 60 vblank/s`.
 
 ### Smoothing
 
@@ -88,6 +115,12 @@ AnalogLeft = J
 AnalogRight = L
 Fullscreen = F11
 Smoothing = F9
+Refresh = F5
+VRR = F6
+SyncToMonitor = F7
+FpsCap = F8
+PauseFps = F4
+Pause = Pause
 
 [gamepad]
 Up = DpadUp

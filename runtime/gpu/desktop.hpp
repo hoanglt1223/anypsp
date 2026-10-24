@@ -40,11 +40,15 @@ public:
     bool open();
     void push(const std::int16_t *samples, std::uint32_t frames);
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept { return dropped_; }
+    // Playback speed (1 = 44.1 kHz as pushed): resamples to follow the display's clock.
+    void set_ratio(double ratio);
+    [[nodiscard]] std::size_t queued_bytes() const;
 
 private:
     SDL_AudioStream *stream_{};
     bool started_{};
     std::uint64_t dropped_{};
+    double ratio_{1.0};
 };
 
 // 44.1 kHz stereo s16 WAV file; the header is completed by close() or the destructor.

@@ -30,7 +30,8 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/desktop.cpp
     ${ANYPSP_GPU_DIR}/disc.cpp
     ${ANYPSP_GPU_DIR}/input_map.cpp
-    ${ANYPSP_GPU_DIR}/display.cpp)
+    ${ANYPSP_GPU_DIR}/display.cpp
+    ${ANYPSP_GPU_DIR}/display_loop.cpp)
 target_include_directories(anypsp_gpu PUBLIC ${ANYPSP_GPU_DIR})
 target_compile_definitions(anypsp_gpu PUBLIC ANYPSP_GL_DESKTOP)
 target_link_libraries(anypsp_gpu PUBLIC anypsp_host SDL3::SDL3-static)

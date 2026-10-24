@@ -89,9 +89,8 @@ void GlHost::start(int scale, const std::string &title) {
     context_ = SDL_GL_CreateContext(window_);
     if (context_ == nullptr) fail("cannot create an OpenGL 3.3 core context");
     if (!SDL_GL_MakeCurrent(window_, context_)) fail("cannot make the GL context current");
-    // No vsync: the caller paces vblanks at 59.94 Hz with a timer, and waiting for
-    // the monitor as well let the two waits add up (about 32 vblanks per second
-    // on a 60 Hz display).  The desktop compositor keeps windowed output tear-free.
+    // No vsync to start with: the window's display loop turns it on when it paces by the
+    // monitor (and then does not also wait on a timer).
     SDL_GL_SetSwapInterval(0);
     if (const char *missing = load_gl([](const char *name) { return reinterpret_cast<GlProc>(SDL_GL_GetProcAddress(name)); }))
         throw psprecomp::Error(std::string("OpenGL function missing: ") + missing);
@@ -228,6 +227,16 @@ void GlHost::show(bool blend_with_previous) {
         throw psprecomp::Error("GL error " + std::to_string(error) + " while presenting a frame");
     SDL_GL_SwapWindow(window_);
 }
+
+double GlHost::refresh_rate() const {
+    const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_));
+    if (mode == nullptr) return 0.0;
+    if (mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0)
+        return static_cast<double>(mode->refresh_rate_numerator) / mode->refresh_rate_denominator;
+    return mode->refresh_rate > 0.0f ? mode->refresh_rate : 0.0;
+}
+
+bool GlHost::set_swap_interval(int interval) { return SDL_GL_SetSwapInterval(interval); }
 
 void GlHost::set_fullscreen(bool on) {
     if (SDL_SetWindowFullscreen(window_, on)) fullscreen_ = on;

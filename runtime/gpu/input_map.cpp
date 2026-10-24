@@ -24,7 +24,8 @@ constexpr std::size_t kCount = static_cast<std::size_t>(Action::Count);
 
 constexpr std::array<const char *, kCount> kActionNames = {
     "Up", "Down", "Left", "Right", "Cross", "Circle", "Square", "Triangle", "L", "R", "Start", "Select",
-    "AnalogUp", "AnalogDown", "AnalogLeft", "AnalogRight", "Fullscreen", "Smoothing"};
+    "AnalogUp", "AnalogDown", "AnalogLeft", "AnalogRight", "Fullscreen", "Smoothing",
+    "Refresh", "VRR", "SyncToMonitor", "FpsCap", "PauseFps", "Pause"};
 
 constexpr std::array<std::uint32_t, 12> kPadBits = {
     pspweb::pad::kUp, pspweb::pad::kDown, pspweb::pad::kLeft, pspweb::pad::kRight, pspweb::pad::kCross,
@@ -95,6 +96,12 @@ InputMap::InputMap() {
     bind(Action::AnalogRight, {SDL_SCANCODE_L}, {});
     bind(Action::Fullscreen, {SDL_SCANCODE_F11}, {});
     bind(Action::Smoothing, {SDL_SCANCODE_F9}, {});
+    bind(Action::Refresh, {SDL_SCANCODE_F5}, {});
+    bind(Action::Vrr, {SDL_SCANCODE_F6}, {});
+    bind(Action::SyncToMonitor, {SDL_SCANCODE_F7}, {});
+    bind(Action::FpsCap, {SDL_SCANCODE_F8}, {});
+    bind(Action::PauseFps, {SDL_SCANCODE_F4}, {});
+    bind(Action::Pause, {SDL_SCANCODE_PAUSE}, {});
 }
 
 void InputMap::load(const fs::path &path) {

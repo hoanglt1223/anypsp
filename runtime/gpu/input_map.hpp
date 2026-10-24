@@ -17,6 +17,7 @@ enum class Action {
     AnalogUp, AnalogDown, AnalogLeft, AnalogRight,
     Fullscreen,
     Smoothing,
+    Refresh, Vrr, SyncToMonitor, FpsCap, PauseFps, Pause,
     Count
 };
 

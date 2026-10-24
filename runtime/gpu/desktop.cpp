@@ -47,6 +47,16 @@ bool AudioOut::open() {
     return true;
 }
 
+void AudioOut::set_ratio(double ratio) {
+    if (stream_ == nullptr || ratio == ratio_) return;
+    if (SDL_SetAudioStreamFrequencyRatio(stream_, static_cast<float>(ratio))) ratio_ = ratio;
+}
+
+std::size_t AudioOut::queued_bytes() const {
+    const int queued = stream_ != nullptr ? SDL_GetAudioStreamQueued(stream_) : 0;
+    return queued > 0 ? static_cast<std::size_t>(queued) : 0u;
+}
+
 void AudioOut::push(const std::int16_t *samples, std::uint32_t frames) {
     if (stream_ == nullptr || frames == 0u) return;
     const int queued = SDL_GetAudioStreamQueued(stream_);
@@ -131,7 +141,9 @@ bool Controls::poll(gpu::GlHost &gl) {
             if (std::find(map_.keys(input::Action::Fullscreen).begin(), map_.keys(input::Action::Fullscreen).end(),
                           static_cast<int>(event.key.scancode)) != map_.keys(input::Action::Fullscreen).end())
                 gl.set_fullscreen(!gl.fullscreen());
-            for (const input::Action a : {input::Action::Smoothing}) {
+            for (const input::Action a : {input::Action::Smoothing, input::Action::Refresh, input::Action::Vrr,
+                                          input::Action::SyncToMonitor, input::Action::FpsCap, input::Action::PauseFps,
+                                          input::Action::Pause}) {
                 const auto &keys = map_.keys(a);
                 if (std::find(keys.begin(), keys.end(), static_cast<int>(event.key.scancode)) != keys.end()) hotkeys_.push_back(a);
             }

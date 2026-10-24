@@ -7,6 +7,7 @@
 
 #include "desktop.hpp"
 #include "display.hpp"
+#include "display_loop.hpp"
 #include "disc.hpp"
 #include "frame_output.hpp"
 #include "gl_host.hpp"
@@ -60,6 +61,7 @@ const char *const kUsage =
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
     "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
+    "         [--refresh auto|hz] [--vrr on|off] [--sync-to-monitor on|off] [--pause-fps 30|60] [--fps-cap off|n]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
@@ -75,8 +77,11 @@ const char *const kUsage =
     "reloads VRAM the CPU wrote into the GPU copy; 1 writes back after every display list (slow, for\n"
     "debugging); 0 never writes back.\n"
     "--deterministic drives guest time from executed code instead of the host clock, so scripted runs repeat.\n"
-"--smoothing on blends the in-between vblank of games drawing at 30 fps (F9 toggles it in a window); display\n"
-"settings are kept in anypsp-display.ini (next to the program or in the per-user data folder).\n"
+"Display settings (a window only; docs/user/desktop.md): --smoothing on blends the in-between vblank of games\n"
+"drawing at 30 fps (F9); --refresh sets the monitor rate pacing assumes (F5; auto detects it); --vrr presents\n"
+"each vblank when ready (F6); --sync-to-monitor runs vblanks at the monitor rate within 1% (F7); --fps-cap\n"
+"limits pictures shown (F8); --pause-fps limits them while paused (F4; Pause key pauses). They are kept in\n"
+"anypsp-display.ini next to the program or in the per-user data folder.\n"
     "--input holds the given sceCtrl button mask (hex) from that frame on. --hle-stubs lists imports\n"
     "without HLE that return a fixed value: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
@@ -201,6 +206,11 @@ Options parse(int argc, char **argv) {
         else if (flag == "--hle-stubs") o.hle_stubs = value;
         else if (flag == "--input") o.input = parse_input_script(value);
         else if (flag == "--smoothing") o.display.emplace_back("Smoothing", value);
+        else if (flag == "--refresh") o.display.emplace_back("Refresh", value);
+        else if (flag == "--vrr") o.display.emplace_back("VRR", value);
+        else if (flag == "--sync-to-monitor") o.display.emplace_back("SyncToMonitor", value);
+        else if (flag == "--pause-fps") o.display.emplace_back("PauseFps", value);
+        else if (flag == "--fps-cap") o.display.emplace_back("FpsCap", value);
         else if (flag == "--frames") o.frames = parse_positive(flag, value), o.frames_set = true;
         else if (flag == "--png-every") o.png_every = parse_positive(flag, value);
         else if (flag == "--scale") o.scale = static_cast<int>(std::min(parse_positive(flag, value), 8L)), o.scale_set = true;
@@ -379,24 +389,26 @@ int main(int argc, char **argv) {
             if (audio_open) audio.push(samples, count);
         };
         kernel->set_audio_sink([](const std::int16_t *samples, std::uint32_t count) { g_audio(samples, count); });
-        anypsp::desktop::FramePacer pacer;
+        std::optional<anypsp::desktop::DisplayLoop> window_loop;
+        if (controls)
+            window_loop.emplace(*gl, audio_open ? &audio : nullptr, display, user_dir / anypsp::display::kFileName,
+                                module.info->name);
 
         const bool per_frame = !o.frames_dir.empty() || hashes.is_open();
         const long frame_limit = o.window && !o.frames_set ? std::numeric_limits<long>::max() : o.frames;
         long frame = 0;
         bool running = true, closed = false;
         const auto started = std::chrono::steady_clock::now();
-        auto title_time = started;
-        std::uint64_t title_game_frames = 0;
-        // Smoothing: vblanks the current game frame has been on screen, and the flip count it started at.
-        std::uint64_t shown_changes = kernel->display().buffer_changes;
-        unsigned frame_vblanks = 0;
-        std::string notice;
         while (running && frame < frame_limit) {
             if (controls) {
                 if (!controls->poll(*gl)) {
                     closed = true;
                     break;
+                }
+                window_loop->hotkeys(controls->take_hotkeys());
+                if (window_loop->paused()) {
+                    window_loop->show_paused();
+                    continue;
                 }
                 if (o.input.empty()) {
                     const auto pad = controls->pad();
@@ -406,53 +418,7 @@ int main(int argc, char **argv) {
             if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
             running = kernel->frame(50.0);
             ++frame;
-            if (controls) {
-                pacer.wait();
-                for (const auto action : controls->take_hotkeys()) {
-                    if (action != anypsp::input::Action::Smoothing) continue;
-                    display.smoothing = !display.smoothing;
-                    notice = display.smoothing ? "smoothing on" : "smoothing off";
-                    try {
-                        anypsp::display::save(user_dir / anypsp::display::kFileName, display);
-                    } catch (const std::exception &e) {
-                        std::cerr << "[anypsp] " << e.what() << "\n";
-                    }
-                    std::cout << "[anypsp] " << notice << "\n";
-                }
-                const auto &d = kernel->display();
-                if (d.buffer_changes != shown_changes) {
-                    // A new game frame: with smoothing, the vblank it appears on shows it
-                    // blended with the frame before when that one was up for two vblanks.
-                    const unsigned previous = frame_vblanks;
-                    shown_changes = d.buffer_changes;
-                    frame_vblanks = 1;
-                    if (display.smoothing && previous == 2u) {
-                        gl->keep_previous();
-                        gl->render_output(d.framebuffer, d.stride, d.format);
-                        gl->show(anypsp::display::blend_on_new_frame(true, previous, gl->difference()));
-                    } else {
-                        gl->present_to_window(d.framebuffer, d.stride, d.format);
-                    }
-                } else {
-                    ++frame_vblanks;
-                    gl->present_to_window(d.framebuffer, d.stride, d.format);
-                }
-                if (frame % 60 == 0) {
-                    const auto now = std::chrono::steady_clock::now();
-                    // Vblanks per second (the emulation speed; 60 is full speed) and frames the
-                    // game itself finished (many games draw at 30).
-                    const double seconds_passed = std::chrono::duration<double>(now - title_time).count();
-                    const std::uint64_t game_frames = kernel->display().buffer_changes;
-                    title_time = now;
-                    char title[160];
-                    std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f Hz / game %.0f fps%s%s", module.info->name.c_str(),
-                                  60.0 / seconds_passed, static_cast<double>(game_frames - title_game_frames) / seconds_passed,
-                                  display.smoothing ? " / smoothing" : "", notice.empty() ? "" : (" - " + notice).c_str());
-                    notice.clear();
-                    title_game_frames = game_frames;
-                    SDL_SetWindowTitle(gl->window(), title);
-                }
-            }
+            if (window_loop) window_loop->after_vblank(kernel->display());
             if (!per_frame) continue;
             capture();
             if (hashes.is_open()) {

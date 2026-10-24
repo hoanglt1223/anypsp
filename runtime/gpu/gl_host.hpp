@@ -41,6 +41,10 @@ public:
     [[nodiscard]] double difference();
     void show(bool blend_with_previous);
     void set_fullscreen(bool on);
+    // Refresh rate of the monitor the window is on, or 0 when unknown.
+    [[nodiscard]] double refresh_rate() const;
+    // Swaps wait for `interval` vblanks (0: no wait). False when the driver refuses.
+    bool set_swap_interval(int interval);
     [[nodiscard]] bool fullscreen() const noexcept { return fullscreen_; }
     [[nodiscard]] SDL_Window *window() const noexcept { return window_; }
 
