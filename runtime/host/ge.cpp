@@ -2189,6 +2189,23 @@ void Ge::emit_sprite(const Vertex &a_in, const Vertex &b_in) {
     ++stats_.sprites;
     const auto r = static_cast<std::uint8_t>(clamp255(b.r)), g = static_cast<std::uint8_t>(clamp255(b.g));
     const auto bl = static_cast<std::uint8_t>(clamp255(b.b)), al = static_cast<std::uint8_t>(clamp255(b.a));
+    if (a_in.q != 1.0f || b_in.q != 1.0f) {
+        // Projected texture: s and q follow x, t follows y, divided per pixel; the two
+        // off-diagonal corners swap coordinates when the corners are given flipped
+        // (PPSSPP GPU/Software/Clipper.cpp AddTriangleRect, RotateUV).
+        GlVertex tl{a_in.x, a_in.y, b.z, 1.0f, a_in.u, a_in.v, r, g, bl, al, a_in.q};
+        GlVertex tr{b_in.x, a_in.y, b.z, 1.0f, b_in.u, a_in.v, r, g, bl, al, b_in.q};
+        GlVertex bl_{a_in.x, b_in.y, b.z, 1.0f, a_in.u, b_in.v, r, g, bl, al, a_in.q};
+        const GlVertex br{b_in.x, b_in.y, b.z, 1.0f, b_in.u, b_in.v, r, g, bl, al, b_in.q};
+        if ((a_in.x < b_in.x && a_in.y > b_in.y) || (a_in.x > b_in.x && a_in.y < b_in.y)) {
+            std::swap(tr.u, bl_.u);
+            std::swap(tr.v, bl_.v);
+            std::swap(tr.q, bl_.q);
+        }
+        gl_->triangle(tl, tr, bl_);
+        gl_->triangle(tr, br, bl_);
+        return;
+    }
     const GlVertex tl{a.x, a.y, b.z, 1.0f, a.u, a.v, r, g, bl, al};
     const GlVertex tr{b.x, a.y, b.z, 1.0f, b.u, a.v, r, g, bl, al};
     const GlVertex bl_{a.x, b.y, b.z, 1.0f, a.u, b.v, r, g, bl, al};
