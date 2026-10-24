@@ -42,7 +42,7 @@ inline constexpr std::uint32_t kVramAddress = 0x04000000u;
 inline constexpr std::uint32_t kVramSize = 0x00200000u;
 
 enum class ThreadState { Dormant, Ready, Running, Waiting, Dead };
-enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx, CtrlRead, LwMutex };
+enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx, CtrlRead, LwMutex, Vpl };
 
 // PSP pad button bits (SceCtrlData::Buttons).
 namespace pad {
@@ -72,6 +72,7 @@ struct Thread {
     std::uint32_t wakeup_count{};
     std::int32_t exit_status{};
     std::uint64_t ready_sequence{};
+    bool suspended{};
     psprecomp::AllegrexContext ctx{};
 };
 
@@ -79,12 +80,15 @@ struct Semaphore {
     std::string name;
     std::int32_t count{};
     std::int32_t max{};
+    std::uint32_t attr{};
+    std::int32_t init{};
 };
 
 struct EventFlag {
     std::string name;
     std::uint32_t attr{};
     std::uint32_t pattern{};
+    std::uint32_t init{};
 };
 
 struct MemoryBlock {
@@ -124,6 +128,21 @@ struct FixedPool {
     std::uint32_t base{};
     std::int32_t memory_block{-1};
     std::vector<bool> used;
+    std::uint32_t attr{};
+};
+
+struct VariablePool {
+    std::string name;
+    std::uint32_t attr{};
+    std::uint32_t base{};      // first usable byte, after the pool header
+    std::uint32_t pool_size{};
+    std::int32_t memory_block{-1};
+    std::map<std::uint32_t, std::uint32_t> chunks; // chunk address -> size, header included
+
+    [[nodiscard]] std::uint32_t free_size() const;
+    // Returns the guest address of the allocation, or 0 when no free range is large enough.
+    std::uint32_t allocate(std::uint32_t size);
+    bool free(std::uint32_t address);
 };
 
 struct LoadedModule {
@@ -139,6 +158,7 @@ struct Mutex {
     std::uint32_t attr{};
     std::int32_t count{};
     std::int32_t owner{}; // thread uid, 0 when unlocked
+    std::int32_t init{};
 };
 
 // Mailboxes pass pointers to guest message packets; the queue lives on the host.
@@ -548,6 +568,7 @@ private:
     std::map<std::int32_t, OpenDirectory> directories_;
     std::map<std::int32_t, LoadedModule> modules_;
     std::map<std::int32_t, FixedPool> fpls_;
+    std::map<std::int32_t, VariablePool> vpls_;
     std::map<std::int32_t, Mutex> mutexes_;
     std::map<std::int32_t, Mailbox> mailboxes_;
     std::map<std::pair<std::uint32_t, std::uint32_t>, SubInterrupt> sub_interrupts_; // (interrupt, sub) -> handler
@@ -565,6 +586,25 @@ private:
     // mpeg.cpp: sceMpeg (movies are consumed without decoding for now).
     void install_mpeg();
     void install_network();
+    void install_kernel_objects();
+    void write_object_name(std::uint32_t info, const std::string &name);
+    // Validates a Refer*Status buffer and writes its size field; false when the call is finished.
+    bool begin_refer(Ctx &ctx, std::uint32_t info, std::uint32_t size);
+    [[nodiscard]] std::uint32_t count_waiters(WaitType wait, std::int32_t uid) const;
+    void allocate_vpl(Ctx &ctx, bool wait);
+    void sceKernelSuspendThread(Ctx &ctx);
+    void sceKernelReferSemaStatus(Ctx &ctx);
+    void sceKernelReferMbxStatus(Ctx &ctx);
+    void sceKernelReferFplStatus(Ctx &ctx);
+    void sceKernelReferMutexStatus(Ctx &ctx);
+    void sceKernelCreateVpl(Ctx &ctx);
+    void sceKernelDeleteVpl(Ctx &ctx);
+    void sceKernelAllocateVpl(Ctx &ctx);
+    void sceKernelTryAllocateVpl(Ctx &ctx);
+    void sceKernelFreeVpl(Ctx &ctx);
+    void sceKernelReferVplStatus(Ctx &ctx);
+    void sceIoRemove(Ctx &ctx);
+    void sceIoRmdir(Ctx &ctx);
     void install_sas();      // sas.cpp: the SAS voice synthesizer (sound effects)
     // Mixes a buffer that starts playing at `start_sample` into the output.
     void mix_audio(std::uint64_t start_sample, const std::int16_t *stereo, std::uint32_t frames,

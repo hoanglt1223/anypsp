@@ -23,6 +23,8 @@ constexpr std::uint32_t kErrorAudioChannelNotReserved = 0x80260008u;
 constexpr std::uint32_t kErrorAudioNoChannel = 0x80260002u;
 constexpr std::uint32_t kErrorAudioChannelBusy = 0x80260002u;
 constexpr std::uint32_t kErrorInvalidSystemParam = 0x80110103u;
+constexpr std::uint32_t kErrorUnknownFpl = 0x8002019Du;
+constexpr std::uint32_t kErrorIllegalMemblock = 0x800201B6u;
 constexpr std::uint32_t kAudioRate = 44100u;
 
 std::uint32_t align_up(std::uint32_t value, std::uint32_t alignment) {
@@ -104,7 +106,6 @@ void Kernel::install_devices() {
     hle(tm, 0x3AD58B8Cu, "sceKernelSuspendDispatchThread", &Kernel::return_one);
     hle(tm, 0x27E22EC2u, "sceKernelResumeDispatchThread", &Kernel::return_zero);
     hle(tm, 0xEDBA5844u, "sceKernelDeleteCallback", &Kernel::return_zero);
-    hle(tm, 0x75156E8Fu, "sceKernelResumeThread", &Kernel::sceKernelResumeThread);
 
     const char *suspend = "sceSuspendForUser";
     hle(suspend, 0x3E0271D3u, "sceKernelVolatileMemLock", &Kernel::sceKernelVolatileMemLock);
@@ -122,6 +123,8 @@ void Kernel::install_devices() {
     hle("IoFileMgrForUser", 0x54F5FB11u, "sceIoDevctl", &Kernel::sceIoDevctl);
     hle("IoFileMgrForUser", 0x06A70004u, "sceIoMkdir", &Kernel::return_zero);
     hle("IoFileMgrForUser", 0x779103A0u, "sceIoRename", &Kernel::sceIoRename);
+    hle("IoFileMgrForUser", 0xF27A9C51u, "sceIoRemove", &Kernel::sceIoRemove);
+    hle("IoFileMgrForUser", 0x1117C65Fu, "sceIoRmdir", &Kernel::sceIoRmdir);
     hle("scePower", 0xEBD177D6u, "scePowerSetClockFrequency", &Kernel::return_zero);
     hle("scePower", 0x469989ADu, "scePowerSetClockFrequency2", &Kernel::return_zero);
     // Firmware modules are all high-level emulated, so loading one is a no-op.
@@ -536,6 +539,7 @@ void Kernel::sceKernelCreateFpl(Ctx &ctx) {
     }
     pool.base = blocks_.at(pool.memory_block).address;
     pool.used.assign(count, false);
+    pool.attr = ctx.gpr[6];
     const std::int32_t uid = new_uid();
     fpls_[uid] = std::move(pool);
     finish(ctx, static_cast<std::uint32_t>(uid));
@@ -544,7 +548,7 @@ void Kernel::sceKernelCreateFpl(Ctx &ctx) {
 void Kernel::sceKernelDeleteFpl(Ctx &ctx) {
     const auto it = fpls_.find(static_cast<std::int32_t>(ctx.gpr[4]));
     if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownUid);
+        finish(ctx, kErrorUnknownFpl);
         return;
     }
     blocks_.erase(it->second.memory_block);
@@ -556,7 +560,7 @@ void Kernel::sceKernelAllocateFpl(Ctx &ctx) {
     const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
     const auto it = fpls_.find(uid);
     if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownUid);
+        finish(ctx, kErrorUnknownFpl);
         return;
     }
     auto &pool = it->second;
@@ -579,7 +583,7 @@ void Kernel::sceKernelAllocateFpl(Ctx &ctx) {
 void Kernel::sceKernelTryAllocateFpl(Ctx &ctx) {
     const auto it = fpls_.find(static_cast<std::int32_t>(ctx.gpr[4]));
     if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownUid);
+        finish(ctx, kErrorUnknownFpl);
         return;
     }
     auto &pool = it->second;
@@ -597,13 +601,13 @@ void Kernel::sceKernelFreeFpl(Ctx &ctx) {
     const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
     const auto it = fpls_.find(uid);
     if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownUid);
+        finish(ctx, kErrorUnknownFpl);
         return;
     }
     auto &pool = it->second;
     const std::uint32_t index = (ctx.gpr[5] - pool.base) / pool.block_size;
-    if (ctx.gpr[5] < pool.base || index >= pool.used.size()) {
-        finish(ctx, kErrorUnknownUid);
+    if (ctx.gpr[5] < pool.base || index >= pool.used.size() || !pool.used[index]) {
+        finish(ctx, kErrorIllegalMemblock);
         return;
     }
     pool.used[index] = false;
@@ -629,15 +633,15 @@ void Kernel::sceKernelReferThreadStatus(Ctx &ctx) {
         return;
     }
     const std::uint32_t info = ctx.gpr[5];
+    if (!begin_refer(ctx, info, 0x68u)) return;
     for (std::uint32_t i = 4u; i < 0x68u; i += 4u) rt_.memory().store32(info + i, 0u);
-    for (std::size_t i = 0; i < 32u; ++i)
-        rt_.memory().store8(info + 4u + static_cast<std::uint32_t>(i),
-                            i < t->name.size() ? static_cast<std::uint8_t>(t->name[i]) : 0u);
+    write_object_name(info, t->name);
     std::uint32_t status = 0x10u; // dormant
     if (t->state == ThreadState::Running) status = 0x01u;
     else if (t->state == ThreadState::Ready) status = 0x02u;
     else if (t->state == ThreadState::Waiting) status = 0x04u;
     else if (t->state == ThreadState::Dead) status = 0x20u;
+    if (t->suspended) status = (status & ~0x02u) | 0x08u; // a suspended ready thread reports only SUSPEND
     rt_.memory().store32(info + 0x24u, t->attr);
     rt_.memory().store32(info + 0x28u, status);
     rt_.memory().store32(info + 0x2Cu, t->entry);
@@ -646,7 +650,7 @@ void Kernel::sceKernelReferThreadStatus(Ctx &ctx) {
     rt_.memory().store32(info + 0x38u, t->gp);
     rt_.memory().store32(info + 0x3Cu, static_cast<std::uint32_t>(t->priority));
     rt_.memory().store32(info + 0x40u, static_cast<std::uint32_t>(t->priority));
-    // PSP wait types: 1 sleep, 2 delay, 3 sema, 4 event flag, 7 fpl, 9 thread end.
+    // PSP wait types: 1 sleep, 2 delay, 3 sema, 4 event flag, 5 mbx, 6 vpl, 7 fpl, 9 thread end, 13 mutex, 14 lwmutex.
     std::uint32_t wait_type = 0u;
     if (t->state == ThreadState::Waiting) {
         switch (t->wait) {
@@ -654,12 +658,16 @@ void Kernel::sceKernelReferThreadStatus(Ctx &ctx) {
         case WaitType::Delay: case WaitType::Vblank: case WaitType::Io: wait_type = 2u; break;
         case WaitType::Sema: wait_type = 3u; break;
         case WaitType::EventFlag: wait_type = 4u; break;
+        case WaitType::Mbx: wait_type = 5u; break;
+        case WaitType::Vpl: wait_type = 6u; break;
         case WaitType::Fpl: wait_type = 7u; break;
         case WaitType::ThreadEnd: wait_type = 9u; break;
+        case WaitType::Mutex: wait_type = 13u; break;
+        case WaitType::LwMutex: wait_type = 14u; break;
         default: break;
         }
     }
-    const bool waits_on_object = wait_type == 3u || wait_type == 4u || wait_type == 7u || wait_type == 9u;
+    const bool waits_on_object = wait_type >= 3u && wait_type != 8u && wait_type != 10u && wait_type != 11u && wait_type != 12u;
     rt_.memory().store32(info + 0x44u, wait_type);
     rt_.memory().store32(info + 0x48u, waits_on_object ? static_cast<std::uint32_t>(t->wait_uid) : 0u);
     rt_.memory().store32(info + 0x4Cu, t->wakeup_count);
@@ -674,11 +682,10 @@ void Kernel::sceKernelReferEventFlagStatus(Ctx &ctx) {
         return;
     }
     const std::uint32_t info = ctx.gpr[5];
-    for (std::size_t i = 0; i < 32u; ++i)
-        rt_.memory().store8(info + 4u + static_cast<std::uint32_t>(i),
-                            i < it->second.name.size() ? static_cast<std::uint8_t>(it->second.name[i]) : 0u);
+    if (!begin_refer(ctx, info, 0x34u)) return;
+    write_object_name(info, it->second.name);
     rt_.memory().store32(info + 0x24u, it->second.attr);
-    rt_.memory().store32(info + 0x28u, it->second.pattern);
+    rt_.memory().store32(info + 0x28u, it->second.init);
     rt_.memory().store32(info + 0x2Cu, it->second.pattern);
     std::uint32_t waiting = 0u;
     for (const auto &[tid, t] : threads_) {

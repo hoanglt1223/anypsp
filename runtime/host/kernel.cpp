@@ -44,7 +44,6 @@ constexpr std::uint32_t kErrorUnknownThread = 0x80020198u;
 constexpr std::uint32_t kErrorUnknownSema = 0x80020199u;
 constexpr std::uint32_t kErrorUnknownEventFlag = 0x8002019Au;
 constexpr std::uint32_t kErrorNotDormant = 0x800201A4u;
-constexpr std::uint32_t kErrorNotSuspend = 0x800201A5u;
 constexpr std::uint32_t kErrorWaitTimeout = 0x800201A8u;
 constexpr std::uint32_t kErrorSemaZero = 0x800201ADu;
 constexpr std::uint32_t kErrorSemaOverflow = 0x800201AEu;
@@ -444,6 +443,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     install_sas();
     install_atrac();
     install_network();
+    install_kernel_objects();
     install_fonts();
     install_savedata();
     for (const auto &import : imports) install_fallback(import);
@@ -473,7 +473,7 @@ Thread *Kernel::pick_ready() {
     Thread *best = nullptr;
     for (auto &[uid, t] : threads_) {
         (void)uid;
-        if (t.state != ThreadState::Ready) continue;
+        if (t.state != ThreadState::Ready || t.suspended) continue;
         if (best == nullptr || t.priority < best->priority ||
             (t.priority == best->priority && t.ready_sequence < best->ready_sequence))
             best = &t;
@@ -573,7 +573,7 @@ void Kernel::poll_waits() {
             wake(t, 0u);
         } else if (t.wait == WaitType::Sema || t.wait == WaitType::EventFlag || t.wait == WaitType::ThreadEnd ||
                    t.wait == WaitType::Fpl || t.wait == WaitType::Mutex || t.wait == WaitType::Mbx ||
-                   t.wait == WaitType::LwMutex) {
+                   t.wait == WaitType::LwMutex || t.wait == WaitType::Vpl) {
             wake(t, kErrorWaitTimeout);
         }
     }
@@ -965,11 +965,6 @@ void Kernel::sceKernelWakeupThread(Ctx &ctx) {
     maybe_preempt(ctx);
 }
 
-void Kernel::sceKernelResumeThread(Ctx &ctx) {
-    // sceKernelSuspendThread is not implemented, so no thread is ever suspended.
-    finish(ctx, thread(static_cast<std::int32_t>(ctx.gpr[4])) == nullptr ? kErrorUnknownThread : kErrorNotSuspend);
-}
-
 void Kernel::sceKernelDelayThread(Ctx &ctx) {
     Thread *t = current();
     if (t != nullptr) t->wake_time_us = now_us() + std::max(ctx.gpr[4], 1u);
@@ -1030,7 +1025,7 @@ void Kernel::sceKernelGetSystemTime(Ctx &ctx) {
 void Kernel::sceKernelCreateSema(Ctx &ctx) {
     const std::int32_t uid = new_uid();
     semaphores_[uid] = Semaphore{read_string(ctx.gpr[4], 32), static_cast<std::int32_t>(ctx.gpr[6]),
-                                 static_cast<std::int32_t>(ctx.gpr[7])};
+                                 static_cast<std::int32_t>(ctx.gpr[7]), ctx.gpr[5], static_cast<std::int32_t>(ctx.gpr[6])};
     finish(ctx, static_cast<std::uint32_t>(uid));
 }
 
@@ -1125,6 +1120,7 @@ void Kernel::sceKernelPollSema(Ctx &ctx) {
 void Kernel::sceKernelCreateMutex(Ctx &ctx) {
     const std::int32_t uid = new_uid();
     Mutex mutex{read_string(ctx.gpr[4], 32), ctx.gpr[5], static_cast<std::int32_t>(ctx.gpr[6]), 0};
+    mutex.init = mutex.count;
     if (mutex.count > 0) mutex.owner = current_uid_;
     mutexes_[uid] = std::move(mutex);
     finish(ctx, static_cast<std::uint32_t>(uid));
@@ -1415,8 +1411,12 @@ void Kernel::run_alarms() {
 }
 
 void Kernel::sceKernelCreateEventFlag(Ctx &ctx) {
+    if (ctx.gpr[4] == 0u) {
+        finish(ctx, 0x80020001u); // SCE_KERNEL_ERROR_ERROR: no name
+        return;
+    }
     const std::int32_t uid = new_uid();
-    event_flags_[uid] = EventFlag{read_string(ctx.gpr[4], 32), ctx.gpr[5], ctx.gpr[6]};
+    event_flags_[uid] = EventFlag{read_string(ctx.gpr[4], 32), ctx.gpr[5], ctx.gpr[6], ctx.gpr[6]};
     finish(ctx, static_cast<std::uint32_t>(uid));
 }
 

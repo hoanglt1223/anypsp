@@ -404,6 +404,38 @@ void Kernel::sceIoRename(Ctx &ctx) {
     finish(ctx, ec ? kErrorIo : 0u);
 }
 
+void Kernel::sceIoRemove(Ctx &ctx) {
+    const std::string path = read_string(ctx.gpr[4]);
+    DirectoryEntry entry;
+    if (std::string relative; disc_relative(path, relative)) {
+        finish(ctx, stat_path(path, entry) ? kErrorReadOnly : kErrorFileNotFound);
+        return;
+    }
+    if (!stat_path(path, entry) || entry.directory) {
+        finish(ctx, kErrorFileNotFound);
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(host_path(path), ec);
+    finish(ctx, ec ? kErrorIo : 0u);
+}
+
+void Kernel::sceIoRmdir(Ctx &ctx) {
+    const std::string path = read_string(ctx.gpr[4]);
+    DirectoryEntry entry;
+    if (std::string relative; disc_relative(path, relative)) {
+        finish(ctx, stat_path(path, entry) ? kErrorReadOnly : kErrorFileNotFound);
+        return;
+    }
+    if (!stat_path(path, entry) || !entry.directory) {
+        finish(ctx, kErrorFileNotFound);
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(host_path(path), ec); // fails on a non-empty directory, as on the PSP
+    finish(ctx, ec ? kErrorIo : 0u);
+}
+
 void Kernel::sceIoChdir(Ctx &ctx) {
     cwd_ = read_string(ctx.gpr[4]);
     finish(ctx, 0u);
