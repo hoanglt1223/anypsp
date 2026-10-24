@@ -13,6 +13,7 @@
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -214,6 +215,7 @@ int main(int argc, char **argv) {
             start = end + 1;
         }
         std::vector<std::uint8_t> frame_pixels(480u * 272u * 4u);
+        const auto run_start = std::chrono::steady_clock::now();
         while (running && frame < frames) {
             if (const auto press = input_script.find(frame); press != input_script.end()) kernel->set_pad(press->second);
             running = kernel->frame(50.0);
@@ -225,6 +227,10 @@ int main(int argc, char **argv) {
         }
         std::cout << "[anypsp] ran " << frame << " frames; "
                   << (running ? "frame limit reached" : "guest stopped: " + kernel->halt_reason()) << "\n";
+        const double run_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - run_start).count();
+        std::cout << "[anypsp] " << static_cast<long>(run_ms) << " ms (" << (run_ms > 0.0 ? frame * 1000.0 / run_ms : 0.0)
+                  << " fps); GE busy " << static_cast<long>(kernel->ge_worker().busy_ms()) << " ms, CPU waiting on GE "
+                  << static_cast<long>(kernel->ge_wait_ms()) << " ms\n";
         if (!dump.empty()) {
             std::vector<std::uint8_t> rgba(480u * 272u * 4u);
             kernel->read_framebuffer(rgba.data());

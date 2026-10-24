@@ -13,7 +13,12 @@
 #include "psprecomp/common.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <algorithm>
 #include <cfenv>
+#include <cstdlib>
+#include <fstream>
+#include <unordered_map>
+#include <vector>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -47,6 +52,44 @@ const float cst_constants[32] = {
 };
 
 u32 g_llBit = 0;
+
+namespace {
+
+// ANYPSP_CPU_PROFILE=<file>: at exit, write how often generated code fell back to the
+// interpreter, per instruction name (execute) and per entry address (interpret).
+struct Profile {
+    std::string path;
+    std::unordered_map<const char *, std::uint64_t> executed;
+    std::unordered_map<std::uint32_t, std::pair<std::uint64_t, std::uint64_t>> interpreted; // entries, steps
+
+    Profile() {
+        if (const char *p = std::getenv("ANYPSP_CPU_PROFILE"); p != nullptr && *p != '\0') path = p;
+    }
+    ~Profile() {
+        if (path.empty()) return;
+        std::ofstream out(path, std::ios::binary);
+        if (!out) return;
+        std::vector<std::pair<const char *, std::uint64_t>> ops(executed.begin(), executed.end());
+        std::sort(ops.begin(), ops.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+        std::uint64_t total = 0;
+        for (const auto &[name, count] : ops) total += count;
+        out << "execute " << total << "\n";
+        for (const auto &[name, count] : ops) out << "op " << name << " " << count << "\n";
+        std::vector<std::pair<std::uint32_t, std::pair<std::uint64_t, std::uint64_t>>> pcs(interpreted.begin(),
+                                                                                           interpreted.end());
+        std::sort(pcs.begin(), pcs.end(), [](const auto &a, const auto &b) { return a.second.second > b.second.second; });
+        std::uint64_t steps = 0;
+        for (const auto &entry : pcs) steps += entry.second.second;
+        out << "interpret " << steps << "\n";
+        for (const auto &[pc, counts] : pcs)
+            out << "pc " << psprecomp::hex32(pc) << " " << counts.first << " " << counts.second << "\n";
+    }
+};
+
+Profile g_profile;
+const bool g_profiling = !g_profile.path.empty();
+
+} // namespace
 
 MIPSState::MIPSState(psprecomp::Runtime *runtime, psprecomp::AllegrexContext &context,
                      psprecomp::GuestMemory &memory) noexcept
@@ -167,6 +210,7 @@ bool execute(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, std::uint3
                                                    : std::string(MIPSGetName(op)) + " outside the translated control flow");
         return false;
     }
+    if (g_profiling) ++g_profile.executed[MIPSGetName(op)];
     function(&mips, op);
     if (mips.fault != Fault::None) {
         rt.unsupported(pc, op, fault_message(mips.fault, op));
@@ -181,7 +225,9 @@ void interpret(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, std::uin
     mips.pc = ctx.pc;
     apply_mode(ctx.fcr31);
     u32 branch_op = 0;
-    for (std::uint32_t step = 0;; ++step) {
+    const u32 entry = ctx.pc;
+    std::uint32_t step = 0;
+    for (;; ++step) {
         const u32 pc = mips.pc;
         if (!mips.inDelaySlot) {
             if (step != 0u && (rt.has_function(pc) || step >= budget || rt.stopped())) break;
@@ -208,6 +254,11 @@ void interpret(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, std::uin
         }
     }
     ctx.pc = mips.pc;
+    if (g_profiling) {
+        auto &counts = g_profile.interpreted[entry];
+        ++counts.first;
+        counts.second += step;
+    }
 }
 
 } // namespace anypsp::cpu
