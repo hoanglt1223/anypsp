@@ -9,8 +9,10 @@
 #include "ge_gl.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct SDL_Window;
@@ -46,6 +48,18 @@ public:
     // Swaps wait for `interval` vblanks (0: no wait). False when the driver refuses.
     bool set_swap_interval(int interval);
     [[nodiscard]] bool fullscreen() const noexcept { return fullscreen_; }
+    // How the picture is scaled into the window: linear (smooth, the default) or nearest.
+    void set_smooth(bool on) noexcept { smooth_ = on; }
+    // Runs after the game picture is drawn into the window and before the swap, with the
+    // window's size in pixels (the frame-rate badge).
+    void set_overlay(std::function<void(int, int)> overlay) { overlay_ = std::move(overlay); }
+    // The window's drawable size in pixels.
+    [[nodiscard]] std::pair<int, int> window_pixels() const;
+    // Shows a picture of window_pixels() size (R, G, B, A bytes, top row first) and swaps.
+    void present_picture(const std::uint32_t *pixels, int width, int height);
+    // Reads w x h pixels at (x, y) of the window's back buffer (top row first), lets `edit`
+    // change them, and writes them back.
+    void edit_window(int x, int y, int w, int h, const std::function<void(std::vector<std::uint32_t> &)> &edit);
     [[nodiscard]] SDL_Window *window() const noexcept { return window_; }
 
     [[nodiscard]] pspweb::GeGl &renderer() { return *renderer_; }
@@ -69,6 +83,13 @@ private:
     std::vector<std::uint8_t> small_[2];
     int scale_{1};
     bool fullscreen_{};
+    bool smooth_{true};
+    std::function<void(int, int)> overlay_;
+    std::uint32_t ui_fbo_{}, ui_texture_{};
+    int ui_width_{}, ui_height_{};
+    std::vector<std::uint32_t> ui_rows_;
+    // Uploads top-first pixels and copies them flipped into the window at (x, y) from the top.
+    void blit_to_window(const std::uint32_t *pixels, int width, int height, int x, int y);
     std::string device_;
     std::vector<std::uint8_t> readback_;
 };

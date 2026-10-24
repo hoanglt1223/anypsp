@@ -13,6 +13,7 @@
 #include "frame_output.hpp"
 #include "gl_host.hpp"
 #include "input_map.hpp"
+#include "menu_host.hpp"
 
 #include "kernel.hpp"
 
@@ -67,7 +68,7 @@ const char *const kUsage =
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
-    "default; F11 toggles fullscreen), runs until the window closes unless --frames is given, and keeps saves\n"
+    "default; F11 toggles fullscreen; Escape, F1 or Back+Start opens the menu), runs until the window closes unless --frames is given, and keeps saves\n"
     "in the per-user data folder's memstick (override with --ms). --keymap names the input file; otherwise\n"
     "anypsp-input.ini next to the program or in the per-user data folder is used. --write-input writes the\n"
     "current bindings to a file and exits. --scale defaults to the input file's Scale (2) in a window.\n"
@@ -82,7 +83,7 @@ const char *const kUsage =
 "Display settings (a window only; docs/user/desktop.md): --smoothing on blends the in-between vblank of games\n"
 "drawing at 30 fps (F9); --refresh sets the monitor rate pacing assumes (F5; auto detects it); --vrr presents\n"
 "each vblank when ready (F6); --sync-to-monitor runs vblanks at the monitor rate within 1% (F7); --fps-cap\n"
-"limits pictures shown (F8); --pause-fps limits them while paused (F4; Pause key pauses). They are kept in\n"
+"limits pictures shown (F8); --pause-fps sets the menu's frame rate (F4; the Pause key opens the menu). They are kept in\n"
 "anypsp-display.ini next to the program or in the per-user data folder.\n"
 "--patches auto applies patches/<disc ID>.ini (next to the program or in the per-user data folder), for\n"
 "example the 60 fps patch for UNH 1; --patches file.ini names a patch file.\n"
@@ -385,6 +386,7 @@ int main(int argc, char **argv) {
         }
         anypsp::patches::apply(game_patches, anypsp::patches::When::Load, rt.memory());
         std::uint64_t patch_writes = 0;
+        bool patches_on = true;  // the menu's Game patches switch
         kernel->boot(module.entry, module.info->gp, o.guest_path);
         std::cout << "[anypsp] " << module.info->name << " at " << psprecomp::hex32(module.base) << "-"
                   << psprecomp::hex32(module.end) << ", " << imports.size() << " imports, " << module.relocations.applied
@@ -395,24 +397,40 @@ int main(int argc, char **argv) {
         if (o.window) display = anypsp::display::load(display_file);
         for (const auto &[name, value] : o.display) anypsp::display::apply_setting(display, name, value, "--");
         std::optional<anypsp::desktop::Controls> controls;
+        std::unique_ptr<anypsp::menu::MenuSession> menu;
         anypsp::desktop::AudioOut audio;
         bool audio_open = false;
         std::unique_ptr<anypsp::desktop::WavWriter> wav;
         if (!o.wav.empty()) wav = std::make_unique<anypsp::desktop::WavWriter>(o.wav);
         if (o.window) {
             controls.emplace(input_map);
+            // The menu saves changed bindings and settings to the input file in use, else to a
+            // new one in the per-user data folder.
+            const std::filesystem::path sfo = std::filesystem::path(o.disc) / "PSP_GAME" / "PARAM.SFO";
+            const std::string disc_title = anypsp::menu::sfo_string(sfo, "TITLE");
+            menu = std::make_unique<anypsp::menu::MenuSession>(
+                *gl, *controls, keymap.empty() ? user_dir / anypsp::input::kInputFileName : keymap, o.memstick,
+                anypsp::menu::sfo_string(sfo, "DISC_ID"), disc_title.empty() ? module.info->name : disc_title);
             if (o.fullscreen) gl->set_fullscreen(true);
             if (!o.mute) audio_open = audio.open();
         }
         g_audio = [&](const std::int16_t *samples, std::uint32_t count) {
             if (wav) wav->write(samples, count);
-            if (audio_open) audio.push(samples, count);
+            if (audio_open) {
+                const auto &player = controls->map().player();
+                audio.set_gain(player.mute ? 0.f : static_cast<float>(player.volume) / 100.f);
+                audio.push(samples, count);
+            }
         };
         kernel->set_audio_sink([](const std::int16_t *samples, std::uint32_t count) { g_audio(samples, count); });
         std::optional<anypsp::desktop::DisplayLoop> window_loop;
         if (controls)
             window_loop.emplace(*gl, audio_open ? &audio : nullptr, display, user_dir / anypsp::display::kFileName,
                                 module.info->name);
+        if (menu) {
+            menu->set_display(&window_loop->settings(), [&window_loop] { window_loop->settings_changed(); });
+            menu->set_patches(game_patches.empty() ? nullptr : &patches_on);
+        }
 
         const bool per_frame = !o.frames_dir.empty() || hashes.is_open();
         const long frame_limit = o.window && !o.frames_set ? std::numeric_limits<long>::max() : o.frames;
@@ -426,9 +444,16 @@ int main(int argc, char **argv) {
                     break;
                 }
                 window_loop->hotkeys(controls->take_hotkeys());
-                if (window_loop->paused()) {
-                    window_loop->show_paused();
-                    continue;
+                if (menu && controls->menu_requested()) {
+                    // The game waits while the menu is open.
+                    const auto &d = kernel->display();
+                    using Result = anypsp::menu::MenuSession::Result;
+                    const Result result = menu->run(d.framebuffer, d.stride, d.format);
+                    if (result == Result::WindowClosed || result == Result::Exit ||
+                        (result == Result::Reset && anypsp::desktop::relaunch(argc, argv))) {
+                        closed = true;
+                        break;
+                    }
                 }
                 if (o.input.empty()) {
                     const auto pad = controls->pad();
@@ -438,8 +463,12 @@ int main(int argc, char **argv) {
             if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
             running = kernel->frame(50.0);
             ++frame;
-            if (!game_patches.empty()) patch_writes += anypsp::patches::apply(game_patches, anypsp::patches::When::Vblank, rt.memory());
-            if (window_loop) window_loop->after_vblank(kernel->display());
+            if (!game_patches.empty() && patches_on)
+                patch_writes += anypsp::patches::apply(game_patches, anypsp::patches::When::Vblank, rt.memory());
+            if (window_loop) {
+                window_loop->after_vblank(kernel->display());
+                if (menu) menu->set_rates(window_loop->vblank_rate(), window_loop->game_fps());
+            }
             if (!per_frame) continue;
             capture();
             if (hashes.is_open()) {

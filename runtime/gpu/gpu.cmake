@@ -32,8 +32,24 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/input_map.cpp
     ${ANYPSP_GPU_DIR}/display.cpp
     ${ANYPSP_GPU_DIR}/display_loop.cpp
-    ${ANYPSP_GPU_DIR}/patches.cpp)
+    ${ANYPSP_GPU_DIR}/patches.cpp
+    ${ANYPSP_GPU_DIR}/menu.cpp
+    ${ANYPSP_GPU_DIR}/menu_host.cpp)
 target_include_directories(anypsp_gpu PUBLIC ${ANYPSP_GPU_DIR})
+# The menu's font and translations, compiled in.
+foreach(asset "regular_font;fonts/NotoSans-Regular.ttf" "bold_font;fonts/NotoSans-SemiBold.ttf" "strings;strings.tsv")
+    list(GET asset 0 name)
+    list(GET asset 1 file)
+    set(source "${ANYPSP_GPU_DIR}/ui/${file}")
+    set(generated "${CMAKE_CURRENT_BINARY_DIR}/anypsp_ui_${name}.cpp")
+    add_custom_command(OUTPUT "${generated}"
+        COMMAND "${CMAKE_COMMAND}" "-DIN=${source}" "-DOUT=${generated}" "-DNAME=anypsp_ui_${name}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/embed-file.cmake"
+        DEPENDS "${source}" "${PROJECT_SOURCE_DIR}/cmake/embed-file.cmake"
+        COMMENT "Embedding ui/${file}"
+        VERBATIM)
+    target_sources(anypsp_gpu PRIVATE "${generated}")
+endforeach()
 target_compile_definitions(anypsp_gpu PUBLIC ANYPSP_GL_DESKTOP)
 target_link_libraries(anypsp_gpu PUBLIC anypsp_host SDL3::SDL3-static)
 if(MSVC)
@@ -62,11 +78,14 @@ endif()
 
 add_executable(anypsp_desktop_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/desktop_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/display_tests.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/patches_tests.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/patches_tests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/menu_tests.cpp)
 target_include_directories(anypsp_desktop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit)
 target_link_libraries(anypsp_desktop_tests PRIVATE anypsp_gpu)
+target_compile_definitions(anypsp_desktop_tests PRIVATE ANYPSP_MENU_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/menu")
 if(MSVC)
     target_compile_options(anypsp_desktop_tests PRIVATE /EHsc /permissive- /W3)
+    target_compile_definitions(anypsp_desktop_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 add_test(NAME anypsp_desktop_tests COMMAND anypsp_desktop_tests)
 

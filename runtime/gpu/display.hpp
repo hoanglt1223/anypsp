@@ -18,7 +18,7 @@ struct Settings {
     int refresh = 0;               // monitor refresh in Hz pacing assumes; 0 = detect (Auto)
     bool vrr = false;              // variable refresh monitor: present each vblank when it is ready
     bool sync_to_monitor = false;  // run the PSP's vblanks at the monitor's rate when within 1%
-    int menu_fps = 30;             // pictures per second while paused
+    int menu_fps = 30;             // pictures per second while the menu is open
     int fps_cap = 0;               // most pictures per second shown; 0 = no cap
 
     bool operator==(const Settings &) const = default;

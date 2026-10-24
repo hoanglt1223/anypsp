@@ -31,9 +31,12 @@ public:
                 std::string game_name);
 
     void hotkeys(const std::vector<input::Action> &pressed);
-    [[nodiscard]] bool paused() const noexcept { return paused_; }
-    // While paused: shows the last picture again, at the pause frame rate.
-    void show_paused();
+    // The settings in use; the menu edits them, then calls settings_changed.
+    [[nodiscard]] display::Settings &settings() noexcept { return settings_; }
+    void settings_changed() { changed("display settings changed"); }
+    // Rates over the last second, for the menu's badge: PSP vblanks and game frames per second.
+    [[nodiscard]] double vblank_rate() const noexcept { return vblank_rate_; }
+    [[nodiscard]] double game_fps() const noexcept { return game_fps_; }
     // After each emulated PSP vblank: shows it on the display's vblanks (or when ready with
     // VRR) and waits so the game keeps its rate. `game_frames` is the flip count (for the title).
     void after_vblank(const pspweb::DisplayState &d);
@@ -50,7 +53,7 @@ private:
     display::Settings settings_;
     std::filesystem::path save_path_;
     std::string name_;
-    bool paused_ = false;
+    double vblank_rate_ = 0, game_fps_ = 0;
 
     std::optional<display::Cadence> cadence_;
     std::uint64_t cad_frame_ = 0, cad_vblank_ = 0, cad_base_ns_ = 0;
@@ -66,7 +69,7 @@ private:
     bool blend_ = false;
 
     std::uint64_t title_ns_ = 0, title_vblanks_ = 0, title_shown_ = 0, title_changes_ = 0;
-    std::uint64_t vblanks_ = 0, shown_ = 0, last_changes_ = 0;
+    std::uint64_t vblanks_ = 0, shown_ = 0;
     std::string notice_;
 };
 

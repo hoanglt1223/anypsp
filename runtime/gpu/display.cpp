@@ -105,7 +105,7 @@ std::string to_ini(const Settings &s) {
            "\n# Variable refresh monitor (G-Sync, FreeSync): present each vblank as soon as it is ready.\nVRR = " +
            (s.vrr ? "on" : "off") +
            "\n# Run the PSP's vblanks at the monitor's rate when within 1% (sound resampled to match).\nSyncToMonitor = " +
-           (s.sync_to_monitor ? "on" : "off") + "\n# Pictures per second while paused: 30 or 60.\nPauseFps = " +
+           (s.sync_to_monitor ? "on" : "off") + "\n# Pictures per second while the menu is open: 30 or 60.\nPauseFps = " +
            std::to_string(s.menu_fps) + "\n# Most pictures per second: off, 30, 60, 120.\nFpsCap = " +
            choice_name(s.fps_cap, "off") + "\n";
 }

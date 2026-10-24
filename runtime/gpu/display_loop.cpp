@@ -58,11 +58,7 @@ void DisplayLoop::hotkeys(const std::vector<input::Action> &pressed) {
             break;
         case Action::PauseFps:
             settings_.menu_fps = display::next_value(display::kPauseFps, settings_.menu_fps);
-            changed("pause fps " + std::to_string(settings_.menu_fps));
-            break;
-        case Action::Pause:
-            paused_ = !paused_;
-            cadence_.reset();
+            changed("menu fps " + std::to_string(settings_.menu_fps));
             break;
         default:
             break;
@@ -136,7 +132,6 @@ void DisplayLoop::present_paced(bool blend) {
 
 void DisplayLoop::after_vblank(const pspweb::DisplayState &d) {
     ++vblanks_;
-    last_changes_ = d.buffer_changes;
     update_pacing();
     bool blend = false;
     if (d.buffer_changes != shown_changes_) {
@@ -180,14 +175,6 @@ void DisplayLoop::after_vblank(const pspweb::DisplayState &d) {
     update_title(d.buffer_changes);
 }
 
-void DisplayLoop::show_paused() {
-    if (audio_ != nullptr) audio_->set_ratio(1.0);
-    gl_.show(false);
-    ++shown_;
-    SDL_DelayPrecise(1'000'000'000u / static_cast<unsigned>(settings_.menu_fps));
-    update_title(last_changes_);
-}
-
 void DisplayLoop::update_title(std::uint64_t game_frames) {
     const std::uint64_t now = SDL_GetTicksNS();
     if (title_ns_ != 0u && now - title_ns_ < 1'000'000'000u) return;
@@ -198,7 +185,6 @@ void DisplayLoop::update_title(std::uint64_t game_frames) {
     std::string extras;
     if (cadence_ && sync_factor_ != 1.0) extras += " / synced";
     if (settings_.smoothing) extras += " / smoothing";
-    if (paused_) extras += " / paused";
     if (!notice_.empty()) extras += " - " + notice_;
     char title[256];
     std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f Hz %s %s / game %.0f fps / shown %.0f fps / %.0f vblank/s%s",
@@ -206,6 +192,10 @@ void DisplayLoop::update_title(std::uint64_t game_frames) {
                   rate(shown_ - title_shown_), rate(vblanks_ - title_vblanks_), extras.c_str());
     SDL_SetWindowTitle(gl_.window(), title);
     notice_.clear();
+    if (seconds > 0.0) {
+        vblank_rate_ = rate(vblanks_ - title_vblanks_);
+        game_fps_ = rate(game_frames - title_changes_);
+    }
     title_ns_ = now;
     title_vblanks_ = vblanks_;
     title_shown_ = shown_;

@@ -1,0 +1,58 @@
+# AnyPSP menu text: key, English, Vietnamese (tab-separated). See runtime/gpu/ui/anyui/strings.hpp.
+key	en	vi
+tab.game	Game	Trò chơi
+tab.saves	Saves	Dữ liệu lưu
+tab.video	Video	Hình ảnh
+tab.audio	Audio	Âm thanh
+tab.controls	Controls	Điều khiển
+tab.settings	Settings	Cài đặt
+on	On	Bật
+off	Off	Tắt
+confirm	Press again to confirm	Nhấn lần nữa để xác nhận
+game.resume	Resume	Tiếp tục
+game.reset	Reset	Khởi động lại
+game.reset.confirm	Press Cross again to start the game again	Nhấn X lần nữa để chạy lại trò chơi
+game.exit	Exit game	Thoát trò chơi
+game.exit.confirm	Press Cross again to exit; saves are kept	Nhấn X lần nữa để thoát; dữ liệu lưu được giữ
+saves.none	No saves for this game yet	Trò chơi này chưa có dữ liệu lưu
+video.scale	Internal resolution	Độ phân giải nội bộ
+video.scale.now	Internal resolution in use	Đang dùng độ phân giải này
+video.scale.next	Applies from the next start	Áp dụng từ lần chạy sau
+video.fullscreen	Fullscreen	Toàn màn hình
+video.filter	Scaling	Cách phóng to
+filter.smooth	Smooth	Mượt
+filter.sharp	Sharp	Sắc nét
+video.smoothing	Smoothing (30 fps games)	Làm mượt (game 30 fps)
+video.refresh	Refresh	Tần số quét
+video.refresh.auto	Auto (match monitor)	Tự động (theo màn hình)
+video.vrr	Variable refresh	Tần số quét thay đổi
+video.sync	Sync game to monitor	Đồng bộ trò chơi với màn hình
+video.menu_fps	Menu FPS	FPS của menu
+video.fps_cap	FPS cap	Giới hạn FPS
+video.patches	Game patches	Bản vá trò chơi
+video.patches.none	No patch file	Không có tệp vá
+audio.volume	Volume	Âm lượng
+audio.mute	Mute	Tắt tiếng
+controls.buttons	PSP buttons	Nút PSP
+controls.analog	Analog stick	Cần analog
+controls.hotkeys	Hotkeys	Phím tắt
+controls.menu	Menu	Menu
+controls.reset	Reset to defaults	Khôi phục mặc định
+controls.reset.done	Controls reset to defaults	Đã khôi phục điều khiển mặc định
+controls.rebind	Rebind	Gán lại
+controls.capture	Press a key or button for {0}	Nhấn phím hoặc nút cho {0}
+controls.capture.detail	Esc cancels	Esc để hủy
+controls.cancelled	Cancelled	Đã hủy
+controls.swapped	swapped with {0}	đổi chỗ với {0}
+settings.language	Language	Ngôn ngữ
+settings.theme	Theme	Giao diện
+settings.scale	Menu size	Cỡ menu
+settings.motion	Reduce motion	Giảm chuyển động
+settings.fps	Show frame rates	Hiện tốc độ khung hình
+language.en	English	English
+language.vi	Tiếng Việt	Tiếng Việt
+theme.dark	Dark	Tối
+theme.light	Light	Sáng
+hint.rail	Up/Down tab   Cross open   Circle close	Lên/Xuống chọn mục   X mở   O đóng
+hint.page	Cross choose   Left/Right change   L/R tabs   Circle close	X chọn   Trái/Phải đổi   L/R chuyển mục   O đóng
+hint.capture	Press a key or button   Esc cancel	Nhấn phím hoặc nút   Esc hủy
