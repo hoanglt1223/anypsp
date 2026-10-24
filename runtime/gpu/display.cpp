@@ -64,6 +64,7 @@ std::string choice_name(int value, const char *zero) { return value == 0 ? zero 
 void apply_setting(Settings &settings, const std::string &name, const std::string &value, const std::string &where) {
     const std::string key = lower(name);
     if (key == "smoothing") settings.smoothing = parse_bool(value, where, "Smoothing");
+    else if (key == "interpolate") settings.interpolate = parse_bool(value, where, "Interpolate");
     else if (key == "refresh") settings.refresh = parse_choice(value, kRefreshRates, "auto", where, "Refresh");
     else if (key == "vrr") settings.vrr = parse_bool(value, where, "VRR");
     else if (key == "synctomonitor") settings.sync_to_monitor = parse_bool(value, where, "SyncToMonitor");
@@ -71,7 +72,7 @@ void apply_setting(Settings &settings, const std::string &name, const std::strin
     else if (key == "fpscap") settings.fps_cap = parse_choice(value, kFpsCaps, "off", where, "FpsCap");
     else
         throw psprecomp::Error(where + "unknown display setting " + name +
-                               " (Smoothing, Refresh, VRR, SyncToMonitor, PauseFps, FpsCap)");
+                               " (Smoothing, Interpolate, Refresh, VRR, SyncToMonitor, PauseFps, FpsCap)");
 }
 
 void apply_ini(Settings &settings, const std::string &text, const std::string &source) {
@@ -100,6 +101,9 @@ std::string to_ini(const Settings &s) {
            "# 50/50 blend on the vblank between two frames of a game drawing at 30 fps (adds one vblank of latency).\n"
            "Smoothing = " +
            std::string(s.smoothing ? "on" : "off") +
+           "\n# Frame interpolation for 30 fps games: draws the in-between vblank with everything moved half way.\n"
+           "# Costs a second GPU picture per frame and one vblank of latency; read when the game starts.\nInterpolate = " +
+           (s.interpolate ? "on" : "off") +
            "\n# Monitor refresh: auto (detected per monitor) or 60, 75, 90, 120, 144, 165, 240.\nRefresh = " +
            choice_name(s.refresh, "auto") +
            "\n# Variable refresh monitor (G-Sync, FreeSync): present each vblank as soon as it is ready.\nVRR = " +
@@ -190,6 +194,21 @@ double audio_ratio(double sync_factor, std::size_t queued, std::size_t target) {
 
 bool blend_on_new_frame(bool smoothing, unsigned previous_frame_vblanks, double difference) {
     return smoothing && previous_frame_vblanks == 2u && difference <= kSceneCut;
+}
+
+bool in_between_on_new_frame(bool interpolate, unsigned previous_frame_vblanks, double difference) {
+    return interpolate && previous_frame_vblanks == 2u && difference <= kSceneCut;
+}
+
+unsigned FrameTracker::after_vblank(std::uint64_t buffer_changes) {
+    if (buffer_changes == changes_) {
+        ++vblanks_;
+        return 0u;
+    }
+    const unsigned previous = vblanks_;
+    changes_ = buffer_changes;
+    vblanks_ = 1u;
+    return previous;
 }
 
 } // namespace anypsp::display

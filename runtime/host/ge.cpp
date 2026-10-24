@@ -876,6 +876,71 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         ~GenerationBump() { if (active) ++generation; }
     } bump{vram_generation_, gl_ == nullptr};
     const std::uint32_t decoded = decode_draw(count);
+    // Continuations (type 7) join the previous primitive's leftovers and clears cover the
+    // target whatever their vertices: both are drawn the same into the two pictures.
+    if (interp_ != nullptr && type != 7u && (regs_[kClearMode] & 1u) == 0u) emit_with_in_between(type, count, decoded);
+    else emit_vertices(type, count, decoded);
+}
+
+void Ge::emit_with_in_between(std::uint32_t type, std::uint32_t count, std::uint32_t decoded) {
+    const PrimKey key{vertex_address_, layout_.idx != 0u ? index_address_ : 0u, regs_[kVertexType], count, type, decoded};
+    interp_xyzw_.resize(static_cast<std::size_t>(decoded) * 4u);
+    for (std::uint32_t i = 0; i < decoded; ++i) {
+        const ClipVertex &v = scratch_vertices_[i];
+        float *p = &interp_xyzw_[static_cast<std::size_t>(i) * 4u];
+        p[0] = v.cx;
+        p[1] = v.cy;
+        p[2] = v.cz;
+        p[3] = v.cw;
+    }
+    const float *before = matcher_.match(key, interp_xyzw_);
+    if (before == nullptr) {
+        emit_vertices(type, count, decoded);
+        return;
+    }
+    // A partner that jumped across the screen is a cut or a different object: no in-between.
+    constexpr float kMaxThroughMove = 96.0f; // pixels
+    constexpr float kMaxMove = 0.5f;         // normalized device coordinates (the screen is 2 wide)
+    constexpr float kNearW = 1e-4f;
+    for (std::uint32_t i = 0; i < decoded; ++i) {
+        const float *a = before + static_cast<std::size_t>(i) * 4u, *b = &interp_xyzw_[static_cast<std::size_t>(i) * 4u];
+        float move = 0.0f;
+        if (layout_.through) move = std::max(std::fabs(a[0] - b[0]), std::fabs(a[1] - b[1]));
+        else if (a[3] > kNearW && b[3] > kNearW)
+            move = std::max(std::fabs(a[0] / a[3] - b[0] / b[3]), std::fabs(a[1] / a[3] - b[1] / b[3]));
+        if (move > (layout_.through ? kMaxThroughMove : kMaxMove)) {
+            emit_vertices(type, count, decoded);
+            return;
+        }
+    }
+    ++moved_prims_;
+    interp_vertices_.assign(scratch_vertices_.begin(), scratch_vertices_.begin() + decoded);
+    for (std::uint32_t i = 0; i < decoded; ++i) {
+        const float *a = before + static_cast<std::size_t>(i) * 4u;
+        ClipVertex &v = interp_vertices_[i];
+        v.cx = 0.5f * (a[0] + v.cx);
+        v.cy = 0.5f * (a[1] + v.cy);
+        v.cz = 0.5f * (a[2] + v.cz);
+        v.cw = 0.5f * (a[3] + v.cw);
+    }
+    struct TargetReset {
+        InterpolatingRenderer *r;
+        ~TargetReset() { r->set_target(InterpolatingRenderer::Target::Both); }
+    } reset{interp_};
+    // The in-between draw goes first; the GE state it leaves is replaced by the real draw's.
+    const std::uint32_t saved_type = prev_prim_type_, saved_parity = strip_parity_, saved_index = prim_in_frame_;
+    std::vector<ClipVertex> saved_carry = prim_carry_;
+    const Stats saved_stats = stats_;
+    std::swap(scratch_vertices_, interp_vertices_);
+    interp_->set_target(InterpolatingRenderer::Target::InBetween);
+    emit_vertices(type, count, decoded);
+    std::swap(scratch_vertices_, interp_vertices_);
+    prev_prim_type_ = saved_type;
+    strip_parity_ = saved_parity;
+    prim_in_frame_ = saved_index;
+    prim_carry_ = std::move(saved_carry);
+    stats_ = saved_stats;
+    interp_->set_target(InterpolatingRenderer::Target::Real);
     emit_vertices(type, count, decoded);
 }
 
@@ -2049,6 +2114,11 @@ void Ge::block_transfer() {
 void Ge::set_gl(GeRenderer *gl) {
     gl_ = gl;
     if (gl_ != nullptr) gl_->set_vram_write_hook([this](std::uint32_t address, std::uint32_t bytes) { touch_vram(address, bytes); });
+}
+
+void Ge::set_interpolation(InterpolatingRenderer *renderer) {
+    interp_ = renderer;
+    if (renderer != nullptr) set_gl(renderer);
 }
 
 void Ge::cpu_wrote(std::uint32_t address, std::uint32_t bytes) {

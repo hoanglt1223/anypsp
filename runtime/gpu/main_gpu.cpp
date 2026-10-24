@@ -64,6 +64,7 @@ const char *const kUsage =
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
     "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
+    "         [--interpolate on|off]\n"
     "         [--refresh auto|hz] [--vrr on|off] [--sync-to-monitor on|off] [--pause-fps 30|60] [--fps-cap off|n]\n"
     "         [--patches auto|file.ini]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
@@ -212,6 +213,7 @@ Options parse(int argc, char **argv) {
         else if (flag == "--hle-stubs") o.hle_stubs = value;
         else if (flag == "--input") o.input = parse_input_script(value);
         else if (flag == "--smoothing") o.display.emplace_back("Smoothing", value);
+        else if (flag == "--interpolate") o.display.emplace_back("Interpolate", value);
         else if (flag == "--patches") o.patches = value;
         else if (flag == "--refresh") o.display.emplace_back("Refresh", value);
         else if (flag == "--vrr") o.display.emplace_back("VRR", value);
@@ -397,6 +399,14 @@ int main(int argc, char **argv) {
         const std::filesystem::path display_file = anypsp::display::find_file(program_dir(), user_dir);
         if (o.window) display = anypsp::display::load(display_file);
         for (const auto &[name, value] : o.display) anypsp::display::apply_setting(display, name, value, "--");
+        if (display.interpolate) {
+            if (!gl) throw std::invalid_argument("--interpolate needs --renderer gl");
+            kernel->ge().set_interpolation(&gl->enable_in_between());
+            std::cout << "[anypsp] frame interpolation on\n";
+        }
+        anypsp::display::FrameTracker frame_tracker; // headless captures with --interpolate
+        std::vector<std::uint8_t> real_rgba;
+        std::uint64_t in_between_shown = 0;
         std::optional<anypsp::desktop::Controls> controls;
         std::unique_ptr<anypsp::menu::MenuSession> menu;
         anypsp::desktop::AudioOut audio;
@@ -504,6 +514,19 @@ int main(int argc, char **argv) {
             }
             if (!per_frame) continue;
             capture();
+            if (display.interpolate && !window_loop) {
+                // What the window would show on this vblank.
+                const auto &d = kernel->display();
+                const unsigned previous = frame_tracker.after_vblank(d.buffer_changes);
+                if (previous == 2u) {
+                    real_rgba.swap(rgba);
+                    gl->capture_in_between(d.framebuffer, d.stride, d.format, rgba);
+                    if (anypsp::display::in_between_on_new_frame(true, previous, anypsp::display::mean_difference(rgba, real_rgba)))
+                        ++in_between_shown;
+                    else
+                        rgba.swap(real_rgba);
+                }
+            }
             if (hashes.is_open()) {
                 char line[48];
                 std::snprintf(line, sizeof line, "%ld %016llx\n", frame,
@@ -524,6 +547,13 @@ int main(int argc, char **argv) {
             std::cout << "[anypsp] " << wav->frames() << " audio frames in " << o.wav << "\n";
         }
         if (!game_patches.empty()) std::cout << "[anypsp] patches wrote " << patch_writes << " value(s) during the run\n";
+        if (display.interpolate) {
+            const auto &t = kernel->ge().interpolation_totals();
+            std::cout << "[anypsp] interpolation: " << t.frames << " game frames, " << t.matched << " of " << t.prims
+                      << " primitives paired, " << kernel->ge().moved_prims() << " moved";
+            if (per_frame && !window_loop) std::cout << ", " << in_between_shown << " in-between pictures captured";
+            std::cout << "\n";
+        }
         if (audio.dropped_frames() != 0u)
             std::cout << "[anypsp] dropped " << audio.dropped_frames() << " audio frames to keep latency down\n";
         if (!o.screenshot.empty())

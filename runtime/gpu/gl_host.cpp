@@ -68,6 +68,8 @@ GlHost::~GlHost() {
         glDeleteFramebuffers(1, &ui_fbo_);
         glDeleteTextures(1, &ui_texture_);
     }
+    tee_.reset();
+    in_between_.reset();
     renderer_.reset();
     if (context_ != nullptr) SDL_GL_DestroyContext(context_);
     if (window_ != nullptr) SDL_DestroyWindow(window_);
@@ -132,9 +134,34 @@ void GlHost::start(int scale, const std::string &title) {
         throw psprecomp::Error("GL error " + std::to_string(error) + " while starting on " + device_);
 }
 
+pspweb::InterpolatingRenderer &GlHost::enable_in_between() {
+    if (tee_) return *tee_;
+    in_between_ = std::make_unique<pspweb::GeGl>(memory_);
+    if (!in_between_->init()) throw psprecomp::Error("GE GL backend failed to initialise a second time on " + device_);
+    in_between_->set_render_scale(scale_);
+    tee_ = std::make_unique<InBetweenRenderer>(*renderer_, *in_between_);
+    return *tee_;
+}
+
+void GlHost::render_in_between(std::uint32_t address, std::uint32_t stride, std::uint32_t format) {
+    if (!tee_) throw psprecomp::Error("frame interpolation is not enabled");
+    tee_->prepare_in_between();
+    in_between_->present(address, stride, format, out_fbo_, kWidth * scale_, kHeight * scale_);
+    tee_->invalidate();
+}
+
+void GlHost::capture_in_between(std::uint32_t address, std::uint32_t stride, std::uint32_t format, std::vector<std::uint8_t> &rgba) {
+    render_in_between(address, stride, format);
+    read_output(rgba);
+}
+
 void GlHost::capture(std::uint32_t address, std::uint32_t stride, std::uint32_t format, std::vector<std::uint8_t> &rgba) {
+    render_output(address, stride, format);
+    read_output(rgba);
+}
+
+void GlHost::read_output(std::vector<std::uint8_t> &rgba) {
     const int width = kWidth * scale_, height = kHeight * scale_;
-    renderer_->present(address, stride, format, out_fbo_, width, height);
     const auto row = static_cast<std::size_t>(width) * 4u;
     readback_.resize(row * static_cast<std::size_t>(height));
     glBindFramebuffer(GL_FRAMEBUFFER, out_fbo_);
@@ -154,6 +181,7 @@ void GlHost::present_to_window(std::uint32_t address, std::uint32_t stride, std:
 }
 
 void GlHost::render_output(std::uint32_t address, std::uint32_t stride, std::uint32_t format) {
+    if (tee_) tee_->invalidate();
     renderer_->present(address, stride, format, out_fbo_, kWidth * scale_, kHeight * scale_);
 }
 

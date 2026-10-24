@@ -330,17 +330,21 @@ TEST_CASE("menu: the Video tab edits the display settings and the patches switch
     menu.set_display(&display);
     menu.set_patches(&patches_on);
     const auto lines = menu.lines();
-    CHECK(lines.size() == 11);
-    if (lines.size() != 11) return;
+    CHECK(lines.size() == 12);
+    if (lines.size() != 12) return;
     CHECK(lines[4] == "  Smoothing (30 fps games)  Off");
-    CHECK(lines[5] == "  Refresh  < Auto (match monitor) >");
-    CHECK(lines[10] == "  Game patches  On");
+    CHECK(lines[5] == "  Frame interpolation  Off");
+    CHECK(lines[6] == "  Refresh  < Auto (match monitor) >");
+    CHECK(lines[11] == "  Game patches  On");
     const auto changed = [](const std::vector<anypsp::menu::Action> &a) {
         return a.size() == 1 && a[0] == anypsp::menu::Action::DisplayChanged;
     };
     for (int i = 0; i < 3; ++i) press(menu, pad::kDown);
     CHECK(changed(press(menu, pad::kCross)));
     CHECK(display.smoothing);
+    press(menu, pad::kDown);
+    CHECK(changed(press(menu, pad::kCross)));
+    CHECK(display.interpolate);
     press(menu, pad::kDown);
     CHECK(changed(press(menu, pad::kRight)));
     CHECK(display.refresh == 60);
@@ -359,7 +363,7 @@ TEST_CASE("menu: the Video tab edits the display settings and the patches switch
     press(menu, pad::kDown);
     press(menu, pad::kRight);
     CHECK(display.fps_cap == 30);
-    CHECK(menu.lines()[9] == "> FPS cap  < 30 >");
+    CHECK(menu.lines()[10] == "> FPS cap  < 30 >");
     press(menu, pad::kDown);
     CHECK(changed(press(menu, pad::kCross)));
     CHECK(!patches_on);

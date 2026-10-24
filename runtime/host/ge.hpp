@@ -5,6 +5,7 @@
 // rasterized straight into guest VRAM, so the display path only has to read
 // the framebuffer the game points sceDisplay at.
 
+#include "ge_interp.hpp"
 #include "ge_renderer.hpp"
 #include "psprecomp/guest_memory.hpp"
 
@@ -58,6 +59,15 @@ public:
     void restore_context(const std::vector<std::uint32_t> &commands);
     // Routes primitives to the GL backend instead of the software rasterizer.
     void set_gl(GeRenderer *gl);
+    // Also draws every primitive into `renderer`'s in-between picture, moved half way back to
+    // its partner in the previous game frame (ge_interp.hpp); null turns that off.
+    void set_interpolation(InterpolatingRenderer *renderer);
+    // The game showed a finished frame (sceDisplaySetFrameBuf to another buffer).
+    void frame_flipped() {
+        if (interp_ != nullptr) matcher_.next_frame();
+    }
+    [[nodiscard]] const FrameMatcher::Totals &interpolation_totals() const noexcept { return matcher_.totals(); }
+    [[nodiscard]] std::uint64_t moved_prims() const noexcept { return moved_prims_; }
     // Writes GPU-only pixels in VRAM bytes [offset, offset + length) back before the CPU uses them.
     void sync_vram_for_cpu(std::uint32_t offset, std::uint32_t length) {
         if (gl_ != nullptr) gl_->prepare_vram_read(0x04000000u + offset, length);
@@ -101,6 +111,8 @@ private:
     void draw_curve(std::uint32_t data, bool spline);
     // Draws scratch_vertices_ through scratch_indices_ (count entries, `decoded` vertices).
     void emit_vertices(std::uint32_t type, std::uint32_t count, std::uint32_t decoded);
+    // emit_vertices for the real picture and, moved, for the in-between one.
+    void emit_with_in_between(std::uint32_t type, std::uint32_t count, std::uint32_t decoded);
     void immediate_vertex(std::uint32_t data);
     void flush_immediate();
     void block_transfer();
@@ -181,6 +193,11 @@ private:
 
     PixelState ps_{};
     GeRenderer *gl_{};
+    InterpolatingRenderer *interp_{};
+    FrameMatcher matcher_;
+    std::vector<float> interp_xyzw_;
+    std::vector<ClipVertex> interp_vertices_;
+    std::uint64_t moved_prims_{};
     // Reused per-primitive buffers (avoids two heap allocations per primitive).
     std::vector<ClipVertex> scratch_vertices_;
     std::vector<std::uint32_t> scratch_indices_;

@@ -256,6 +256,7 @@ void Menu::step(const Row &row, int dir, std::vector<Action> &out) {
             return allowed[static_cast<std::size_t>(((i + dir) % n + n) % n)];
         };
         if (id == "video.smoothing") d.smoothing = !d.smoothing;
+        else if (id == "video.interpolate") d.interpolate = !d.interpolate;
         else if (id == "video.refresh") d.refresh = cycle(display::kRefreshRates, d.refresh);
         else if (id == "video.vrr") d.vrr = !d.vrr;
         else if (id == "video.sync") d.sync_to_monitor = !d.sync_to_monitor;
@@ -442,6 +443,8 @@ std::vector<Row> Menu::rows() const {
         if (display_ != nullptr) {
             const display::Settings &d = *display_;
             toggle("video.smoothing", d.smoothing, Icon::Video);
+            toggle("video.interpolate", d.interpolate, Icon::Video);
+            out.back().detail = tr("video.interpolate.detail");
             row("video.refresh", RowKind::Choice, d.refresh == 0 ? tr("video.refresh.auto") : std::to_string(d.refresh) + " Hz", Icon::Video);
             toggle("video.vrr", d.vrr, Icon::Video);
             toggle("video.sync", d.sync_to_monitor, Icon::Video);

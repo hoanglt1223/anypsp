@@ -54,6 +54,17 @@ public:
     void list_started() override;
     void list_finished() override;
 
+    // An in-between renderer (ge_interp.hpp) draws a second picture next to the real one and must
+    // never change guest memory: its downloads keep only the bookkeeping, it ignores block
+    // transfer sources and CPU reads, and it reloads only VRAM pages the real renderer reports
+    // as written by the CPU (set_cpu_write_observer on the real one, note_cpu_writes here).
+    void set_in_between(bool on) { in_between_ = on; }
+    using PageSet = std::array<bool, psprecomp::GuestMemory::kVramPages>;
+    void set_cpu_write_observer(std::function<void(const PageSet &)> observer) { cpu_write_observer_ = std::move(observer); }
+    void note_cpu_writes(const PageSet &pages) { queue_cpu_writes(pages); }
+    // Forgets the cached GL state, for when another renderer used the same context.
+    void reset_gl_cache() { reset_cache(); }
+
     // True when a texture at `address` (format 0..3, buffer width in pixels)
     // lies inside GPU-drawn surface content and can be sampled from it.
     [[nodiscard]] bool is_gpu_target(std::uint32_t address, std::uint32_t format, std::uint32_t buf_width) const override;
@@ -291,6 +302,9 @@ private:
     void refresh_page_flags();
     // Queues reloads of surface rows on pages the CPU wrote.
     void apply_cpu_writes();
+    void queue_cpu_writes(const PageSet &pages);
+    bool in_between_{};
+    std::function<void(const PageSet &)> cpu_write_observer_;
     bool page_flags_stale_{};
     std::array<bool, psprecomp::GuestMemory::kVramPages> cpu_written_{};
 };

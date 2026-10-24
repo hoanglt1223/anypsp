@@ -28,6 +28,8 @@ video.filter	Scaling	Cách phóng to
 filter.smooth	Smooth	Mượt
 filter.sharp	Sharp	Sắc nét
 video.smoothing	Smoothing (30 fps games)	Làm mượt (game 30 fps)
+video.interpolate	Frame interpolation	Nội suy khung hình
+video.interpolate.detail	Turning it on applies from the next start	Bật lên sẽ áp dụng từ lần chạy sau
 video.refresh	Refresh	Tần số quét
 video.refresh.auto	Auto (match monitor)	Tự động (theo màn hình)
 video.vrr	Variable refresh	Tần số quét thay đổi

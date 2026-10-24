@@ -15,6 +15,9 @@ namespace anypsp::display {
 struct Settings {
     // A 50/50 blend on the vblank between two frames of a game drawing at 30 fps.
     bool smoothing = false;
+    // Frame interpolation: the vblank between two frames of a game drawing at 30 fps shows the
+    // game's next picture with everything moved half way back (host/ge_interp.hpp). Read at start.
+    bool interpolate = false;
     int refresh = 0;               // monitor refresh in Hz pacing assumes; 0 = detect (Auto)
     bool vrr = false;              // variable refresh monitor: present each vblank when it is ready
     bool sync_to_monitor = false;  // run the PSP's vblanks at the monitor's rate when within 1%
@@ -54,6 +57,22 @@ inline constexpr double kSceneCut = 0.10;
 // only when the frame before was on screen for exactly two vblanks (the game draws at 30 fps)
 // and the two are not a scene cut.
 [[nodiscard]] bool blend_on_new_frame(bool smoothing, unsigned previous_frame_vblanks, double difference);
+// Whether that vblank shows the in-between picture instead: when the frame before was up for
+// exactly two vblanks and the in-between picture is not a cut away from the new frame (which
+// means the pairing went wrong, so the new frame is shown as it is).
+[[nodiscard]] bool in_between_on_new_frame(bool interpolate, unsigned previous_frame_vblanks, double difference);
+
+// Counts how long each game frame stays up, for the decisions above.
+class FrameTracker {
+public:
+    // Call after each PSP vblank with the flip count; returns how many vblanks the frame before
+    // was up when a new game frame appeared on this one, else 0.
+    unsigned after_vblank(std::uint64_t buffer_changes);
+
+private:
+    std::uint64_t changes_ = 0;
+    unsigned vblanks_ = 0;
+};
 
 // Frame pacing against the monitor: each PSP vblank is shown from the first display vblank at or
 // after its time, so it stays up for an evenly spread number of display vblanks.

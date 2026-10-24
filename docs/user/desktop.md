@@ -56,7 +56,7 @@ The tabs:
 - **Saves**: the game's saves on the memory stick (`PSP/SAVEDATA/<disc ID>*`), newest first, with their
   icons, titles and dates. AnyPSP has no save states yet, so there are no state slots.
 - **Video**: *Internal resolution* (1x-4x, from the next start), *Fullscreen*, *Scaling* (smooth or
-  sharp), then the [display settings](#display-settings) *Smoothing*, *Refresh*, *Variable refresh*,
+  sharp), then the [display settings](#display-settings) *Smoothing*, *Frame interpolation* (turning it on applies from the next start), *Refresh*, *Variable refresh*,
   *Sync game to monitor*, *Menu FPS* and *FPS cap*, saved to `anypsp-display.ini` like the hotkeys, and
   *Game patches*, which turns the loaded [patch file](#game-patches) off and on for this run.
 - **Audio**: *Volume* (0-100%) and *Mute*; `--wav` recordings are not affected.
@@ -89,6 +89,7 @@ the file for one run.
 ```ini
 [display]
 Smoothing = off
+Interpolate = off
 Refresh = auto
 VRR = off
 SyncToMonitor = off
@@ -99,6 +100,7 @@ FpsCap = off
 | Setting | Option | Hotkey | |
 |---|---|---|---|
 | `Smoothing` | `--smoothing on\|off` | F9 | Off by default. See below. |
+| `Interpolate` | `--interpolate on\|off` | | Off by default; read when the game starts. See [Frame interpolation](#frame-interpolation). |
 | `Refresh` | `--refresh auto\|60\|75\|90\|120\|144\|165\|240` | F5 cycles | `auto` reads the refresh of the monitor the window is on (again every second, so moving the window is followed). |
 | `VRR` | `--vrr on\|off` | F6 | Variable refresh monitor (G-Sync, FreeSync): no vsync, each vblank presented as soon as it is ready. |
 | `SyncToMonitor` | `--sync-to-monitor on\|off` | F7 | Runs the PSP's vblanks at the monitor's rate when it (or a half, third, quarter of it) is within 1% of 59.94. |
@@ -133,6 +135,31 @@ are mixes of two real pictures, not motion estimates, so fast movement looks dou
 warped. Smoothing adds one vblank (about 17 ms) of input latency to the frames it blends. The window
 title shows `smoothing` while it is on.
 
+### Frame interpolation
+
+`Interpolate = on` (or `--interpolate on`) gives games drawing at 30 fps a real 60 pictures per
+second without touching the game: its code, timers, input and sound run exactly as before, and every
+picture the game draws is shown unchanged. What is added is the picture on the vblank in between.
+
+- Every primitive is drawn twice: once as the game sent it, and once into a second GL renderer with
+  its vertices (after transform and skinning, before clipping) moved half way back to the same
+  primitive in the game's previous frame. That second picture is shown on the vblank where the new
+  frame appears, then the new frame itself, so motion, camera pans and animation step at 60 per second.
+- Primitives are paired by vertex address (static models keep theirs) and otherwise by shape in drawing
+  order. Unpaired primitives, clears, ones that jumped more than a quarter of the screen (or 96 pixels
+  in 2D), and the whole picture when it differs from the new frame like a scene cut are drawn as in the
+  new frame.
+- Colours, texture coordinates and post-processing copies are not interpolated. It needs the GL
+  renderer, draws everything twice on the GPU, and adds one vblank (about 17 ms) of latency, like
+  smoothing. Interpolation wins over smoothing when both are on; the title shows `interpolated`.
+- Headless runs with `--interpolate on` capture the in-between picture on those vblanks
+  (`--hashes`, `--frames-dir`), and the run ends with how many primitives were paired.
+
+Verified with Naruto: Ultimate Ninja Heroes (ULUS-10299, 30 fps everywhere) under `--deterministic`,
+9000 vblanks through the intro, menus and a battle: every vblank showing a game frame is identical to a
+run without interpolation (so logos, intro, title idle timer and the round timer keep their timing),
+99.9% of primitives are paired, and the battle shows 2998 distinct pictures in 3000 vblanks.
+
 ## Game patches
 
 `--patches auto` applies `patches/<disc ID>.ini` from the program's folder or the per-user data folder
@@ -155,10 +182,12 @@ vblank u8  [0x08C20C70]+1 = 1          if 2    # after every vblank, through a p
 - A mistake in the file stops the program with the file name and line. The run ends with the number
   of values the patches wrote.
 
-No patch files ship yet. UNH 1 (ULUS-10299) waits for a frame interval (two vblanks in most scenes) kept
+No patch files ship. UNH 1 (ULUS-10299) waits for a frame interval (two vblanks in most scenes) kept
 in a byte of its system object (`[0x08C20C70]+1`); setting it to 1 makes the game draw at 60 fps, but its
-logic counts drawn frames, so intros, menus and the title's idle timer then run twice as fast. A 60 fps
-patch for it needs per-frame speeds halved in game code, which a data patch cannot do.
+logic counts drawn frames, so intros, menus and the title's idle timer then run twice as fast. Its own
+60 fps scenes set the interval to 1 and scale their timers by it, but most code (the logo and intro
+timers among it) counts frames, so changing the interval instructions is not enough either. Use
+[frame interpolation](#frame-interpolation) for 60 fps instead.
 
 ## Input mapping
 

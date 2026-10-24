@@ -107,3 +107,26 @@ TEST_CASE("Sync to monitor, fps cap intervals and sound steering") {
     CHECK(anypsp::display::audio_ratio(1.0, 1000000, 100) <= 1.005 + 1e-12);
     CHECK(anypsp::display::audio_ratio(1.0, 0, 100) >= 0.995 - 1e-12);
 }
+
+TEST_CASE("Interpolation shows the in-between picture only between 30 fps frames, never across a cut") {
+    using anypsp::display::in_between_on_new_frame;
+    CHECK(in_between_on_new_frame(true, 2, 0.02));
+    CHECK(!in_between_on_new_frame(false, 2, 0.02));
+    CHECK(!in_between_on_new_frame(true, 1, 0.02));
+    CHECK(!in_between_on_new_frame(true, 3, 0.02));
+    CHECK(!in_between_on_new_frame(true, 2, 0.5));
+    Settings s;
+    CHECK(!s.interpolate);
+    anypsp::display::apply_setting(s, "Interpolate", "on", "--");
+    Settings back;
+    anypsp::display::apply_ini(back, anypsp::display::to_ini(s), "round");
+    CHECK(back.interpolate);
+}
+
+TEST_CASE("The frame tracker reports how long the frame before was up") {
+    anypsp::display::FrameTracker t;
+    CHECK(t.after_vblank(1) == 0u);
+    CHECK(t.after_vblank(1) == 0u);
+    CHECK(t.after_vblank(2) == 2u);
+    CHECK(t.after_vblank(3) == 1u);
+}
