@@ -5,8 +5,11 @@
 // writes frames as PNG files and per-frame hashes. Opens no visible window and
 // plays no audio.
 
+#include "desktop.hpp"
+#include "disc.hpp"
 #include "frame_output.hpp"
 #include "gl_host.hpp"
+#include "input_map.hpp"
 
 #include "kernel.hpp"
 
@@ -17,12 +20,21 @@
 #include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_video.h>
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_stdinc.h>
+
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -34,12 +46,28 @@ void register_dynamic_code();
 
 namespace {
 
+#ifdef ANYPSP_PLAY
+constexpr bool kWindowByDefault = true;
+#else
+constexpr bool kWindowByDefault = false;
+#endif
+
 const char *const kUsage =
-    "usage: anypsp-<runner>-gpu <EBOOT.BIN|module.prx> [--renderer gl|soft] [--scale n] [--coherent 0|1]\n"
+    "usage: anypsp-<runner>-gpu <game.iso|disc folder|EBOOT.BIN|module.prx> [--window|--headless] [--fullscreen]\n"
+    "         [--mute] [--wav file.wav] [--keymap file.ini] [--write-input file.ini] [--cache dir]\n"
+    "         [--renderer gl|soft] [--scale n] [--coherent 0|1]\n"
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
     "         [--input frame:buttons,...] [--hle-stubs file]\n"
-    "Runs headless (hidden GL context, no audio). --frames-dir writes frame_NNNNNN.png every --png-every\n"
+    "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
+    "ISO images are extracted once into --cache (default: the per-user data folder).\n"
+    "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
+    "default; F11 toggles fullscreen), runs until the window closes unless --frames is given, and keeps saves\n"
+    "in the per-user data folder's memstick (override with --ms). --keymap names the input file; otherwise\n"
+    "anypsp-input.ini next to the program or in the per-user data folder is used. --write-input writes the\n"
+    "current bindings to a file and exits. --scale defaults to the input file's Scale (2) in a window.\n"
+    "Headless (the default except for anypsp-play): hidden GL context, no sound device, scripted input.\n"
+    "--wav records the audio output. --frames-dir writes frame_NNNNNN.png every --png-every\n"
     "frames (default 1); --hashes writes '<frame> <hash>' lines for every frame; --screenshot writes the\n"
     "picture at the program's last emulator: screenshot request; --dump writes the last frame.\n"
     "--coherent 1 (default) writes GPU pixels back to guest VRAM after every display list.\n"
@@ -110,10 +138,13 @@ std::map<std::string, std::uint32_t> read_hle_stubs(const std::string &path) {
 struct Options {
     std::string module, disc = ".", memstick = ".", feedback, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     std::string renderer = "gl", frames_dir, hashes, screenshot, dump, hle_stubs;
+    std::string wav, keymap, write_input, cache;
     std::map<long, std::uint32_t> input;
     long frames = 600, png_every = 1;
     int scale = 1;
     bool coherent = true;
+    bool window = kWindowByDefault, fullscreen = false, mute = false;
+    bool frames_set = false, scale_set = false, disc_set = false, ms_set = false, guest_set = false;
 };
 
 long parse_positive(const std::string &flag, const std::string &value) {
@@ -130,27 +161,41 @@ long parse_positive(const std::string &flag, const std::string &value) {
 }
 
 Options parse(int argc, char **argv) {
-    if (argc < 2 || std::string(argv[1]).starts_with("--")) throw std::invalid_argument("missing module");
     Options o;
-    o.module = argv[1];
-    for (int i = 2; i < argc; i += 2) {
+    int i = 1;
+    if (argc >= 2 && !std::string(argv[1]).starts_with("--")) o.module = argv[i++];
+    for (; i < argc; i += 2) {
         const std::string flag = argv[i];
+        if (flag == "--window" || flag == "--headless") {
+            o.window = flag == "--window";
+            --i;
+            continue;
+        }
+        if (flag == "--fullscreen" || flag == "--mute") {
+            (flag == "--mute" ? o.mute : o.fullscreen) = true;
+            --i;
+            continue;
+        }
         if (i + 1 >= argc) throw std::invalid_argument(flag + " needs a value");
         const std::string value = argv[i + 1];
-        if (flag == "--disc") o.disc = value;
-        else if (flag == "--ms") o.memstick = value;
+        if (flag == "--disc") o.disc = value, o.disc_set = true;
+        else if (flag == "--ms") o.memstick = value, o.ms_set = true;
         else if (flag == "--feedback") o.feedback = value;
         else if (flag == "--output") o.output = value;
-        else if (flag == "--guest-path") o.guest_path = value;
+        else if (flag == "--guest-path") o.guest_path = value, o.guest_set = true;
+        else if (flag == "--wav") o.wav = value;
+        else if (flag == "--keymap") o.keymap = value;
+        else if (flag == "--write-input") o.write_input = value;
+        else if (flag == "--cache") o.cache = value;
         else if (flag == "--frames-dir") o.frames_dir = value;
         else if (flag == "--hashes") o.hashes = value;
         else if (flag == "--screenshot") o.screenshot = value;
         else if (flag == "--dump") o.dump = value;
         else if (flag == "--hle-stubs") o.hle_stubs = value;
         else if (flag == "--input") o.input = parse_input_script(value);
-        else if (flag == "--frames") o.frames = parse_positive(flag, value);
+        else if (flag == "--frames") o.frames = parse_positive(flag, value), o.frames_set = true;
         else if (flag == "--png-every") o.png_every = parse_positive(flag, value);
-        else if (flag == "--scale") o.scale = static_cast<int>(std::min(parse_positive(flag, value), 8L));
+        else if (flag == "--scale") o.scale = static_cast<int>(std::min(parse_positive(flag, value), 8L)), o.scale_set = true;
         else if (flag == "--coherent") {
             if (value != "0" && value != "1") throw std::invalid_argument("--coherent takes 0 or 1");
             o.coherent = value == "1";
@@ -161,8 +206,26 @@ Options parse(int argc, char **argv) {
             throw std::invalid_argument("unknown option " + flag);
         }
     }
+    if (o.module.empty() && o.write_input.empty()) throw std::invalid_argument("missing game or module");
     if (o.renderer == "soft" && o.scale != 1) throw std::invalid_argument("--scale needs --renderer gl");
+    if (o.renderer == "soft" && o.window) throw std::invalid_argument("--window needs --renderer gl");
     return o;
+}
+
+std::function<void(const std::int16_t *, std::uint32_t)> g_audio;
+
+// Per-user data folder (%APPDATA%\anyport\anypsp\ and the like): saves, extracted discs, input file.
+std::filesystem::path user_data_dir() {
+    char *path = SDL_GetPrefPath("anyport", "anypsp");
+    if (path == nullptr) throw psprecomp::Error(std::string("No per-user data folder: ") + SDL_GetError());
+    std::filesystem::path result = std::filesystem::path(reinterpret_cast<const char8_t *>(path));
+    SDL_free(path);
+    return result;
+}
+
+std::filesystem::path program_dir() {
+    const char *base = SDL_GetBasePath(); // owned by SDL
+    return base != nullptr ? std::filesystem::path(reinterpret_cast<const char8_t *>(base)) : std::filesystem::path();
 }
 
 std::string frame_name(long frame) {
@@ -183,6 +246,30 @@ int main(int argc, char **argv) {
     }
 
     try {
+        const std::filesystem::path user_dir = user_data_dir();
+        anypsp::input::InputMap input_map;
+        const std::filesystem::path keymap =
+            !o.keymap.empty() ? std::filesystem::path(o.keymap) : anypsp::input::find_input_file(program_dir(), user_dir);
+        if (!keymap.empty()) input_map.load(keymap);
+        if (!o.write_input.empty()) {
+            input_map.save(o.write_input);
+            std::cout << "[anypsp] wrote " << o.write_input << "\n";
+            return 0;
+        }
+        if (anypsp::disc::is_disc(o.module)) {
+            const auto target = anypsp::disc::resolve(o.module, o.cache.empty() ? user_dir / "discs" : std::filesystem::path(o.cache));
+            o.module = target.module.string();
+            if (!o.disc_set) o.disc = target.disc_root.string();
+            if (!o.guest_set) o.guest_path = target.guest_path;
+            std::cout << "[anypsp] booting " << o.guest_path << " from " << o.disc << "\n";
+        }
+        if (o.window) {
+            if (!o.scale_set) o.scale = input_map.scale();
+            if (!o.ms_set) o.memstick = (user_dir / "memstick").string();
+            std::cout << "[anypsp] memory stick (saves): " << o.memstick << "\n";
+        }
+        std::filesystem::create_directories(o.memstick);
+
         if (!o.feedback.empty()) psprecomp::set_runtime_feedback_file(o.feedback);
         auto runtime = std::make_unique<psprecomp::Runtime>();
         auto &rt = *runtime;
@@ -211,7 +298,7 @@ int main(int argc, char **argv) {
         if (!o.hle_stubs.empty()) kernel->set_hle_stubs(read_hle_stubs(o.hle_stubs));
         if (o.renderer == "gl") {
             gl = std::make_unique<anypsp::gpu::GlHost>(rt.memory());
-            gl->start(o.scale);
+            gl->start(o.scale, o.window ? "AnyPSP - " + module.info->name : std::string());
             gl->renderer().set_coherent(o.coherent);
             kernel->ge().set_gl(&gl->renderer());
             std::cout << "[anypsp] GL renderer: " << gl->device() << ", scale " << gl->scale() << "\n";
@@ -261,13 +348,56 @@ int main(int argc, char **argv) {
                   << psprecomp::hex32(module.end) << ", " << imports.size() << " imports, " << module.relocations.applied
                   << " relocations, " << rt.function_count() << " translated entries\n";
 
+        std::optional<anypsp::desktop::Controls> controls;
+        anypsp::desktop::AudioOut audio;
+        bool audio_open = false;
+        std::unique_ptr<anypsp::desktop::WavWriter> wav;
+        if (!o.wav.empty()) wav = std::make_unique<anypsp::desktop::WavWriter>(o.wav);
+        if (o.window) {
+            controls.emplace(input_map);
+            if (o.fullscreen) gl->set_fullscreen(true);
+            if (!o.mute) audio_open = audio.open();
+        }
+        g_audio = [&](const std::int16_t *samples, std::uint32_t count) {
+            if (wav) wav->write(samples, count);
+            if (audio_open) audio.push(samples, count);
+        };
+        kernel->set_audio_sink([](const std::int16_t *samples, std::uint32_t count) { g_audio(samples, count); });
+        anypsp::desktop::FramePacer pacer;
+
         const bool per_frame = !o.frames_dir.empty() || hashes.is_open();
+        const long frame_limit = o.window && !o.frames_set ? std::numeric_limits<long>::max() : o.frames;
         long frame = 0;
-        bool running = true;
-        while (running && frame < o.frames) {
+        bool running = true, closed = false;
+        const auto started = std::chrono::steady_clock::now();
+        auto title_time = started;
+        while (running && frame < frame_limit) {
+            if (controls) {
+                if (!controls->poll(*gl)) {
+                    closed = true;
+                    break;
+                }
+                if (o.input.empty()) {
+                    const auto pad = controls->pad();
+                    kernel->set_pad(pad.buttons, pad.lx, pad.ly);
+                }
+            }
             if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
             running = kernel->frame(50.0);
             ++frame;
+            if (controls) {
+                pacer.wait();
+                const auto &d = kernel->display();
+                gl->present_to_window(d.framebuffer, d.stride, d.format);
+                if (frame % 60 == 0) {
+                    const auto now = std::chrono::steady_clock::now();
+                    const double fps = 60.0 / std::chrono::duration<double>(now - title_time).count();
+                    title_time = now;
+                    char title[160];
+                    std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f fps", module.info->name.c_str(), fps);
+                    SDL_SetWindowTitle(gl->window(), title);
+                }
+            }
             if (!per_frame) continue;
             capture();
             if (hashes.is_open()) {
@@ -279,8 +409,17 @@ int main(int argc, char **argv) {
             if (!o.frames_dir.empty() && frame % o.png_every == 0)
                 anypsp::gpu::write_png((std::filesystem::path(o.frames_dir) / frame_name(frame)).string(), rgba, width, height);
         }
-        std::cout << "[anypsp] ran " << frame << " frames; "
-                  << (running ? "frame limit reached" : "guest stopped: " + kernel->halt_reason()) << "\n";
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        std::cout << "[anypsp] ran " << frame << " frames in " << static_cast<long>(seconds) << " s ("
+                  << static_cast<long>(seconds > 0.0 ? frame / seconds : 0.0) << " fps); "
+                  << (closed ? "window closed" : running ? "frame limit reached" : "guest stopped: " + kernel->halt_reason()) << "\n";
+        g_audio = nullptr;
+        if (wav) {
+            wav->close();
+            std::cout << "[anypsp] " << wav->frames() << " audio frames in " << o.wav << "\n";
+        }
+        if (audio.dropped_frames() != 0u)
+            std::cout << "[anypsp] dropped " << audio.dropped_frames() << " audio frames to keep latency down\n";
         if (!o.screenshot.empty())
             std::cout << "[anypsp] " << screenshots << " screenshot request(s)" << (screenshots ? ", last in " + o.screenshot : "")
                       << "\n";

@@ -21,9 +21,10 @@ Early. Phases 01 (base) and 02 (loader and analysis) are done; 03 (code generati
 
   On the pspautotests demos that keep a symbol table, every function symbol is found statically.
 - **Headless host.** It builds with MSVC: the HLE kernel and the software GE, with no window and no audio. A runner per translated program runs homebrew and writes feedback. Many pspautotests programs still stop at Allegrex instructions the code generator does not lower yet (phase 03).
+- **Desktop play.** `anypsp-play <game.iso|disc folder>` opens a window with sound, keyboard and gamepad input, and keeps saves in the per-user data folder; translated runners take `--window`. See [docs/user/desktop.md](docs/user/desktop.md).
 - **Not yet:**
   - Vulkan GE (phase 05);
-  - desktop and Android hosts with a window (phase 06);
+  - Android and ARM handheld hosts, desktop builds in CI (phase 06);
   - message pipes, thread-local pools, virtual timers and callback notification (phase 04);
   - a check of the web/EGL build after the renderer seam.
 - Prior art and evaluation: [docs/dev/prior-art.md](docs/dev/prior-art.md).
