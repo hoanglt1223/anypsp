@@ -832,6 +832,37 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     vertex_raw_ = nullptr;
     if (index_size != 0u) index_address_ += count * index_size;
     else vertex_address_ += count * l.size * l.morphs;
+    std::uint32_t decoded_count = decoded;
+    if (type == 7u) {
+        type = prev_prim_type_;
+        if (type > 6u) return;
+        if (!prim_carry_.empty()) {
+            const std::uint32_t k = static_cast<std::uint32_t>(prim_carry_.size());
+            std::vector<ClipVertex> joined(prim_carry_);
+            for (std::uint32_t i = 0; i < count; ++i) joined.push_back(vertices[indices[i]]);
+            count += k;
+            decoded_count = count;
+            if (vertices.size() < count) vertices.resize(count);
+            if (indices.size() < count) indices.resize(count);
+            std::copy(joined.begin(), joined.end(), vertices.begin());
+            for (std::uint32_t i = 0; i < count; ++i) indices[i] = i;
+        }
+    } else {
+        strip_parity_ = 0u;
+    }
+    prev_prim_type_ = type;
+    const std::uint32_t parity = strip_parity_;
+    {
+        const std::uint32_t keep = type == 1u || type == 6u ? count % 2u
+                                 : type == 2u            ? std::min(count, 1u)
+                                 : type == 3u            ? count % 3u
+                                 : type == 4u || type == 5u ? std::min(count, 2u) : 0u;
+        std::vector<ClipVertex> carry;
+        if (type == 5u && keep == 2u) carry = {vertices[indices[0]], vertices[indices[count - 1u]]};
+        else for (std::uint32_t i = count - keep; i < count; ++i) carry.push_back(vertices[indices[i]]);
+        if (type == 4u) strip_parity_ = (parity + count - keep) & 1u;
+        prim_carry_ = std::move(carry);
+    }
     g_section_ms[0] += 0.0; // decode timer ends with scope below
     const std::uint32_t prim_index = prim_in_frame_++;
     if (frame_ == g_dump_frame) log_primitive(prim_index, type, count);
@@ -862,12 +893,12 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     if (gl_ != nullptr && type >= 3u && type <= 5u) {
         // Convert each vertex to drawing space once; triangles fully in front of
         // the near plane are appended directly, the rest go through clipping.
-        if (scratch_screen_.size() < decoded) {
-            scratch_screen_.resize(decoded);
-            scratch_inside_.resize(decoded);
+        if (scratch_screen_.size() < decoded_count) {
+            scratch_screen_.resize(decoded_count);
+            scratch_inside_.resize(decoded_count);
         }
         constexpr float kEpsilon = 1e-4f;
-        for (std::uint32_t i = 0; i < decoded; ++i) {
+        for (std::uint32_t i = 0; i < decoded_count; ++i) {
             const ClipVertex &cv = vertices[i];
             const bool inside = layout_.through || (cv.cz + cv.cw >= 0.0f && cv.cw >= kEpsilon);
             scratch_inside_[i] = inside ? 1u : 0u;
@@ -878,9 +909,9 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
                                           static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a)), v.q};
         }
         const bool flat = (regs_[kShadeMode] & 1u) == 0u;
-        // Each decoded vertex enters the GL batch once, the first time a kept triangle uses it.
-        if (scratch_batch_index_.size() < decoded) scratch_batch_index_.resize(decoded);
-        std::fill(scratch_batch_index_.begin(), scratch_batch_index_.begin() + decoded, ~0u);
+        // Each decoded_count vertex enters the GL batch once, the first time a kept triangle uses it.
+        if (scratch_batch_index_.size() < decoded_count) scratch_batch_index_.resize(decoded_count);
+        std::fill(scratch_batch_index_.begin(), scratch_batch_index_.begin() + decoded_count, ~0u);
         auto batch_index = [&](std::uint32_t i) {
             std::uint32_t &slot = scratch_batch_index_[i];
             if (slot == ~0u) slot = gl_->vertex(scratch_screen_[i]);
@@ -918,7 +949,7 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
             for (std::uint32_t i = 0; i + 2u < count; i += 3u) triangle(i, i + 1u, i + 2u);
         } else if (type == 4u) {
             for (std::uint32_t i = 2u; i < count; ++i) {
-                if ((i & 1u) == 0u) triangle(i - 2u, i - 1u, i);
+                if (((i + parity) & 1u) == 0u) triangle(i - 2u, i - 1u, i);
                 else triangle(i - 1u, i - 2u, i);
             }
         } else {
@@ -934,7 +965,7 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         break;
     case 4: // strip
         for (std::uint32_t i = 2u; i < count; ++i) {
-            if ((i & 1u) == 0u) draw_triangle(vert(i - 2u), vert(i - 1u), vert(i));
+            if (((i + parity) & 1u) == 0u) draw_triangle(vert(i - 2u), vert(i - 1u), vert(i));
             else draw_triangle(vert(i - 1u), vert(i - 2u), vert(i));
         }
         break;

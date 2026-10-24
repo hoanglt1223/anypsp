@@ -167,6 +167,11 @@ private:
     // Reused per-primitive buffers (avoids two heap allocations per primitive).
     std::vector<ClipVertex> scratch_vertices_;
     std::vector<std::uint32_t> scratch_indices_;
+    // Prim type 7 continues the previous primitive: its type, the vertices an
+    // unfinished or connected shape still needs, and the strip winding parity.
+    std::uint32_t prev_prim_type_{8};
+    std::vector<ClipVertex> prim_carry_;
+    std::uint32_t strip_parity_{};
     // Host view of the current primitive's vertex data (null: use GuestMemory).
     const std::uint8_t *vertex_raw_{};
     std::uint32_t vertex_raw_base_{};
