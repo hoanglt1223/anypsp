@@ -514,7 +514,7 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
             }
         };
         if (l.weight != 0u) load(p + l.weight_off, l.weight, false, l.weight == 1u ? 1.0f / 128.0f : 1.0f / 32768.0f, weights, l.weights);
-        if (l.tc != 0u) load(p + l.tc_off, l.tc, false, l.through ? 1.0f : (l.tc == 1u ? 1.0f / 128.0f : 1.0f / 32768.0f), uv, 2u);
+        if (l.tc != 0u) load(p + l.tc_off, l.tc, false, l.tc == 1u ? 1.0f / 128.0f : (l.through ? 1.0f : 1.0f / 32768.0f), uv, 2u);
         if (has_color) {
             std::uint32_t rgba;
             if (l.col == 7u) {
@@ -571,7 +571,7 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
                 weights[i] += mw * read(base + l.weight_off + i * comp[l.weight], l.weight, false, scale);
         }
         if (l.tc != 0u) {
-            const float scale = l.through ? 1.0f : (l.tc == 1u ? 1.0f / 128.0f : 1.0f / 32768.0f);
+            const float scale = l.tc == 1u ? 1.0f / 128.0f : (l.through ? 1.0f : 1.0f / 32768.0f);
             for (std::uint32_t i = 0; i < 2u; ++i)
                 uv[i] += mw * read(base + l.tc_off + i * comp[l.tc], l.tc, false, scale);
         }
