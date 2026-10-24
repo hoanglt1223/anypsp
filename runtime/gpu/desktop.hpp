@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 #include <vector>
 
 struct SDL_AudioStream;
@@ -38,6 +39,8 @@ public:
     // Opens the default playback device for 44.1 kHz stereo s16. Returns false
     // (with a message on stderr) when there is no usable device; the game then runs silent.
     bool open();
+    // Scales what push() plays (0 = silent, 1 = as the game made it).
+    void set_gain(float gain) noexcept { gain_ = gain; }
     void push(const std::int16_t *samples, std::uint32_t frames);
     [[nodiscard]] std::uint64_t dropped_frames() const noexcept { return dropped_; }
 
@@ -45,6 +48,8 @@ private:
     SDL_AudioStream *stream_{};
     bool started_{};
     std::uint64_t dropped_{};
+    float gain_{1.f};
+    std::vector<std::int16_t> scaled_;
 };
 
 // 44.1 kHz stereo s16 WAV file; the header is completed by close() or the destructor.
@@ -75,6 +80,28 @@ private:
     std::uint64_t next_ns_{};
 };
 
+// A mouse or touch action in window pixels.
+struct Pointer {
+    enum class Kind : std::uint8_t { Move, Down, Up, Wheel };
+    Kind kind{Kind::Move};
+    float x{}, y{};
+    float wheel{};  // notches, positive toward the user (scroll down)
+    bool touch{};
+    std::int64_t finger{};
+};
+
+// What the last poll() saw for the in-game menu.
+struct UiEvents {
+    std::vector<int> keys;     // SDL scancodes pressed (no auto-repeat)
+    std::vector<int> buttons;  // gamepad buttons pressed, triggers as input::kLeftTrigger/kRightTrigger
+    std::vector<Pointer> pointers;
+    bool menu{};               // the Menu binding (Escape, F1) or Back+Start on a gamepad
+};
+
+// Starts this program again with the same command line, for Reset in the menu. Returns
+// false (with a message on stderr) when it cannot.
+bool relaunch(int argc, char **argv);
+
 // Window events, hotkeys and input devices for the visible window.
 class Controls {
 public:
@@ -87,11 +114,18 @@ public:
     // Handles pending events. Returns false when the user closed the window.
     bool poll(gpu::GlHost &gl);
     [[nodiscard]] input::PadState pad() const;
+    [[nodiscard]] bool menu_requested() const noexcept { return ui_.menu; }
+    UiEvents take_ui_events() { return std::exchange(ui_, {}); }
+    [[nodiscard]] bool shift_held() const;
+    // The bindings and [player] settings in use; the menu changes them.
+    [[nodiscard]] input::InputMap &map() noexcept { return map_; }
 
 private:
     input::InputMap map_;
     std::vector<SDL_Gamepad *> pads_;
     bool started_{};
+    UiEvents ui_;
+    bool triggers_[2]{};
 };
 
 } // namespace anypsp::desktop

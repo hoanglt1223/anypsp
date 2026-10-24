@@ -24,7 +24,7 @@ constexpr std::size_t kCount = static_cast<std::size_t>(Action::Count);
 
 constexpr std::array<const char *, kCount> kActionNames = {
     "Up", "Down", "Left", "Right", "Cross", "Circle", "Square", "Triangle", "L", "R", "Start", "Select",
-    "AnalogUp", "AnalogDown", "AnalogLeft", "AnalogRight", "Fullscreen"};
+    "AnalogUp", "AnalogDown", "AnalogLeft", "AnalogRight", "Fullscreen", "Menu"};
 
 constexpr std::array<std::uint32_t, 12> kPadBits = {
     pspweb::pad::kUp, pspweb::pad::kDown, pspweb::pad::kLeft, pspweb::pad::kRight, pspweb::pad::kCross,
@@ -58,19 +58,56 @@ int button_from_name(const std::string &name) {
     return -1;
 }
 
-const char *button_name(int button) {
-    for (const auto &[n, b] : kButtonNames)
-        if (b == button) return n;
-    return "?";
-}
-
 std::uint8_t axis_to_pad(int value, int deadzone) {
     if (value > -deadzone && value < deadzone) return 128u;
     const int scaled = (std::clamp(value, -32768, 32767) + 32768) >> 8; // 0..255
     return static_cast<std::uint8_t>(scaled);
 }
 
+bool on_off(const std::string &value, const std::string &where, const std::string &name) {
+    if (same(value, "on")) return true;
+    if (same(value, "off")) return false;
+    throw psprecomp::Error(where + name + " is on or off");
+}
+
 } // namespace
+
+const char *button_name(int button) {
+    for (const auto &[n, b] : kButtonNames)
+        if (b == button) return n;
+    return "?";
+}
+
+const char *action_name(Action a) { return kActionNames[static_cast<std::size_t>(a)]; }
+
+std::string key_name(int scancode) { return SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode)); }
+
+std::string InputMap::rebind(Action a, bool keyboard, int code) {
+    auto &table = keyboard ? keys_ : buttons_;
+    const auto i = static_cast<std::size_t>(a);
+    const std::vector<int> previous = table[i];
+    std::string swapped;
+    for (std::size_t other = 0; other < kCount; ++other) {
+        if (other == i) continue;
+        auto &list = table[other];
+        const auto at = std::find(list.begin(), list.end(), code);
+        if (at == list.end()) continue;
+        list.erase(at);
+        const auto give = std::find_if(previous.begin(), previous.end(), [&](int p) { return p != code; });
+        if (give != previous.end() && std::find(list.begin(), list.end(), *give) == list.end()) list.push_back(*give);
+        swapped = kActionNames[other];
+    }
+    table[i] = {code};
+    return swapped;
+}
+
+void InputMap::reset_bindings() {
+    const InputMap defaults;
+    for (std::size_t i = 0; i < kCount; ++i) {
+        keys_[i] = defaults.keys_[i];
+        buttons_[i] = defaults.buttons_[i];
+    }
+}
 
 InputMap::InputMap() {
     const auto bind = [this](Action a, std::initializer_list<int> keys, std::initializer_list<int> buttons) {
@@ -94,6 +131,8 @@ InputMap::InputMap() {
     bind(Action::AnalogLeft, {SDL_SCANCODE_J}, {});
     bind(Action::AnalogRight, {SDL_SCANCODE_L}, {});
     bind(Action::Fullscreen, {SDL_SCANCODE_F11}, {});
+    // Back+Start on a gamepad opens the menu too; it is a chord, so not a binding here.
+    bind(Action::Menu, {SDL_SCANCODE_ESCAPE, SDL_SCANCODE_F1}, {});
 }
 
 void InputMap::load(const fs::path &path) {
@@ -117,6 +156,27 @@ void InputMap::load(const fs::path &path) {
         const std::string name = trim(line.substr(0, equals)), value = trim(line.substr(equals + 1));
 
         if (same(section, "player")) {
+            PlayerSettings &p = player_;
+            if (same(name, "Mute") || same(name, "ShowFps") || same(name, "ReduceMotion")) {
+                const bool on = on_off(value, where(), name);
+                (same(name, "Mute") ? p.mute : same(name, "ShowFps") ? p.show_fps : p.reduce_motion) = on;
+                continue;
+            }
+            if (same(name, "Filter")) {
+                if (!same(value, "smooth") && !same(value, "sharp")) throw psprecomp::Error(where() + "Filter is smooth or sharp");
+                p.sharp = same(value, "sharp");
+                continue;
+            }
+            if (same(name, "Language")) {
+                if (!same(value, "en") && !same(value, "vi")) throw psprecomp::Error(where() + "Language is en or vi");
+                p.language = same(value, "vi") ? "vi" : "en";
+                continue;
+            }
+            if (same(name, "Theme")) {
+                if (!same(value, "dark") && !same(value, "light")) throw psprecomp::Error(where() + "Theme is dark or light");
+                p.light_theme = same(value, "light");
+                continue;
+            }
             int number_value = 0;
             try {
                 std::size_t used = 0;
@@ -131,6 +191,14 @@ void InputMap::load(const fs::path &path) {
             } else if (same(name, "Scale")) {
                 if (number_value < 1 || number_value > 4) throw psprecomp::Error(where() + "Scale is 1-4");
                 scale_ = number_value;
+            } else if (same(name, "Volume")) {
+                if (number_value < 0 || number_value > 100 || number_value % 10 != 0)
+                    throw psprecomp::Error(where() + "Volume is 0-100 in steps of 10");
+                p.volume = number_value;
+            } else if (same(name, "UiScale")) {
+                if (number_value < 75 || number_value > 150 || number_value % 25 != 0)
+                    throw psprecomp::Error(where() + "UiScale is 75, 100, 125 or 150");
+                p.ui_scale = number_value;
             } else {
                 throw psprecomp::Error(where() + "unknown setting " + name);
             }
@@ -176,7 +244,15 @@ std::string InputMap::to_ini() const {
         out += "\n";
     }
     out += "\n[player]\n# Internal resolution, 1-4 times 480x272 (--scale overrides).\nScale = " + std::to_string(scale_) +
-           "\n# Left stick travel ignored around the centre (0-32767).\nStickDeadzone = " + std::to_string(deadzone_) + "\n";
+           "\n# Left stick travel ignored around the centre (0-32767).\nStickDeadzone = " + std::to_string(deadzone_) +
+           "\n# Sound: volume 0-100 (steps of 10), mute on|off.\nVolume = " + std::to_string(player_.volume) +
+           "\nMute = " + (player_.mute ? "on" : "off") +
+           "\n# Frame rates in the corner of the picture: on|off.\nShowFps = " + (player_.show_fps ? "on" : "off") +
+           "\n# Picture scaling to the window: smooth|sharp.\nFilter = " + (player_.sharp ? "sharp" : "smooth") +
+           "\n# The menu: language en|vi, theme dark|light, size 75|100|125|150, ReduceMotion on|off.\nLanguage = " +
+           player_.language + "\nTheme = " + (player_.light_theme ? "light" : "dark") +
+           "\nUiScale = " + std::to_string(player_.ui_scale) + "\nReduceMotion = " + (player_.reduce_motion ? "on" : "off") +
+           "\n";
     return out;
 }
 

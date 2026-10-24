@@ -23,6 +23,10 @@ constexpr int kWidth = 480, kHeight = 272;
 GlHost::GlHost(psprecomp::GuestMemory &memory) : memory_(memory) {}
 
 GlHost::~GlHost() {
+    if (context_ != nullptr && ui_fbo_ != 0u) {
+        glDeleteFramebuffers(1, &ui_fbo_);
+        glDeleteTextures(1, &ui_texture_);
+    }
     renderer_.reset();
     if (context_ != nullptr) SDL_GL_DestroyContext(context_);
     if (window_ != nullptr) SDL_DestroyWindow(window_);
@@ -112,11 +116,80 @@ void GlHost::present_to_window(std::uint32_t address, std::uint32_t stride, std:
     glViewport(0, 0, window_w, window_h);
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
-    glBlitFramebuffer(0, 0, width, height, x, y, x + w, y + h, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBlitFramebuffer(0, 0, width, height, x, y, x + w, y + h, GL_COLOR_BUFFER_BIT, smooth_ ? GL_LINEAR : GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (const GLenum error = glGetError(); error != GL_NO_ERROR)
         throw psprecomp::Error("GL error " + std::to_string(error) + " while presenting a frame");
+    if (overlay_) overlay_(window_w, window_h);
     SDL_GL_SwapWindow(window_);
+}
+
+std::pair<int, int> GlHost::window_pixels() const {
+    int w = 0, h = 0;
+    if (window_ != nullptr) SDL_GetWindowSizeInPixels(window_, &w, &h);
+    return {w, h};
+}
+
+void GlHost::blit_to_window(const std::uint32_t *pixels, int width, int height, int x, int y) {
+    if (ui_fbo_ == 0u) {
+        glGenTextures(1, &ui_texture_);
+        glGenFramebuffers(1, &ui_fbo_);
+    }
+    // The GE renderer's texture binding is put back afterwards.
+    GLint previous_texture = 0;
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    glBindTexture(GL_TEXTURE_2D, ui_texture_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    if (width > ui_width_ || height > ui_height_) {
+        ui_width_ = std::max(width, ui_width_);
+        ui_height_ = std::max(height, ui_height_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, ui_width_, ui_height_, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glBindFramebuffer(GL_FRAMEBUFFER, ui_fbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ui_texture_, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            throw psprecomp::Error("menu framebuffer incomplete on " + device_);
+    }
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous_texture));
+    const auto [window_w, window_h] = window_pixels();
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, ui_fbo_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    // Texture row 0 is the picture's top: flip it into GL's bottom-up window.
+    glBlitFramebuffer(0, 0, width, height, x, window_h - y, x + width, window_h - y - height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    (void)window_w;
+}
+
+void GlHost::present_picture(const std::uint32_t *pixels, int width, int height) {
+    blit_to_window(pixels, width, height, 0, 0);
+    if (const GLenum error = glGetError(); error != GL_NO_ERROR)
+        throw psprecomp::Error("GL error " + std::to_string(error) + " while presenting the menu");
+    SDL_GL_SwapWindow(window_);
+}
+
+void GlHost::edit_window(int x, int y, int w, int h, const std::function<void(std::vector<std::uint32_t> &)> &edit) {
+    const auto [window_w, window_h] = window_pixels();
+    x = std::clamp(x, 0, window_w);
+    y = std::clamp(y, 0, window_h);
+    w = std::min(w, window_w - x);
+    h = std::min(h, window_h - y);
+    if (w <= 0 || h <= 0) return;
+    std::vector<std::uint32_t> bottom_up(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glReadPixels(x, window_h - y - h, w, h, GL_RGBA, GL_UNSIGNED_BYTE, bottom_up.data());
+    ui_rows_.resize(bottom_up.size());
+    for (int row = 0; row < h; ++row)
+        std::memcpy(&ui_rows_[static_cast<std::size_t>(row) * static_cast<std::size_t>(w)],
+                    &bottom_up[static_cast<std::size_t>(h - 1 - row) * static_cast<std::size_t>(w)], static_cast<std::size_t>(w) * 4u);
+    edit(ui_rows_);
+    blit_to_window(ui_rows_.data(), w, h, x, y);
 }
 
 void GlHost::set_fullscreen(bool on) {

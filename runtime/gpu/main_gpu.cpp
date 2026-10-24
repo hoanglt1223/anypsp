@@ -10,6 +10,7 @@
 #include "frame_output.hpp"
 #include "gl_host.hpp"
 #include "input_map.hpp"
+#include "menu_host.hpp"
 
 #include "kernel.hpp"
 
@@ -62,7 +63,7 @@ const char *const kUsage =
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
-    "default; F11 toggles fullscreen), runs until the window closes unless --frames is given, and keeps saves\n"
+    "default; F11 toggles fullscreen; Escape, F1 or Back+Start opens the menu), runs until the window closes unless --frames is given, and keeps saves\n"
     "in the per-user data folder's memstick (override with --ms). --keymap names the input file; otherwise\n"
     "anypsp-input.ini next to the program or in the per-user data folder is used. --write-input writes the\n"
     "current bindings to a file and exits. --scale defaults to the input file's Scale (2) in a window.\n"
@@ -356,18 +357,30 @@ int main(int argc, char **argv) {
                   << " relocations, " << rt.function_count() << " translated entries\n";
 
         std::optional<anypsp::desktop::Controls> controls;
+        std::unique_ptr<anypsp::menu::MenuSession> menu;
         anypsp::desktop::AudioOut audio;
         bool audio_open = false;
         std::unique_ptr<anypsp::desktop::WavWriter> wav;
         if (!o.wav.empty()) wav = std::make_unique<anypsp::desktop::WavWriter>(o.wav);
         if (o.window) {
             controls.emplace(input_map);
+            // The menu saves changed bindings and settings to the input file in use, else to a
+            // new one in the per-user data folder.
+            const std::filesystem::path sfo = std::filesystem::path(o.disc) / "PSP_GAME" / "PARAM.SFO";
+            const std::string disc_title = anypsp::menu::sfo_string(sfo, "TITLE");
+            menu = std::make_unique<anypsp::menu::MenuSession>(
+                *gl, *controls, keymap.empty() ? user_dir / anypsp::input::kInputFileName : keymap, o.memstick,
+                anypsp::menu::sfo_string(sfo, "DISC_ID"), disc_title.empty() ? module.info->name : disc_title);
             if (o.fullscreen) gl->set_fullscreen(true);
             if (!o.mute) audio_open = audio.open();
         }
         g_audio = [&](const std::int16_t *samples, std::uint32_t count) {
             if (wav) wav->write(samples, count);
-            if (audio_open) audio.push(samples, count);
+            if (audio_open) {
+                const auto &player = controls->map().player();
+                audio.set_gain(player.mute ? 0.f : static_cast<float>(player.volume) / 100.f);
+                audio.push(samples, count);
+            }
         };
         kernel->set_audio_sink([](const std::int16_t *samples, std::uint32_t count) { g_audio(samples, count); });
         anypsp::desktop::FramePacer pacer;
@@ -384,6 +397,18 @@ int main(int argc, char **argv) {
                 if (!controls->poll(*gl)) {
                     closed = true;
                     break;
+                }
+                if (menu && controls->menu_requested()) {
+                    // The game waits while the menu is open.
+                    const auto &d = kernel->display();
+                    using Result = anypsp::menu::MenuSession::Result;
+                    const Result result = menu->run(d.framebuffer, d.stride, d.format);
+                    if (result == Result::WindowClosed || result == Result::Exit ||
+                        (result == Result::Reset && anypsp::desktop::relaunch(argc, argv))) {
+                        closed = true;
+                        break;
+                    }
+                    pacer = anypsp::desktop::FramePacer{};
                 }
                 if (o.input.empty()) {
                     const auto pad = controls->pad();
@@ -407,6 +432,7 @@ int main(int argc, char **argv) {
                     char title[160];
                     std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f Hz / game %.0f fps", module.info->name.c_str(),
                                   60.0 / seconds_passed, static_cast<double>(game_frames - title_game_frames) / seconds_passed);
+                    if (menu) menu->set_rates(60.0 / seconds_passed, static_cast<double>(game_frames - title_game_frames) / seconds_passed);
                     title_game_frames = game_frames;
                     SDL_SetWindowTitle(gl->window(), title);
                 }

@@ -23,6 +23,14 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 - FFmpeg code by way of PPSSPP's `at3_standalone`, as bundled by psp-web-recomp. Origin commit: `runtime/third_party/at3_standalone/SOURCE_COMMIT`. License text: `runtime/third_party/at3_standalone/COPYING.LGPLv2.1`.
 
+## anyui menu toolkit (MIT): `runtime/gpu/ui/anyui/`
+
+- From AnyGBA (`runtime/src/ui/anyui/`, MIT), the same files in both projects: software rasteriser, TrueType reader, icons and the in-game menu's layout. Copyright (c) 2026 Henry Nguyen. License text: `runtime/gpu/ui/anyui/LICENSE`.
+
+## Noto Sans (SIL Open Font License 1.1): `runtime/gpu/ui/fonts/`
+
+- Noto Sans Regular and SemiBold 2.015 from [notofonts/latin-greek-cyrillic](https://github.com/notofonts/latin-greek-cyrillic) (release `NotoSans-v2.015`, unhinted TTF), subset with fontTools `pyftsubset` to the Latin and Vietnamese letters the menu needs (no layout tables, no hinting), compiled into the desktop player. Copyright 2022 The Noto Project Authors. License text: `runtime/gpu/ui/fonts/OFL.txt`.
+
 ## SDL3 (zlib): fetched at build time, not in the repository
 
 - [libsdl-org/SDL](https://github.com/libsdl-org/SDL) release 3.4.18, pinned by SHA-256 in `runtime/gpu/gpu.cmake` and linked statically into the GPU runners (`anypsp-interp-gpu`, `anypsp-run-<name>-gpu`). It provides the hidden-window OpenGL context, the GL function lookup and PNG writing (SDL's bundled miniz, MIT). License text: `LICENSE.txt` in the fetched source.
