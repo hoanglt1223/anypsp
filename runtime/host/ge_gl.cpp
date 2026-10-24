@@ -94,7 +94,8 @@ void main() {
         return;
     }
     if (u_tex_enable) {
-        vec2 uv = v_q != 0.0 ? v_uv / v_q : v_uv;
+        // A projected q at or below zero samples the last texel (pspautotests gpu/texmtx/negq).
+        vec2 uv = v_q > 0.0 ? v_uv / v_q : (u_tex_window.x > 0.0 ? u_tex_window : u_tex_size) - 0.5;
         if (u_tex_window.x > 0.0) {
             // Wrap or clamp inside the texture's own rectangle, never into neighbouring pixels.
             uv = mix(mod(uv, u_tex_window), clamp(uv, vec2(0.5), u_tex_window - 0.5), u_tex_clamp);
