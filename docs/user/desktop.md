@@ -15,8 +15,9 @@ anypsp-play "Game.iso" --scale 3 --fullscreen
   reclaim the space; it is extracted again on the next run.
 - Saves go to the memory stick folder `memstick/PSP/SAVEDATA/` in the per-user data folder, so they
   persist between runs. `--ms DIR` uses another memory stick folder.
-- The game runs at the PSP's 59.94 frames per second; the window title shows the frame rate actually
-  reached. Audio is 44.1 kHz stereo; when the host runs ahead of the sound card, new audio is dropped
+- The game runs at the PSP's 59.94 vblanks per second. The window title shows both rates reached, for
+  example `60 Hz / game 30 fps`: `Hz` is the emulation speed (60 is full speed), `game fps` the frames the
+  game itself finishes (many PSP games, UNH 1's menus included, draw at 30). Audio is 44.1 kHz stereo; when the host runs ahead of the sound card, new audio is dropped
   rather than queued past 100 ms, so sound never lags behind the picture. `--mute` disables sound.
 - `--scale 1`-`4` sets the internal resolution (multiples of 480x272; default 2). The window is
   resizable and the picture keeps its aspect ratio. F11 toggles fullscreen.

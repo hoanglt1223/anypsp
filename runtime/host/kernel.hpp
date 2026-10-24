@@ -217,6 +217,7 @@ struct DisplayState {
     std::uint32_t format{3};
     std::uint32_t vcount{};
     std::uint64_t flips{}; // sceDisplaySetFrameBuf calls
+    std::uint64_t buffer_changes{}; // flips to a different framebuffer: frames the game finished
     std::uint32_t flip_vcount{~0u}; // vblank the newest buffer change belongs to
 };
 

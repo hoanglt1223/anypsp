@@ -378,6 +378,7 @@ int main(int argc, char **argv) {
         bool running = true, closed = false;
         const auto started = std::chrono::steady_clock::now();
         auto title_time = started;
+        std::uint64_t title_game_frames = 0;
         while (running && frame < frame_limit) {
             if (controls) {
                 if (!controls->poll(*gl)) {
@@ -398,10 +399,15 @@ int main(int argc, char **argv) {
                 gl->present_to_window(d.framebuffer, d.stride, d.format);
                 if (frame % 60 == 0) {
                     const auto now = std::chrono::steady_clock::now();
-                    const double fps = 60.0 / std::chrono::duration<double>(now - title_time).count();
+                    // Vblanks per second (the emulation speed; 60 is full speed) and frames the
+                    // game itself finished (many games draw at 30).
+                    const double seconds_passed = std::chrono::duration<double>(now - title_time).count();
+                    const std::uint64_t game_frames = kernel->display().buffer_changes;
                     title_time = now;
                     char title[160];
-                    std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f fps", module.info->name.c_str(), fps);
+                    std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f Hz / game %.0f fps", module.info->name.c_str(),
+                                  60.0 / seconds_passed, static_cast<double>(game_frames - title_game_frames) / seconds_passed);
+                    title_game_frames = game_frames;
                     SDL_SetWindowTitle(gl->window(), title);
                 }
             }
@@ -418,7 +424,8 @@ int main(int argc, char **argv) {
         }
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         std::cout << "[anypsp] ran " << frame << " frames in " << static_cast<long>(seconds) << " s ("
-                  << static_cast<long>(seconds > 0.0 ? frame / seconds : 0.0) << " fps); "
+                  << static_cast<long>(seconds > 0.0 ? frame / seconds : 0.0) << " fps, " << kernel->display().buffer_changes
+                  << " game frames); "
                   << (closed ? "window closed" : running ? "frame limit reached" : "guest stopped: " + kernel->halt_reason()) << "\n";
         g_audio = nullptr;
         if (wav) {

@@ -48,8 +48,10 @@ void GlHost::start(int scale, const std::string &title) {
     context_ = SDL_GL_CreateContext(window_);
     if (context_ == nullptr) fail("cannot create an OpenGL 3.3 core context");
     if (!SDL_GL_MakeCurrent(window_, context_)) fail("cannot make the GL context current");
-    // Vsync where the driver allows it; the caller paces frames either way.
-    if (visible && !SDL_GL_SetSwapInterval(1)) SDL_GL_SetSwapInterval(0);
+    // No vsync: the caller paces vblanks at 59.94 Hz with a timer, and waiting for
+    // the monitor as well let the two waits add up (about 32 vblanks per second
+    // on a 60 Hz display).  The desktop compositor keeps windowed output tear-free.
+    SDL_GL_SetSwapInterval(0);
     if (const char *missing = load_gl([](const char *name) { return reinterpret_cast<GlProc>(SDL_GL_GetProcAddress(name)); }))
         throw psprecomp::Error(std::string("OpenGL function missing: ") + missing);
     const auto *vendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
