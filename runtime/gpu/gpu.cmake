@@ -26,7 +26,10 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/../host/ge_gl.cpp
     ${ANYPSP_GPU_DIR}/gl_api.cpp
     ${ANYPSP_GPU_DIR}/gl_host.cpp
-    ${ANYPSP_GPU_DIR}/frame_output.cpp)
+    ${ANYPSP_GPU_DIR}/frame_output.cpp
+    ${ANYPSP_GPU_DIR}/desktop.cpp
+    ${ANYPSP_GPU_DIR}/disc.cpp
+    ${ANYPSP_GPU_DIR}/input_map.cpp)
 target_include_directories(anypsp_gpu PUBLIC ${ANYPSP_GPU_DIR})
 target_compile_definitions(anypsp_gpu PUBLIC ANYPSP_GL_DESKTOP)
 target_link_libraries(anypsp_gpu PUBLIC anypsp_host SDL3::SDL3-static)
@@ -43,6 +46,24 @@ if(MSVC)
     target_compile_options(anypsp-interp-gpu PRIVATE /EHsc /permissive- /W3)
     target_link_options(anypsp-interp-gpu PRIVATE /STACK:67108864)
 endif()
+
+# Playable launcher: the interpreter runner with a window, sound and input by default.
+add_executable(anypsp-play ${ANYPSP_GPU_DIR}/main_gpu.cpp ${ANYPSP_GPU_DIR}/../host/no_generated.cpp
+    ${ANYPSP_GPU_DIR}/../host/no_modules.cpp ${ANYPSP_GPU_DIR}/../host/no_dynamic_code.cpp)
+target_compile_definitions(anypsp-play PRIVATE ANYPSP_PLAY)
+target_link_libraries(anypsp-play PRIVATE anypsp_gpu anypsp_loader)
+if(MSVC)
+    target_compile_options(anypsp-play PRIVATE /EHsc /permissive- /W3)
+    target_link_options(anypsp-play PRIVATE /STACK:67108864)
+endif()
+
+add_executable(anypsp_desktop_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/desktop_tests.cpp)
+target_include_directories(anypsp_desktop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit)
+target_link_libraries(anypsp_desktop_tests PRIVATE anypsp_gpu)
+if(MSVC)
+    target_compile_options(anypsp_desktop_tests PRIVATE /EHsc /permissive- /W3)
+endif()
+add_test(NAME anypsp_desktop_tests COMMAND anypsp_desktop_tests)
 
 # Per-game runner with a renderer, next to anypsp-run-<name>.
 if(TARGET anypsp_generated_${ANYPSP_RUNNER_NAME})

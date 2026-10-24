@@ -1,8 +1,9 @@
 #pragma once
 
-// Offscreen desktop OpenGL 3.3 core host for the GE's GL backend. The context
+// Desktop OpenGL 3.3 core host for the GE's GL backend. By default the context
 // lives on a hidden SDL window that is never shown; frames are presented into
-// an offscreen framebuffer and read back. No audio subsystem is initialised.
+// an offscreen framebuffer and read back. With a visible window, frames are
+// also scaled into the window (letterboxed) and swapped with vsync.
 // All calls must come from the thread that called start().
 
 #include "ge_gl.hpp"
@@ -26,7 +27,14 @@ public:
 
     // Creates the context and the renderer at `scale` times the PSP resolution.
     // Throws psprecomp::Error with the reason on failure.
-    void start(int scale);
+    // `title` non-empty opens a visible, resizable window with that title.
+    void start(int scale, const std::string &title = {});
+
+    // Draws the framebuffer at `address` into the visible window and swaps.
+    void present_to_window(std::uint32_t address, std::uint32_t stride, std::uint32_t format);
+    void set_fullscreen(bool on);
+    [[nodiscard]] bool fullscreen() const noexcept { return fullscreen_; }
+    [[nodiscard]] SDL_Window *window() const noexcept { return window_; }
 
     [[nodiscard]] pspweb::GeGl &renderer() { return *renderer_; }
     [[nodiscard]] const std::string &device() const noexcept { return device_; }
@@ -44,6 +52,7 @@ private:
     std::unique_ptr<pspweb::GeGl> renderer_;
     std::uint32_t out_fbo_{}, out_texture_{};
     int scale_{1};
+    bool fullscreen_{};
     std::string device_;
     std::vector<std::uint8_t> readback_;
 };
