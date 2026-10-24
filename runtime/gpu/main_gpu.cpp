@@ -11,6 +11,7 @@
 #include "kernel.hpp"
 
 #include "elf_prx.hpp"
+#include "nid_db.hpp"
 
 #include "psprecomp/common.hpp"
 #include "psprecomp/interpreter.hpp"
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -36,10 +38,13 @@ const char *const kUsage =
     "usage: anypsp-<runner>-gpu <EBOOT.BIN|module.prx> [--renderer gl|soft] [--scale n] [--coherent 0|1]\n"
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
+    "         [--input frame:buttons,...] [--hle-stubs file]\n"
     "Runs headless (hidden GL context, no audio). --frames-dir writes frame_NNNNNN.png every --png-every\n"
     "frames (default 1); --hashes writes '<frame> <hash>' lines for every frame; --screenshot writes the\n"
     "picture at the program's last emulator: screenshot request; --dump writes the last frame.\n"
-    "--coherent 1 (default) writes GPU pixels back to guest VRAM after every display list.\n";
+    "--coherent 1 (default) writes GPU pixels back to guest VRAM after every display list.\n"
+    "--input holds the given sceCtrl button mask (hex) from that frame on. --hle-stubs lists imports\n"
+    "without HLE that return a fixed value: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
 std::unordered_map<std::uint32_t, psprecomp::PspImport> g_stub_imports;
 
@@ -57,9 +62,55 @@ void import_by_address(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) 
         ctx.pc = return_address;
 }
 
+// Same formats as main_headless.cpp.
+std::map<long, std::uint32_t> parse_input_script(const std::string &text) {
+    std::map<long, std::uint32_t> script;
+    std::size_t start = 0;
+    while (start < text.size()) {
+        const std::size_t end = std::min(text.find(',', start), text.size());
+        const std::string item = text.substr(start, end - start);
+        const std::size_t colon = item.find(':');
+        if (colon == std::string::npos) throw std::invalid_argument("--input item without frame:buttons: " + item);
+        try {
+            script[std::stol(item.substr(0, colon))] = static_cast<std::uint32_t>(std::stoul(item.substr(colon + 1), nullptr, 16));
+        } catch (const std::logic_error &) {
+            throw std::invalid_argument("bad --input item: " + item);
+        }
+        start = end + 1;
+    }
+    return script;
+}
+
+std::map<std::string, std::uint32_t> read_hle_stubs(const std::string &path) {
+    std::map<std::string, std::uint32_t> stubs;
+    std::ifstream in(path);
+    if (!in) throw psprecomp::Error("Cannot open " + path);
+    const auto trim = [](const std::string &s) {
+        const auto first = s.find_first_not_of(" \t\r");
+        const auto last = s.find_last_not_of(" \t\r");
+        return first == std::string::npos ? std::string() : s.substr(first, last - first + 1);
+    };
+    std::string line;
+    for (int number = 1; std::getline(in, line); ++number) {
+        line = trim(line.substr(0, line.find('#')));
+        if (line.empty()) continue;
+        const auto equals = line.find('=');
+        const std::string key = trim(line.substr(0, equals));
+        if (key.find("::") == std::string::npos)
+            throw psprecomp::Error(path + ":" + std::to_string(number) + ": expected Library::function = value");
+        try {
+            stubs[key] = equals == std::string::npos ? 0u : static_cast<std::uint32_t>(std::stoul(trim(line.substr(equals + 1)), nullptr, 0));
+        } catch (const std::exception &) {
+            throw psprecomp::Error(path + ":" + std::to_string(number) + ": bad value");
+        }
+    }
+    return stubs;
+}
+
 struct Options {
     std::string module, disc = ".", memstick = ".", feedback, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
-    std::string renderer = "gl", frames_dir, hashes, screenshot, dump;
+    std::string renderer = "gl", frames_dir, hashes, screenshot, dump, hle_stubs;
+    std::map<long, std::uint32_t> input;
     long frames = 600, png_every = 1;
     int scale = 1;
     bool coherent = true;
@@ -95,6 +146,8 @@ Options parse(int argc, char **argv) {
         else if (flag == "--hashes") o.hashes = value;
         else if (flag == "--screenshot") o.screenshot = value;
         else if (flag == "--dump") o.dump = value;
+        else if (flag == "--hle-stubs") o.hle_stubs = value;
+        else if (flag == "--input") o.input = parse_input_script(value);
         else if (flag == "--frames") o.frames = parse_positive(flag, value);
         else if (flag == "--png-every") o.png_every = parse_positive(flag, value);
         else if (flag == "--scale") o.scale = static_cast<int>(std::min(parse_positive(flag, value), 8L));
@@ -133,6 +186,8 @@ int main(int argc, char **argv) {
         if (!o.feedback.empty()) psprecomp::set_runtime_feedback_file(o.feedback);
         auto runtime = std::make_unique<psprecomp::Runtime>();
         auto &rt = *runtime;
+        // Names for messages about functions the HLE does not implement.
+        anypsp::loader::load_nid_toml(anypsp::loader::default_nid_database(), rt.nids());
         const std::uint32_t base = psprecomp::kDefaultPspUserLoadBase;
         const auto module = anypsp::loader::load_module(
             rt.memory(), psprecomp::Elf32Image::from_bytes(anypsp::loader::read_executable(o.module), o.module), o.module, base);
@@ -153,6 +208,7 @@ int main(int argc, char **argv) {
         // Declared before the kernel so the renderer outlives the GE that points at it.
         std::unique_ptr<anypsp::gpu::GlHost> gl;
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
+        if (!o.hle_stubs.empty()) kernel->set_hle_stubs(read_hle_stubs(o.hle_stubs));
         if (o.renderer == "gl") {
             gl = std::make_unique<anypsp::gpu::GlHost>(rt.memory());
             gl->start(o.scale);
@@ -209,6 +265,7 @@ int main(int argc, char **argv) {
         long frame = 0;
         bool running = true;
         while (running && frame < o.frames) {
+            if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
             running = kernel->frame(50.0);
             ++frame;
             if (!per_frame) continue;
