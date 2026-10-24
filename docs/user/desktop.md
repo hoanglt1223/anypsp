@@ -36,6 +36,32 @@ CPU wrote before the GPU uses it again. `--coherent 1` copies back after every d
 much slower and only useful to rule coherence out while debugging; `--coherent 0` never copies back and
 breaks games that read their framebuffers (UNH 1 draws its fighters as dark streaks).
 
+## Display settings
+
+Display settings live in `anypsp-display.ini`, next to the program or in the per-user data folder;
+changes made with hotkeys while playing are saved to the per-user one. Command-line options override
+the file for one run.
+
+```ini
+[display]
+Smoothing = off
+```
+
+| Setting | Option | Hotkey | |
+|---|---|---|---|
+| `Smoothing` | `--smoothing on\|off` | F9 | Off by default. See below. |
+
+### Smoothing
+
+The game always runs at the PSP's 59.94 vblanks per second. Many games draw only every second vblank
+(30 fps), so each picture stays up for two vblanks. Smoothing shows a 50/50 blend of a new picture and
+the one before on the vblank where the new one appears, then the new picture alone: motion steps at
+60 per second instead of 30. It blends nothing else: games drawing at 60 fps, uneven frame times, and
+scene cuts (two pictures that differ a lot, compared on small copies) are shown as they are. Blends
+are mixes of two real pictures, not motion estimates, so fast movement looks doubled rather than
+warped. Smoothing adds one vblank (about 17 ms) of input latency to the frames it blends. The window
+title shows `smoothing` while it is on.
+
 ## Input mapping
 
 A game looks for `anypsp-input.ini` next to the program, then in the per-user data folder. `--keymap FILE`
@@ -61,6 +87,7 @@ AnalogDown = K
 AnalogLeft = J
 AnalogRight = L
 Fullscreen = F11
+Smoothing = F9
 
 [gamepad]
 Up = DpadUp

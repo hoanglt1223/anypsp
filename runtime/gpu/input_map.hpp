@@ -16,6 +16,7 @@ enum class Action {
     Up, Down, Left, Right, Cross, Circle, Square, Triangle, L, R, Start, Select,
     AnalogUp, AnalogDown, AnalogLeft, AnalogRight,
     Fullscreen,
+    Smoothing,
     Count
 };
 

@@ -32,6 +32,14 @@ public:
 
     // Draws the framebuffer at `address` into the visible window and swaps.
     void present_to_window(std::uint32_t address, std::uint32_t stride, std::uint32_t format);
+    // The same in steps, for smoothing: render_output draws the framebuffer into the output
+    // picture, keep_previous saves the output picture before the next one replaces it,
+    // difference compares the two (0 same .. 1 opposite, from small copies), and show scales
+    // the output picture (or a 50/50 blend with the saved one) into the window and swaps.
+    void render_output(std::uint32_t address, std::uint32_t stride, std::uint32_t format);
+    void keep_previous();
+    [[nodiscard]] double difference();
+    void show(bool blend_with_previous);
     void set_fullscreen(bool on);
     [[nodiscard]] bool fullscreen() const noexcept { return fullscreen_; }
     [[nodiscard]] SDL_Window *window() const noexcept { return window_; }
@@ -51,6 +59,10 @@ private:
     bool sdl_started_{};
     std::unique_ptr<pspweb::GeGl> renderer_;
     std::uint32_t out_fbo_{}, out_texture_{};
+    std::uint32_t prev_fbo_{}, prev_texture_{};
+    std::uint32_t small_fbo_[2]{}, small_texture_[2]{};
+    std::uint32_t blend_program_{}, blend_vao_{};
+    std::vector<std::uint8_t> small_[2];
     int scale_{1};
     bool fullscreen_{};
     std::string device_;

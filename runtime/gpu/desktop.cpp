@@ -131,6 +131,10 @@ bool Controls::poll(gpu::GlHost &gl) {
             if (std::find(map_.keys(input::Action::Fullscreen).begin(), map_.keys(input::Action::Fullscreen).end(),
                           static_cast<int>(event.key.scancode)) != map_.keys(input::Action::Fullscreen).end())
                 gl.set_fullscreen(!gl.fullscreen());
+            for (const input::Action a : {input::Action::Smoothing}) {
+                const auto &keys = map_.keys(a);
+                if (std::find(keys.begin(), keys.end(), static_cast<int>(event.key.scancode)) != keys.end()) hotkeys_.push_back(a);
+            }
             break;
         case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
             const auto &bound = map_.buttons(input::Action::Fullscreen);
@@ -158,6 +162,8 @@ bool Controls::poll(gpu::GlHost &gl) {
     }
     return open;
 }
+
+std::vector<input::Action> Controls::take_hotkeys() { return std::exchange(hotkeys_, {}); }
 
 input::PadState Controls::pad() const {
     const bool *keys = SDL_GetKeyboardState(nullptr);

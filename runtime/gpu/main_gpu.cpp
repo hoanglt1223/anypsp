@@ -6,6 +6,7 @@
 // plays no audio.
 
 #include "desktop.hpp"
+#include "display.hpp"
 #include "disc.hpp"
 #include "frame_output.hpp"
 #include "gl_host.hpp"
@@ -58,7 +59,7 @@ const char *const kUsage =
     "         [--renderer gl|soft] [--scale n] [--coherent lazy|1|0]\n"
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
-    "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic]\n"
+    "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
@@ -74,6 +75,8 @@ const char *const kUsage =
     "reloads VRAM the CPU wrote into the GPU copy; 1 writes back after every display list (slow, for\n"
     "debugging); 0 never writes back.\n"
     "--deterministic drives guest time from executed code instead of the host clock, so scripted runs repeat.\n"
+"--smoothing on blends the in-between vblank of games drawing at 30 fps (F9 toggles it in a window); display\n"
+"settings are kept in anypsp-display.ini (next to the program or in the per-user data folder).\n"
     "--input holds the given sceCtrl button mask (hex) from that frame on. --hle-stubs lists imports\n"
     "without HLE that return a fixed value: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
@@ -143,6 +146,7 @@ struct Options {
     std::string renderer = "gl", frames_dir, hashes, screenshot, dump, hle_stubs;
     std::string wav, keymap, write_input, cache;
     std::map<long, std::uint32_t> input;
+    std::vector<std::pair<std::string, std::string>> display; // --smoothing ...: display setting overrides
     long frames = 600, png_every = 1;
     int scale = 1;
     pspweb::GeGl::Coherence coherence = pspweb::GeGl::Coherence::Lazy;
@@ -196,6 +200,7 @@ Options parse(int argc, char **argv) {
         else if (flag == "--dump") o.dump = value;
         else if (flag == "--hle-stubs") o.hle_stubs = value;
         else if (flag == "--input") o.input = parse_input_script(value);
+        else if (flag == "--smoothing") o.display.emplace_back("Smoothing", value);
         else if (flag == "--frames") o.frames = parse_positive(flag, value), o.frames_set = true;
         else if (flag == "--png-every") o.png_every = parse_positive(flag, value);
         else if (flag == "--scale") o.scale = static_cast<int>(std::min(parse_positive(flag, value), 8L)), o.scale_set = true;
@@ -355,6 +360,10 @@ int main(int argc, char **argv) {
                   << psprecomp::hex32(module.end) << ", " << imports.size() << " imports, " << module.relocations.applied
                   << " relocations, " << rt.function_count() << " translated entries\n";
 
+        anypsp::display::Settings display;
+        const std::filesystem::path display_file = anypsp::display::find_file(program_dir(), user_dir);
+        if (o.window) display = anypsp::display::load(display_file);
+        for (const auto &[name, value] : o.display) anypsp::display::apply_setting(display, name, value, "--");
         std::optional<anypsp::desktop::Controls> controls;
         anypsp::desktop::AudioOut audio;
         bool audio_open = false;
@@ -379,6 +388,10 @@ int main(int argc, char **argv) {
         const auto started = std::chrono::steady_clock::now();
         auto title_time = started;
         std::uint64_t title_game_frames = 0;
+        // Smoothing: vblanks the current game frame has been on screen, and the flip count it started at.
+        std::uint64_t shown_changes = kernel->display().buffer_changes;
+        unsigned frame_vblanks = 0;
+        std::string notice;
         while (running && frame < frame_limit) {
             if (controls) {
                 if (!controls->poll(*gl)) {
@@ -395,8 +408,35 @@ int main(int argc, char **argv) {
             ++frame;
             if (controls) {
                 pacer.wait();
+                for (const auto action : controls->take_hotkeys()) {
+                    if (action != anypsp::input::Action::Smoothing) continue;
+                    display.smoothing = !display.smoothing;
+                    notice = display.smoothing ? "smoothing on" : "smoothing off";
+                    try {
+                        anypsp::display::save(user_dir / anypsp::display::kFileName, display);
+                    } catch (const std::exception &e) {
+                        std::cerr << "[anypsp] " << e.what() << "\n";
+                    }
+                    std::cout << "[anypsp] " << notice << "\n";
+                }
                 const auto &d = kernel->display();
-                gl->present_to_window(d.framebuffer, d.stride, d.format);
+                if (d.buffer_changes != shown_changes) {
+                    // A new game frame: with smoothing, the vblank it appears on shows it
+                    // blended with the frame before when that one was up for two vblanks.
+                    const unsigned previous = frame_vblanks;
+                    shown_changes = d.buffer_changes;
+                    frame_vblanks = 1;
+                    if (display.smoothing && previous == 2u) {
+                        gl->keep_previous();
+                        gl->render_output(d.framebuffer, d.stride, d.format);
+                        gl->show(anypsp::display::blend_on_new_frame(true, previous, gl->difference()));
+                    } else {
+                        gl->present_to_window(d.framebuffer, d.stride, d.format);
+                    }
+                } else {
+                    ++frame_vblanks;
+                    gl->present_to_window(d.framebuffer, d.stride, d.format);
+                }
                 if (frame % 60 == 0) {
                     const auto now = std::chrono::steady_clock::now();
                     // Vblanks per second (the emulation speed; 60 is full speed) and frames the
@@ -405,8 +445,10 @@ int main(int argc, char **argv) {
                     const std::uint64_t game_frames = kernel->display().buffer_changes;
                     title_time = now;
                     char title[160];
-                    std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f Hz / game %.0f fps", module.info->name.c_str(),
-                                  60.0 / seconds_passed, static_cast<double>(game_frames - title_game_frames) / seconds_passed);
+                    std::snprintf(title, sizeof title, "AnyPSP - %s - %.0f Hz / game %.0f fps%s%s", module.info->name.c_str(),
+                                  60.0 / seconds_passed, static_cast<double>(game_frames - title_game_frames) / seconds_passed,
+                                  display.smoothing ? " / smoothing" : "", notice.empty() ? "" : (" - " + notice).c_str());
+                    notice.clear();
                     title_game_frames = game_frames;
                     SDL_SetWindowTitle(gl->window(), title);
                 }

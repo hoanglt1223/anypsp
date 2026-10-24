@@ -87,10 +87,13 @@ public:
     // Handles pending events. Returns false when the user closed the window.
     bool poll(gpu::GlHost &gl);
     [[nodiscard]] input::PadState pad() const;
+    // Display hotkeys (Smoothing...) pressed since the last call; Fullscreen is handled by poll.
+    [[nodiscard]] std::vector<input::Action> take_hotkeys();
 
 private:
     input::InputMap map_;
     std::vector<SDL_Gamepad *> pads_;
+    std::vector<input::Action> hotkeys_;
     bool started_{};
 };
 
