@@ -1604,7 +1604,10 @@ void Kernel::sceDisplaySetMode(Ctx &ctx) { finish(ctx, 0u); }
 void Kernel::sceDisplaySetFrameBuf(Ctx &ctx) {
     ++display_.flips;
     const bool new_buffer = ctx.gpr[4] != 0u && display_.framebuffer != 0u && ctx.gpr[4] != display_.framebuffer;
-    if (new_buffer) ++display_.buffer_changes;
+    if (new_buffer) {
+        ++display_.buffer_changes;
+        ge_worker_->post([ge = ge_.get()] { ge->frame_flipped(); }); // after the lists queued so far
+    }
     display_.framebuffer = ctx.gpr[4];
     if (ctx.gpr[5] != 0u) display_.stride = ctx.gpr[5];
     display_.format = ctx.gpr[6];

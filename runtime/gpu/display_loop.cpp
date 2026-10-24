@@ -145,7 +145,14 @@ void DisplayLoop::after_vblank(const pspweb::DisplayState &d) {
         const unsigned previous = frame_vblanks_;
         shown_changes_ = d.buffer_changes;
         frame_vblanks_ = 1;
-        if (settings_.smoothing && previous == 2u) {
+        if (settings_.interpolate && previous == 2u && gl_.has_in_between()) {
+            // The in-between picture, unless it is a cut away from the new frame.
+            gl_.render_output(d.framebuffer, d.stride, d.format);
+            gl_.keep_previous();
+            gl_.render_in_between(d.framebuffer, d.stride, d.format);
+            if (!display::in_between_on_new_frame(true, previous, gl_.difference()))
+                gl_.render_output(d.framebuffer, d.stride, d.format);
+        } else if (settings_.smoothing && previous == 2u) {
             gl_.keep_previous();
             gl_.render_output(d.framebuffer, d.stride, d.format);
             blend = display::blend_on_new_frame(true, previous, gl_.difference());
@@ -198,6 +205,7 @@ void DisplayLoop::update_title(std::uint64_t game_frames) {
     std::string extras;
     if (cadence_ && sync_factor_ != 1.0) extras += " / synced";
     if (settings_.smoothing) extras += " / smoothing";
+    if (settings_.interpolate && gl_.has_in_between()) extras += " / interpolated";
     if (paused_) extras += " / paused";
     if (!notice_.empty()) extras += " - " + notice_;
     char title[256];

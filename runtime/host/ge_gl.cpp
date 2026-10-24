@@ -800,7 +800,7 @@ void GeGl::download(Surface &s) {
         s.rows[y].dx0 = 0;
         s.rows[y].dx1 = -1;
     }
-    if (vram == nullptr || r.empty()) return;
+    if (vram == nullptr || r.empty() || in_between_) return;
     ++downloads_;
     const auto x0 = static_cast<std::uint32_t>(r.x0), y0 = static_cast<std::uint32_t>(r.y0);
     const auto w = static_cast<std::uint32_t>(r.x1 - r.x0 + 1), h = static_cast<std::uint32_t>(r.y1 - r.y0 + 1);
@@ -1103,6 +1103,7 @@ bool GeGl::batch_uses(const Surface &s) const {
 }
 
 bool GeGl::prepare_vram_read(std::uint32_t address, std::uint32_t bytes) {
+    if (in_between_) return false;
     const std::uint32_t offset = vram_offset(address);
     if (offset == kNotVram) return false;
     bool downloaded = false;
@@ -1523,6 +1524,7 @@ void GeGl::flush() {
 // Block transfers and display
 
 void GeGl::before_transfer(const TransferRect &src, const TransferRect &) {
+    if (in_between_) return;
     // Pixels only the GPU has must reach VRAM before the copy reads them.
     // Destinations need no download: the copy is newer than whatever is there.
     for (auto &s : surfaces_) {
@@ -1708,8 +1710,13 @@ void GeGl::refresh_page_flags() {
 }
 
 void GeGl::apply_cpu_writes() {
-    using M = psprecomp::GuestMemory;
     if (!memory_.take_vram_cpu_writes(cpu_written_)) return;
+    if (cpu_write_observer_) cpu_write_observer_(cpu_written_);
+    queue_cpu_writes(cpu_written_);
+}
+
+void GeGl::queue_cpu_writes(const PageSet &pages) {
+    using M = psprecomp::GuestMemory;
     for (auto &s : surfaces_) {
         if (!s.alive) continue;
         const std::uint32_t rb = row_bytes(s), end = std::min(surface_end(s), kVramSize);
@@ -1721,7 +1728,7 @@ void GeGl::apply_cpu_writes() {
             rows = Rect{};
         };
         for (std::uint32_t page = s.offset >> M::kVramPageShift; s.offset < end && page <= (end - 1u) >> M::kVramPageShift; ++page) {
-            if (!cpu_written_[page]) {
+            if (!pages[page]) {
                 queue();
                 continue;
             }

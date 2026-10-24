@@ -26,6 +26,7 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/../host/ge_gl.cpp
     ${ANYPSP_GPU_DIR}/gl_api.cpp
     ${ANYPSP_GPU_DIR}/gl_host.cpp
+    ${ANYPSP_GPU_DIR}/in_between.cpp
     ${ANYPSP_GPU_DIR}/frame_output.cpp
     ${ANYPSP_GPU_DIR}/desktop.cpp
     ${ANYPSP_GPU_DIR}/disc.cpp

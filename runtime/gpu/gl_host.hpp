@@ -7,6 +7,7 @@
 // All calls must come from the thread that called start().
 
 #include "ge_gl.hpp"
+#include "in_between.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -40,6 +41,12 @@ public:
     void keep_previous();
     [[nodiscard]] double difference();
     void show(bool blend_with_previous);
+    // Frame interpolation (host/ge_interp.hpp): creates the second renderer that draws the
+    // in-between picture and returns what the GE draws through. Call once, after start().
+    pspweb::InterpolatingRenderer &enable_in_between();
+    [[nodiscard]] bool has_in_between() const noexcept { return tee_ != nullptr; }
+    // Draws the in-between picture of the framebuffer at `address` into the output picture.
+    void render_in_between(std::uint32_t address, std::uint32_t stride, std::uint32_t format);
     void set_fullscreen(bool on);
     // Refresh rate of the monitor the window is on, or 0 when unknown.
     [[nodiscard]] double refresh_rate() const;
@@ -55,6 +62,8 @@ public:
     // Presents the framebuffer at `address` and reads it back as RGBA rows, top
     // row first, (480 x 272) * scale. Alpha is opaque.
     void capture(std::uint32_t address, std::uint32_t stride, std::uint32_t format, std::vector<std::uint8_t> &rgba);
+    // The same for the in-between picture.
+    void capture_in_between(std::uint32_t address, std::uint32_t stride, std::uint32_t format, std::vector<std::uint8_t> &rgba);
 
 private:
     psprecomp::GuestMemory &memory_;
@@ -62,6 +71,9 @@ private:
     SDL_GLContextState *context_{};
     bool sdl_started_{};
     std::unique_ptr<pspweb::GeGl> renderer_;
+    std::unique_ptr<pspweb::GeGl> in_between_;
+    std::unique_ptr<InBetweenRenderer> tee_;
+    void read_output(std::vector<std::uint8_t> &rgba);
     std::uint32_t out_fbo_{}, out_texture_{};
     std::uint32_t prev_fbo_{}, prev_texture_{};
     std::uint32_t small_fbo_[2]{}, small_texture_[2]{};
