@@ -1693,6 +1693,19 @@ void Ge::load_clut() {
     clut_hash_ = hash_bytes(clut_.data(), clut_.size());
 }
 
+// The GE ignores the low bits of the texture buffer width: rows are a whole
+// number of 16-byte units, and a width under 16 bytes means 16 bytes (as in
+// PPSSPP's GetTextureBufw).  UNH 1 draws its 16x32 CLUT4 glyphs with bufw 16.
+std::uint32_t Ge::texture_buf_width() const {
+    const std::uint32_t format = regs_[kTexFormat] & 0xFu;
+    const std::uint32_t raw = regs_[kTexBufWidth0] & 0x7FFu;
+    if (format > 7u) return std::max(raw, 1u);
+    static constexpr std::uint32_t bits_per_texel[8] = {16, 16, 16, 32, 4, 8, 16, 32};
+    const std::uint32_t unit = 128u / bits_per_texel[format];
+    const std::uint32_t aligned = raw & ~(unit - 1u);
+    return aligned != 0u ? aligned : unit;
+}
+
 std::uint32_t Ge::texture_bytes(std::uint32_t format, std::uint32_t buf_width, std::uint32_t height) const {
     if (format >= 8u) {
         const std::uint32_t blocks = ((buf_width + 3u) / 4u) * ((height + 3u) / 4u);
@@ -1714,7 +1727,7 @@ void Ge::bind_texture() {
     const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
     const std::uint32_t width = 1u << std::min(regs_[kTexSize0] & 0xFu, 9u);
     const std::uint32_t height = 1u << std::min((regs_[kTexSize0] >> 8u) & 0xFu, 9u);
-    const std::uint32_t buf_width = std::max(regs_[kTexBufWidth0] & 0x7FFu, 1u);
+    const std::uint32_t buf_width = texture_buf_width();
     const bool clut = format >= 4u && format <= 7u;
     const TextureKey key{address, format, width, height, buf_width, regs_[kTexMode] & 1u,
                          clut ? regs_[kClutFormat] : 0u, clut ? clut_hash_ : 0u};
@@ -1884,7 +1897,7 @@ std::uint32_t Ge::clut_lookup(std::uint32_t index) const {
 std::uint32_t Ge::fetch_texel(int x, int y) const {
     const std::uint32_t format = regs_[kTexFormat] & 0xFu;
     const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
-    const std::uint32_t buf_width = std::max(regs_[kTexBufWidth0] & 0x7FFu, 1u);
+    const std::uint32_t buf_width = texture_buf_width();
     const auto ux = static_cast<std::uint32_t>(x), uy = static_cast<std::uint32_t>(y);
 
     if (format >= 8u) { // DXT1/3/5: 4x4 blocks
@@ -2127,7 +2140,7 @@ void Ge::submit_gl_state() {
         st.linear = (regs_[0xC6] & 0x100u) != 0u;
         const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
         const std::uint32_t format = regs_[kTexFormat] & 0xFu;
-        const std::uint32_t buf_width = regs_[kTexBufWidth0] & 0x7FFu;
+        const std::uint32_t buf_width = texture_buf_width();
         if (format <= 3u && gl_->is_gpu_target(address, format, buf_width)) {
             st.tex_from_target = true;
             st.tex_address = address;

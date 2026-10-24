@@ -94,7 +94,7 @@ if(ANYPSP_BUILD_HOST)
         target_link_options(anypsp-interp PRIVATE /STACK:67108864)
     endif()
 
-    add_executable(anypsp_hle_tests tests/unit/main.cpp tests/unit/hle_tests.cpp runtime/host/no_generated.cpp
+    add_executable(anypsp_hle_tests tests/unit/main.cpp tests/unit/hle_tests.cpp tests/unit/ge_texture_tests.cpp runtime/host/no_generated.cpp
         runtime/host/no_modules.cpp runtime/host/no_dynamic_code.cpp)
     target_include_directories(anypsp_hle_tests PRIVATE tests/unit)
     target_link_libraries(anypsp_hle_tests PRIVATE anypsp_host anypsp_loader)

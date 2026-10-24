@@ -176,6 +176,7 @@ private:
     };
     void bind_texture();
     void evict_textures(std::uint64_t need);
+    [[nodiscard]] std::uint32_t texture_buf_width() const;
     [[nodiscard]] std::uint32_t texture_bytes(std::uint32_t format, std::uint32_t buf_width, std::uint32_t height) const;
 
     PixelState ps_{};
