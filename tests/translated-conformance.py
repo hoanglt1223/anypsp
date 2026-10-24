@@ -61,6 +61,7 @@ def main():
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--json", type=pathlib.Path)
+    parser.add_argument("--build-jobs", type=int, default=6, help="runners built at once (each needs ~2.5 GB)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     if not conformance.TESTS.exists():
@@ -77,7 +78,18 @@ def main():
     build = work / "build"
     runners = ";".join(f"{name}={generated.as_posix()}" for name, generated in translated)
     run([CMAKE, "-S", ROOT, "-B", build, f"-DANYPSP_RUNNERS={runners}", f"-DANYPSP_RUNNER_OPT={args.opt}", "-DANYPSP_RUNNER_JOBS=2"])
-    run([CMAKE, "--build", build, "--config", "Release", "--parallel", "8", "--target"] + [f"anypsp-run-{name}" for name, _ in translated])
+    targets = [f"anypsp-run-{name}" for name, _ in translated]
+    # The Visual Studio generator builds a --target list one project at a time, and each test's generated
+    # code is one huge function that takes minutes to compile. Build the shared host with the first runner,
+    # then the rest side by side without re-entering their (already built, shared) project references.
+    run([CMAKE, "--build", build, "--config", "Release", "--parallel", "8", "--target", targets[0]])
+    if (build / "AnyPSP.sln").exists():
+        with concurrent.futures.ThreadPoolExecutor(args.build_jobs) as pool:
+            list(pool.map(lambda t: run([CMAKE, "--build", build, "--config", "Release", "--target",
+                                         t.replace("anypsp-run-", "anypsp_generated_"), t,
+                                         "--", "/p:BuildProjectReferences=false"]), targets[1:]))
+    elif targets[1:]:
+        run([CMAKE, "--build", build, "--config", "Release", "--parallel", "8", "--target"] + targets[1:])
 
     def check(item):
         program, (name, _) = item
