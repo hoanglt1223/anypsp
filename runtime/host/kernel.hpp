@@ -410,6 +410,9 @@ private:
     void install_fallback(const psprecomp::PspImport &import);
     // A function that only returns `result`.
     void hle_value(const char *library, std::uint32_t nid, const char *name, std::uint32_t result);
+    void hle_lambda(const char *library, std::uint32_t nid, const char *name, std::function<void(Ctx &)> body);
+    void install_rtc();       // rtc.cpp
+    std::uint64_t rtc_base_us_{}; // calendar time (since 1970) at guest time 0, set on first use
     void notify_callback(Ctx &ctx, std::int32_t uid, std::int32_t arg);
     static void finish_float(Ctx &ctx, float value);
     // mp3.cpp
@@ -865,7 +868,6 @@ private:
     void sceUmdGetDriveStat(Ctx &ctx);
     void sceUtilityGetSystemParamInt(Ctx &ctx);
     void sceUtilityGetSystemParamString(Ctx &ctx);
-    void sceRtcTickAddSeconds(Ctx &ctx);
     void sceKernelResumeThread(Ctx &ctx);
     void sceIoRename(Ctx &ctx);
     void sceCtrlReadLatch(Ctx &ctx);
@@ -883,9 +885,6 @@ private:
     void sceKernelReferThreadStatus(Ctx &ctx);
     void sceKernelReferEventFlagStatus(Ctx &ctx);
     void sceKernelLibcClock(Ctx &ctx);
-    void sceRtcGetCurrentClockLocalTime(Ctx &ctx);
-    void sceRtcGetCurrentTick(Ctx &ctx);
-    void sceRtcGetTickResolution(Ctx &ctx);
     void sceKernelVolatileMemLock(Ctx &ctx);
     void sceIoDevctl(Ctx &ctx);
 

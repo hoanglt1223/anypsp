@@ -103,10 +103,6 @@ void Kernel::install_devices() {
     hle("sceImpose", 0x24FD7BCFu, "sceImposeGetLanguageMode", &Kernel::sceImposeGetLanguageMode);
     hle("sceImpose", 0x36AA6E91u, "sceImposeSetLanguageMode", &Kernel::return_zero);
     hle("sceDisplay", 0xDBA6C4C4u, "sceDisplayGetFramePerSec", &Kernel::sceDisplayGetFramePerSec);
-    hle("sceRtc", 0xE7C27D1Bu, "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
-    hle("sceRtc", 0x3F7AD767u, "sceRtcGetCurrentTick", &Kernel::sceRtcGetCurrentTick);
-    hle("sceRtc", 0xC41C2853u, "sceRtcGetTickResolution", &Kernel::sceRtcGetTickResolution);
-    hle("sceRtc", 0xF2A4AFE5u, "sceRtcTickAddSeconds", &Kernel::sceRtcTickAddSeconds);
     hle("UtilsForUser", 0x91E4F6A7u, "sceKernelLibcClock", &Kernel::sceKernelLibcClock);
     hle("Kernel_Library", 0xB55249D2u, "sceKernelIsCpuIntrEnable", &Kernel::sceKernelIsCpuIntrEnable);
 
@@ -463,21 +459,6 @@ void Kernel::sceUtilityGetSystemParamString(Ctx &ctx) {
     finish(ctx, 0u);
 }
 
-void Kernel::sceRtcTickAddSeconds(Ctx &ctx) {
-    auto &m = rt_.memory();
-    if (ctx.gpr[4] == 0u || ctx.gpr[5] == 0u) {
-        finish(ctx, 0u);
-        return;
-    }
-    const std::uint64_t tick = m.load32(ctx.gpr[5]) | (static_cast<std::uint64_t>(m.load32(ctx.gpr[5] + 4u)) << 32u);
-    // The 64-bit seconds argument is aligned to the a2:a3 register pair.
-    const auto seconds = static_cast<std::int64_t>(ctx.gpr[6] | (static_cast<std::uint64_t>(ctx.gpr[7]) << 32u));
-    const std::uint64_t result = tick + static_cast<std::uint64_t>(seconds) * 1000000ull;
-    m.store32(ctx.gpr[4], static_cast<std::uint32_t>(result));
-    m.store32(ctx.gpr[4] + 4u, static_cast<std::uint32_t>(result >> 32u));
-    finish(ctx, 0u);
-}
-
 // Both return the number of samples taken since the last sceCtrlReadLatch.
 void Kernel::sceCtrlPeekLatch(Ctx &ctx) {
     if (ctx.gpr[4] != 0u) {
@@ -507,40 +488,6 @@ void Kernel::sceDisplayGetFramePerSec(Ctx &ctx) {
 }
 
 void Kernel::sceKernelLibcClock(Ctx &ctx) { finish(ctx, static_cast<std::uint32_t>(now_us())); }
-
-void Kernel::sceRtcGetCurrentTick(Ctx &ctx) {
-    constexpr std::uint64_t kUnixEpochTick = 62135596800000000ull;
-    static const std::uint64_t base = unix_time_us() - now_us();
-    const std::uint64_t tick = kUnixEpochTick + base + now_us();
-    if (ctx.gpr[4] != 0u) {
-        rt_.memory().store32(ctx.gpr[4], static_cast<std::uint32_t>(tick));
-        rt_.memory().store32(ctx.gpr[4] + 4u, static_cast<std::uint32_t>(tick >> 32u));
-    }
-    finish(ctx, 0u);
-}
-
-void Kernel::sceRtcGetTickResolution(Ctx &ctx) { finish(ctx, 1000000u); }
-
-void Kernel::sceRtcGetCurrentClockLocalTime(Ctx &ctx) {
-    const auto now = static_cast<std::time_t>(unix_time_us() / 1000000u);
-    std::tm local{};
-#if defined(_WIN32)
-    localtime_s(&local, &now);
-#else
-    localtime_r(&now, &local);
-#endif
-    const std::uint32_t out = ctx.gpr[4];
-    if (out != 0u) {
-        rt_.memory().store16(out + 0u, static_cast<std::uint16_t>(local.tm_year + 1900));
-        rt_.memory().store16(out + 2u, static_cast<std::uint16_t>(local.tm_mon + 1));
-        rt_.memory().store16(out + 4u, static_cast<std::uint16_t>(local.tm_mday));
-        rt_.memory().store16(out + 6u, static_cast<std::uint16_t>(local.tm_hour));
-        rt_.memory().store16(out + 8u, static_cast<std::uint16_t>(local.tm_min));
-        rt_.memory().store16(out + 10u, static_cast<std::uint16_t>(local.tm_sec));
-        rt_.memory().store32(out + 12u, 0u);
-    }
-    finish(ctx, 0u);
-}
 
 // ---------------------------------------------------------------------------
 // sceUtility dialogs: answered at once, or shown by the host when interactive.

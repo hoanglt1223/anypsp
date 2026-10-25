@@ -74,7 +74,7 @@ if(ANYPSP_BUILD_HOST)
     add_library(anypsp_host STATIC
         runtime/host/atrac.cpp runtime/host/devices.cpp runtime/host/font.cpp runtime/host/ge.cpp
         runtime/host/ge_interp.cpp runtime/host/ge_surfaces.cpp runtime/host/ge_worker.cpp runtime/host/io.cpp runtime/host/kernel.cpp runtime/host/kernel_callbacks.cpp runtime/host/kernel_lwmutex.cpp runtime/host/kernel_msgpipe.cpp runtime/host/kernel_objects.cpp runtime/host/kernel_sync.cpp runtime/host/kernel_threads.cpp runtime/host/kernel_tls.cpp runtime/host/kernel_vtimer.cpp runtime/host/modules.cpp
-        runtime/host/mp3.cpp runtime/host/mpeg.cpp runtime/host/net.cpp runtime/host/osk.cpp runtime/host/power.cpp runtime/host/sas.cpp runtime/host/savedata.cpp runtime/host/webfs.cpp)
+        runtime/host/mp3.cpp runtime/host/mpeg.cpp runtime/host/net.cpp runtime/host/osk.cpp runtime/host/power.cpp runtime/host/rtc.cpp runtime/host/sas.cpp runtime/host/savedata.cpp runtime/host/webfs.cpp)
     target_include_directories(anypsp_host PUBLIC runtime/host)
     # minimp3 (CC0), header-only, for sceMp3.
     target_include_directories(anypsp_host PRIVATE runtime/third_party/minimp3)
