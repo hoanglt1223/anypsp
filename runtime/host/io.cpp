@@ -153,9 +153,12 @@ bool Kernel::stat_path(const std::string &psp_path, DirectoryEntry &entry) const
     entry.size = entry.directory ? 0u : std::filesystem::file_size(path, ec);
     entry.name = path.filename().string();
     const auto written = std::filesystem::last_write_time(path, ec);
-    if (!ec)
-        entry.time = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::clock_cast<std::chrono::system_clock>(written).time_since_epoch()).count();
+    if (!ec) {
+        // Through the two clocks' current times: Android's libc++ has no clock_cast.
+        const auto system = std::chrono::system_clock::now() + std::chrono::duration_cast<std::chrono::system_clock::duration>(
+                                                                    written - std::filesystem::file_time_type::clock::now());
+        entry.time = std::chrono::duration_cast<std::chrono::seconds>(system.time_since_epoch()).count();
+    }
     return true;
 }
 
