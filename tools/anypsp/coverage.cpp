@@ -1,30 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// anypsp-coverage: measures what the runtime and the code generator cover, as JSON for the
-// compatibility site (tools/compat-site/generate.py --coverage):
-//  - HLE: every function of data/nids.toml offered to the kernel as an import; the ones it
-//    has no implementation for are the ones it reports as unimplemented.
-//  - VFPU: every VFPU instruction the reference interpreter knows, by mnemonic; lowered when the
-//    code generator translates all sampled encodings of it natively instead of calling the
-//    interpreter (anypsp::codegen::translated_inline; branches count when the generator emits them).
-// GE commands are counted by the site generator from the GE front end's source.
+// anypsp-coverage: the VFPU instructions the code generator translates natively, as JSON for the
+// compatibility site (tools/compat-site/generate.py --coverage): every VFPU instruction the
+// reference interpreter knows, by mnemonic; native when the code generator translates all sampled
+// encodings of it instead of calling the interpreter (anypsp::codegen::translated_inline; branches
+// count when the generator emits them). HLE functions come from anypsp-hle-coverage
+// (hle-coverage.json) and GE commands from the site generator's scan of the GE front end.
 
-#include "kernel.hpp"
-#include "nid_db.hpp"
 
 #include "codegen/emit_cpp.hpp"
 #include "cpu/interp.h"
 #include "psprecomp/decoder.hpp"
-#include "psprecomp/nid_registry.hpp"
-#include "psprecomp/runtime.hpp"
 
 #include <cstdio>
 #include <exception>
-#include <filesystem>
 #include <iostream>
 #include <map>
-#include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -43,45 +34,6 @@ std::string json_string(const std::string &s) {
 struct Count {
     std::size_t done = 0, total = 0;
 };
-
-void hle(std::ostream &out, const std::filesystem::path &nids) {
-    psprecomp::NidRegistry registry;
-    anypsp::loader::load_nid_toml(nids, registry);
-    std::vector<psprecomp::PspImport> imports;
-    std::map<std::string, Count> libraries;
-    std::set<std::string> seen;
-    for (const auto &symbol : registry.all()) {
-        if (!seen.insert(symbol.library + ":" + std::to_string(symbol.nid)).second) continue;
-        imports.push_back({symbol.library, symbol.nid, 0u});
-        ++libraries[symbol.library].total;
-    }
-    auto runtime = std::make_unique<psprecomp::Runtime>();
-    auto kernel = std::make_unique<pspweb::Kernel>(*runtime);
-    kernel->install(imports);
-    std::set<std::string> missing(kernel->unimplemented_imports().begin(), kernel->unimplemented_imports().end());
-    // Names are "Library::name"; count per library.
-    std::map<std::string, std::size_t> missing_per_library;
-    for (const auto &name : missing) ++missing_per_library[name.substr(0, name.find("::"))];
-    // Kernel-mode libraries (*ForKernel) are only imported by firmware modules, never by games.
-    Count all, user;
-    for (auto &[library, count] : libraries) {
-        count.done = count.total - std::min(count.total, missing_per_library[library]);
-        all.done += count.done;
-        all.total += count.total;
-        if (library.find("ForKernel") == std::string::npos) {
-            user.done += count.done;
-            user.total += count.total;
-        }
-    }
-    out << "  \"hle\": {\"implemented\": " << all.done << ", \"total\": " << all.total << ", \"user_implemented\": "
-        << user.done << ", \"user_total\": " << user.total << ", \"libraries\": {";
-    bool first = true;
-    for (const auto &[library, count] : libraries) {
-        out << (first ? "\n" : ",\n") << "    " << json_string(library) << ": [" << count.done << ", " << count.total << "]";
-        first = false;
-    }
-    out << "\n  }},\n";
-}
 
 void vfpu(std::ostream &out) {
     // Primary opcodes of the VFPU and its loads/stores; register fields fixed, the rest varied.
@@ -133,19 +85,12 @@ void vfpu(std::ostream &out) {
 } // namespace
 
 int main(int argc, char **argv) {
+    if (argc > 1) {
+        std::cerr << "usage: anypsp-coverage   (JSON on stdout)\n";
+        return 2;
+    }
     try {
-        std::filesystem::path nids = anypsp::loader::default_nid_database();
-        for (int i = 1; i < argc; ++i) {
-            const std::string a = argv[i];
-            if (a == "--nids" && i + 1 < argc) nids = argv[++i];
-            else {
-                std::cerr << "usage: anypsp-coverage [--nids nids.toml]   (JSON on stdout)\n";
-                return 2;
-            }
-        }
-        // The kernel names unimplemented imports on stderr as it installs them; keep stdout JSON only.
         std::cout << "{\n";
-        hle(std::cout, nids);
         vfpu(std::cout);
         std::cout << "}\n";
         return 0;

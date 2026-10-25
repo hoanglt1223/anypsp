@@ -2,13 +2,15 @@
 """Renders compat/*.toml (schema: compat/schema.md) and coverage numbers into a static progress page and SVG badges.
 
 usage: python tools/compat-site/generate.py [--compat DIR] [--out DIR] [--project NAME]
-                                            [--coverage coverage.json] [--source DIR] [--check]
+                                            [--hle-coverage hle-coverage.json] [--coverage coverage.json]
+                                            [--source DIR] [--check]
 
 Writes <out>/progress.html (also as index.html), <out>/compat.json, <out>/badges/compat.svg (titles
 in-game or better), one badge per stage and per title, and with coverage: badges/hle.svg (HLE
-functions of user-mode libraries, by NID), badges/vfpu.svg (VFPU instructions translated natively)
-and badges/ge.svg (GE commands the GE front end reads). --coverage takes the JSON anypsp-coverage
-prints; GE commands are counted from <source>/runtime/host/ge.cpp. --check only validates.
+functions by NID), badges/vfpu.svg (VFPU instructions translated natively) and badges/ge.svg (GE
+commands the GE front end reads). --hle-coverage takes the hle-coverage.json every host build writes
+(anypsp-hle-coverage), --coverage the JSON anypsp-coverage prints; GE commands are counted from
+<source>/runtime/host/ge.cpp. --check only validates.
 Same format as AnyGBA's generator; Python 3.11+ (tomllib), no other packages.
 """
 
@@ -183,8 +185,8 @@ def coverage_rows(coverage: dict) -> list[tuple[str, int, int, str]]:
     rows = []
     if "hle" in coverage:
         h = coverage["hle"]
-        rows.append(("HLE functions (user-mode libraries, by NID)", h["user_implemented"], h["user_total"],
-                     f"{h['implemented']} of {h['total']} including kernel-mode libraries"))
+        rows.append(("HLE functions (by NID, data/nids.toml)", h["implemented"], h["known"],
+                     "user-mode libraries are what games import; *ForKernel ones only firmware modules"))
     if "vfpu" in coverage:
         v = coverage["vfpu"]
         rows.append(("VFPU instructions translated natively", v["lowered"], v["total"],
@@ -236,8 +238,9 @@ def body(project: str, entries: list[dict], coverage: dict, generated: str) -> s
         if "hle" in coverage:
             lib_rows = "".join(
                 f'<tr><td>{html.escape(name)}</td><td class="num">{d} / {t}</td></tr>'
-                for name, (d, t) in sorted(coverage["hle"]["libraries"].items()) if "ForKernel" not in name)
-            libs = (f"<details><summary>HLE functions per user-mode library</summary><table>"
+                for name, c in sorted(coverage["hle"]["libraries"].items())
+                for d, t in [(c["implemented"], c["known"])])
+            libs = (f"<details><summary>HLE functions per library (libraries with at least one)</summary><table>"
                     f"<thead><tr><th>Library</th><th>Implemented</th></tr></thead><tbody>{lib_rows}</tbody></table></details>")
         cov = (f"<h2>Coverage</h2><table><thead><tr><th>What</th><th>Covered</th><th></th><th>Notes</th></tr></thead>"
                f"<tbody>{''.join(items)}</tbody></table>{libs}")
@@ -292,6 +295,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--compat", type=pathlib.Path, default=root / "compat")
     parser.add_argument("--out", type=pathlib.Path, default=root / "out" / "compat-site")
     parser.add_argument("--project", default="AnyPSP")
+    parser.add_argument("--hle-coverage", type=pathlib.Path, help="hle-coverage.json from a host build (anypsp-hle-coverage)")
     parser.add_argument("--coverage", type=pathlib.Path, help="JSON written by anypsp-coverage")
     parser.add_argument("--source", type=pathlib.Path, default=root, help="AnyPSP source tree (GE command scan)")
     parser.add_argument("--check", action="store_true", help="validate compat/*.toml and the GE scan only")
@@ -301,6 +305,8 @@ def main(argv: list[str]) -> int:
         coverage: dict = {}
         if args.coverage:
             coverage = json.loads(args.coverage.read_text(encoding="utf-8"))
+        if args.hle_coverage:
+            coverage["hle"] = json.loads(args.hle_coverage.read_text(encoding="utf-8"))
         ge_source = args.source / "runtime" / "host" / "ge.cpp"
         if ge_source.exists():
             coverage["ge"] = ge_coverage(ge_source)
@@ -325,7 +331,7 @@ def main(argv: list[str]) -> int:
         (badges / f"stage-{s}.svg").write_bytes(badge(s, str(n), COLORS[s]).encode())
     for e in entries:
         (badges / f"{e['id']}.svg").write_bytes(badge(e["title"], e["stage"], COLORS[e["stage"]]).encode())
-    for key, short, done_key, total_key in (("hle", "HLE NIDs", "user_implemented", "user_total"),
+    for key, short, done_key, total_key in (("hle", "HLE NIDs", "implemented", "known"),
                                             ("vfpu", "VFPU native", "lowered", "total"),
                                             ("ge", "GE commands", "handled", "total")):
         if key in coverage:

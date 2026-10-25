@@ -30,10 +30,10 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build clang
           cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DANYPSP_BUILD_GPU=OFF
-          cmake --build out --target anypsp-coverage
+          cmake --build out --target anypsp-coverage anypsp-hle-coverage
           out/anypsp-coverage > coverage.json
       - name: Site
-        run: python tools/compat-site/generate.py --coverage coverage.json --out _site
+        run: python tools/compat-site/generate.py --coverage coverage.json --hle-coverage out/hle-coverage.json --out _site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

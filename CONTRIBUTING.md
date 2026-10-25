@@ -41,7 +41,8 @@ HLE functions are tested directly in `anypsp_hle_tests`; CPU changes must keep `
 3. Feed missed code back: run with `--feedback feedback.txt` and rebuild with `anypsp build ... --feedback feedback.txt`.
 4. Open a discussion with the **Game bring-up** template (`.github/DISCUSSION_TEMPLATE/game-bring-up.yml`)
    and add or update `compat/<game>.toml` with the stage and the evidence. Regenerate the page with
-   `python tools/compat-site/generate.py --coverage <(out/linux/anypsp-coverage)` to check it.
+   `python tools/compat-site/generate.py --hle-coverage out/linux/hle-coverage.json --coverage <(out/linux/anypsp-coverage)`
+   to check it.
 
 ## Commits
 

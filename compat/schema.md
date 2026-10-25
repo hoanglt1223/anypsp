@@ -42,11 +42,12 @@ have evidence.
 
 ## Coverage
 
-`anypsp-coverage` (built with the project) prints JSON that `generate.py --coverage` turns into badges:
+The badges come from three measurements, rendered by `generate.py --hle-coverage <build>/hle-coverage.json
+--coverage <(anypsp-coverage)`:
 
-- **HLE functions**: every function of `data/nids.toml` is offered to the kernel as an import; the ones it
-  reports as unimplemented are missing. The badge counts user-mode libraries (games never import the
-  `*ForKernel` ones); the page also gives the total with kernel-mode libraries and a per-library table.
+- **HLE functions**: `anypsp-hle-coverage` runs after every host build and writes `hle-coverage.json`: the
+  functions of `data/nids.toml` the kernel implements, in total and per library (the page lists the libraries
+  with at least one). The total includes kernel-mode `*ForKernel` libraries, which games never import.
 - **VFPU instructions**: every VFPU instruction of the reference interpreter, by mnemonic, sampled over its
   encodings; native when the code generator translates all of them itself instead of calling the
   interpreter from generated code (`anypsp::codegen::translated_inline`).

@@ -23,10 +23,9 @@ target_compile_definitions(anypsp_driver_tests PRIVATE ANYPSP_TEST_SOURCE_DIR="$
 add_test(NAME anypsp_driver_tests COMMAND anypsp_driver_tests)
 
 # Coverage numbers for the compatibility site (tools/compat-site/generate.py --coverage).
-if(TARGET anypsp_host)
-    add_executable(anypsp-coverage coverage.cpp ${PROJECT_SOURCE_DIR}/runtime/host/no_generated.cpp
-        ${PROJECT_SOURCE_DIR}/runtime/host/no_modules.cpp ${PROJECT_SOURCE_DIR}/runtime/host/no_dynamic_code.cpp)
-    target_link_libraries(anypsp-coverage PRIVATE anypsp_host anypsp_loader anypsp_codegen)
+if(TARGET anypsp_codegen)
+    add_executable(anypsp-coverage coverage.cpp)
+    target_link_libraries(anypsp-coverage PRIVATE anypsp_codegen)
     set_target_properties(anypsp-coverage PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR})
     if(MSVC)
         target_compile_options(anypsp-coverage PRIVATE /EHsc /permissive- /W3)

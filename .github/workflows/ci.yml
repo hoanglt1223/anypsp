@@ -71,7 +71,8 @@ jobs:
           coverage=out/ci/anypsp-coverage
           [ -f "$coverage" ] || coverage=out/ci/Release/anypsp-coverage.exe
           "$coverage" > out/coverage.json
-          python tools/compat-site/generate.py --coverage out/coverage.json --out out/compat-site
+          python tools/compat-site/generate.py --coverage out/coverage.json --hle-coverage out/ci/hle-coverage.json \
+            --out out/compat-site
 
       # A homebrew demo through the whole pipeline: analysis, translation, game build, package, headless run.
       - name: anypsp build (pspautotests cubevfpu)
