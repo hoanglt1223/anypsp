@@ -1100,7 +1100,7 @@ const char *generated_op_template(std::string_view name) {
         {"viim.s", "viim"}, {"vfim.s", "viim"},
         {"vcrsp.t/vqmul.q", "cross_quat"}, {"vocp", "vocp"}, {"vsgn", "vsgn"}, {"vdet", "vdet"},
         {"vf2in", "vf2i"}, {"vf2iz", "vf2i"}, {"vf2iu", "vf2i"}, {"vf2id", "vf2i"},
-        {"lv", "vquad_partial"}, {"sv", "vquad_partial"},
+        {"lv", "vquad_partial"}, {"sv", "vquad_partial"}, {"vi2f", "vi2f"}, {"vcrs", "vcrs"},
     };
     const auto found = table.find(name);
     return found == table.end() ? nullptr : found->second;

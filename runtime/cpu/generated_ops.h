@@ -554,6 +554,37 @@ ANYPSP_GEN_INLINE bool vf2i(Runtime &rt, Ctx &ctx, u32 pc) {
     return true;
 }
 
+// vi2f: integers to floats, scaled by 2^-imm.
+template <u32 Op>
+ANYPSP_GEN_INLINE bool vi2f(Runtime &rt, Ctx &ctx, u32 pc) {
+    ANYPSP_GEN_PLAIN_OR_INTERPRET(rt, ctx, pc, Op);
+    constexpr u32 n = vec_size(Op);
+    const float mult = 1.0f / static_cast<float>(1UL << ((Op >> 16) & 31u));
+    float s[4], d[4];
+    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    for (u32 i = 0; i < n; ++i) d[i] = static_cast<float>(static_cast<std::int32_t>(bits(s[i]))) * mult;
+    write_vector<Op & 0x7Fu, n>(ctx, d);
+    return true;
+}
+
+// vcrs: half a cross product, S.yzx * T.zxy (lanes past the vector's size read as zero).
+template <u32 Op>
+ANYPSP_GEN_INLINE bool vcrs(Runtime &rt, Ctx &ctx, u32 pc) {
+    ANYPSP_GEN_PLAIN_OR_INTERPRET(rt, ctx, pc, Op);
+    constexpr u32 n = vec_size(Op);
+    float s[4]{}, t[4]{}, sw[4]{}, tw[4]{}, d[4];
+    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    read_vector<(Op >> 16) & 0x7Fu, n>(ctx, t);
+    constexpr u32 s_lane[4] = {1u, 2u, 0u, 3u}, t_lane[4] = {2u, 0u, 1u, 3u};
+    for (u32 i = 0; i < 4u; ++i) {
+        sw[i] = i < n ? (s_lane[i] < n ? s[s_lane[i]] : 0.0f) : s[i];
+        tw[i] = i < n ? (t_lane[i] < n ? t[t_lane[i]] : 0.0f) : t[i];
+        d[i] = vfpu_mul(sw[i], tw[i]);
+    }
+    write_vector<Op & 0x7Fu, n>(ctx, d);
+    return true;
+}
+
 // lvl.q, lvr.q, svl.q, svr.q: the part of a quad on one side of an unaligned address. They take
 // no prefixes; a bad address runs the interpreter, which reports it.
 template <u32 Op>
