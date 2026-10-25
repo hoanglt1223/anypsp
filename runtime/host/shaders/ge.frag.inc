@@ -73,6 +73,9 @@ ivec4 sample_texture(int flags) {
 }
 void main() {
     int flags = int(u_p[1].w);
+    // The GE keeps 16-bit depth, floored per pixel: equal PSP depths must compare equal (UNH 1's
+    // title buttons are drawn GEQUAL over geometry at the same depth), whatever the GPU's precision.
+    gl_FragDepth = floor(gl_FragCoord.z * 65535.0 + 1.0 / 64.0) / 65535.0;
     // Gouraud colour, floored per pixel (the epsilon absorbs float error at the vertices).
     ivec4 c = ivec4(floor(v_color * 255.0 + 1.0 / 64.0));
     if (!flag(flags, 16)) {
