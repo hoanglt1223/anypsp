@@ -22,7 +22,7 @@
 
 #include "interp_ops.h"
 #include "ppsspp_compat.h"
-#include "vfpu_nan.h"
+#include "vfpu_arith.h"
 #include "vfpu_utils.h"
 
 #include <algorithm>
@@ -1416,10 +1416,10 @@ namespace MIPSInt
 		u32 tprefixAdd = VFPU_SWIZZLE(2, 0, 1, 0);
 		ApplyPrefixST(mips, t, VFPURewritePrefix(mips, VFPU_CTRL_TPREFIX, tprefixRemove, tprefixAdd), sz);
 
-		d[0] = s[0] * t[0];
-		d[1] = s[1] * t[1];
-		d[2] = s[2] * t[2];
-		d[3] = s[3] * t[3];
+		d[0] = vfpu_mul(s[0], t[0]);
+		d[1] = vfpu_mul(s[1], t[1]);
+		d[2] = vfpu_mul(s[2], t[2]);
+		d[3] = vfpu_mul(s[3], t[3]);
 		ApplyPrefixD(mips, d, sz);
 		WriteVector(mips, d, sz, vd);
 		PC += 4;

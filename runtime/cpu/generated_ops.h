@@ -15,7 +15,7 @@
 #pragma once
 
 #include "cpu/interp.h"
-#include "cpu/vfpu_nan.h"
+#include "cpu/vfpu_arith.h"
 
 #include "psprecomp/allegrex_context.hpp"
 #include "psprecomp/runtime.hpp"
