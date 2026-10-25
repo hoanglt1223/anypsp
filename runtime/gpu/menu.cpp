@@ -100,10 +100,10 @@ std::string Menu::fmt(std::string_view key, std::initializer_list<std::string_vi
 }
 
 std::vector<Menu::TabInfo> Menu::tabs() const {
-    // No Cheats tab: AnyPSP has no cheats yet.
     return {{Page::Game, "tab.game", Icon::Game},       {Page::Saves, "tab.saves", Icon::Card},
             {Page::Video, "tab.video", Icon::Video},    {Page::Audio, "tab.audio", Icon::Audio},
-            {Page::Controls, "tab.controls", Icon::Controls}, {Page::Settings, "tab.settings", Icon::Settings}};
+            {Page::Controls, "tab.controls", Icon::Controls}, {Page::Cheats, "tab.cheats", Icon::Cheats},
+            {Page::Settings, "tab.settings", Icon::Settings}};
 }
 
 int Menu::tab_index() const {
@@ -264,6 +264,16 @@ void Menu::activate(const Row &row, std::vector<Action> &out) {
     } else if (starts_with(id, "bind.")) {
         capture_ = static_cast<input::Action>(id_number(id));
         page_ = Page::Capture;
+    } else if (starts_with(id, "cheat.") && cheats_ != nullptr) {
+        const auto index = static_cast<std::size_t>(id_number(id));
+        if (index >= cheats_->cheats().size()) return;
+        const cheats::Cheat &c = cheats_->cheats()[index];
+        if (!cheats_->set_enabled(index, !c.enabled)) {
+            say(fmt("cheats.refused", {c.error}), true);
+            return;
+        }
+        say(tr(c.enabled ? "on" : "off") + ": " + c.name);
+        out.push_back(Action::CheatsChanged);
     } else if (id == "controls.reset") {
         map_.reset_bindings();
         say(tr("controls.reset.done"));
@@ -423,6 +433,7 @@ std::string Menu::title() const {
     case Page::Audio: return tr("tab.audio");
     case Page::Controls: return tr("tab.controls");
     case Page::Capture: return tr("controls.rebind") + " " + input::action_name(capture_);
+    case Page::Cheats: return tr("tab.cheats");
     case Page::Settings: return tr("tab.settings");
     }
     return {};
@@ -432,6 +443,7 @@ std::string Menu::hint() const {
     if (rail_) return tr("hint.rail");
     if (page_ == Page::Capture) return tr("hint.capture");
     if (page_ == Page::Video) return tr("hint.video");
+    if (page_ == Page::Cheats) return tr("hint.cheats");
     return tr("hint.page");
 }
 
@@ -537,6 +549,25 @@ std::vector<Row> Menu::rows() const {
         }
         row("controls.reset", RowKind::Action, "", Icon::Reset);
         break;
+    case Page::Cheats: {
+        if (cheats_ == nullptr) row("cheats.none", RowKind::Info, "", Icon::Info);
+        else if (cheats_->cheats().empty()) row("cheats.empty", RowKind::Info, "", Icon::Info);
+        else
+            for (std::size_t i = 0; i < cheats_->cheats().size(); ++i) {
+                const cheats::Cheat &c = cheats_->cheats()[i];
+                Row r;
+                r.id = "cheat." + std::to_string(i);
+                r.kind = RowKind::Check;
+                r.label = c.name;
+                r.value = c.lines.size() == 1 ? tr("cheats.code") : fmt("cheats.codes", {std::to_string(c.lines.size())});
+                r.on = c.enabled;
+                r.enabled = c.error.empty();
+                r.detail = c.error;
+                out.push_back(std::move(r));
+            }
+        row("cheats.import", RowKind::Info, "", Icon::Folder)->detail = fmt("cheats.import.detail", {cheat_file_name_, cheat_folder_});
+        break;
+    }
     case Page::Settings:
         row("settings.language", RowKind::Choice, tr(p.language == "vi" ? "language.vi" : "language.en"), Icon::Language);
         row("settings.theme", RowKind::Choice, tr(p.light_theme ? "theme.light" : "theme.dark"), Icon::Theme);
@@ -601,6 +632,7 @@ std::vector<std::string> Menu::lines() const {
         case RowKind::Slider: value = "< " + value + " >"; break;
         case RowKind::Binding: value = r.value + (r.value2.empty() ? "" : " | " + r.value2); break;
         case RowKind::Header: text = "-- " + text + " --"; break;
+        case RowKind::Check: text = (r.on ? "[x] " : "[ ] ") + text; break;
         default: break;
         }
         out.push_back(std::string(i == cursor_ && !rail_ ? "> " : "  ") + text + (value.empty() ? "" : "  " + value));

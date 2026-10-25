@@ -107,3 +107,12 @@ dialog.done.delete	Delete completed.	Đã xóa xong.
 dialog.failed.load	Unable to load data. ({0})	Không thể tải dữ liệu. ({0})
 dialog.failed.save	Unable to save data. ({0})	Không thể lưu dữ liệu. ({0})
 dialog.failed.delete	Unable to delete data. ({0})	Không thể xóa dữ liệu. ({0})
+tab.cheats	Cheats	Mã gian lận
+cheats.code	1 code	1 mã
+cheats.codes	{0} codes	{0} mã
+cheats.none	No cheat file for this game	Trò chơi này chưa có tệp mã gian lận
+cheats.empty	The cheat file has no cheats for this game	Tệp mã gian lận không có mã nào cho trò chơi này
+cheats.import	Import cheat file	Nhập tệp mã gian lận
+cheats.import.detail	Copy a CWCheat file (PPSSPP's cheats/{0}) into {1}	Chép tệp CWCheat ({0} trong thư mục cheats của PPSSPP) vào {1}
+cheats.refused	Cannot turn on: {0}	Không bật được: {0}
+hint.cheats	Cross on/off   L/R tabs   Circle close	X bật/tắt   L/R chuyển mục   O đóng

@@ -34,6 +34,7 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/display.cpp
     ${ANYPSP_GPU_DIR}/display_loop.cpp
     ${ANYPSP_GPU_DIR}/patches.cpp
+    ${ANYPSP_GPU_DIR}/cheats.cpp
     ${ANYPSP_GPU_DIR}/menu.cpp
     ${ANYPSP_GPU_DIR}/speed.cpp
     ${ANYPSP_GPU_DIR}/menu_host.cpp
@@ -82,6 +83,7 @@ endif()
 add_executable(anypsp_desktop_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/main.cpp ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/desktop_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/display_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/patches_tests.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/cheats_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/menu_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/speed_tests.cpp)
 target_include_directories(anypsp_desktop_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit)

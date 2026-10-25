@@ -159,6 +159,7 @@ struct MenuSession::State {
     int speed_percent{100};
     const display::Settings *display{};
     std::function<void()> display_changed;
+    cheats::CheatFile *cheats{};
     std::optional<std::int64_t> drag_finger;
     float drag_y{}, press_y{};
     bool dragged{};
@@ -322,6 +323,11 @@ void MenuSession::set_display(display::Settings *settings, std::function<void()>
 
 void MenuSession::set_patches(bool *enabled) { s_->menu.set_patches(enabled); }
 
+void MenuSession::set_cheats(cheats::CheatFile *file, std::string folder, std::string file_name) {
+    s_->cheats = file;
+    s_->menu.set_cheats(file, std::move(folder), std::move(file_name));
+}
+
 MenuSession::Result MenuSession::run(std::uint32_t address, std::uint32_t stride, std::uint32_t format) {
     State &s = *s_;
     std::vector<std::uint8_t> rgba;
@@ -360,6 +366,13 @@ MenuSession::Result MenuSession::run(std::uint32_t address, std::uint32_t stride
             case Action::Fullscreen: s.gl.set_fullscreen(s.fullscreen); break;
             case Action::DisplayChanged:
                 if (s.display_changed) s.display_changed();
+                break;
+            case Action::CheatsChanged:
+                try {
+                    if (s.cheats != nullptr) s.cheats->save();
+                } catch (const std::exception &e) {
+                    s.menu.say(e.what(), true);
+                }
                 break;
             case Action::Exit: result = Result::Exit; break;
             case Action::Reset: result = Result::Reset; break;

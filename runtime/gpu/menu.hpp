@@ -2,7 +2,7 @@
 #pragma once
 
 // The in-game menu of the desktop player (docs/user/desktop.md "Menu"): a rail of tabs
-// (Game, Saves, Video, Audio, Controls, Settings) and the current tab's page. The game is
+// (Game, Saves, Video, Audio, Controls, Cheats, Settings) and the current tab's page. The game is
 // paused while it is open. It is driven by the PSP buttons through the input bindings
 // (d-pad, Cross to choose, Circle to go back, L/R for tabs, Select to delete), a few fixed
 // keys (Escape, Tab, Page Up/Down) and pointer clicks on what anyui::MenuView drew. Rows are
@@ -11,6 +11,7 @@
 // Shift+d-pad moves it, and [ ] or the triggers move the before/after divider. No SDL here, so
 // it can be unit tested.
 
+#include "cheats.hpp"
 #include "display.hpp"
 #include "input_map.hpp"
 #include "ui/anyui/menu_view.hpp"
@@ -40,6 +41,7 @@ enum class Action : std::uint8_t {
     Fullscreen,         // the fullscreen setting changed; apply it
     SettingsChanged,    // bindings or [player] settings changed; save the input file
     DisplayChanged,     // a display setting (anypsp-display.ini) or the patches switch changed
+    CheatsChanged,      // a cheat was turned on or off; save the cheat file
 };
 
 // One game save on the memory stick (the Saves tab).
@@ -90,6 +92,13 @@ public:
     void set_display(display::Settings *settings) { display_ = settings; }
     // Whether the per-game patches apply; null when no patch file is loaded.
     void set_patches(bool *enabled) { patches_ = enabled; }
+    // The game's cheats (null: no cheat file) and the folder cheat files are read from, with
+    // the file name this game's file would have there ("ULUS10299.ini").
+    void set_cheats(cheats::CheatFile *file, std::string folder, std::string file_name) {
+        cheats_ = file;
+        cheat_folder_ = std::move(folder);
+        cheat_file_name_ = std::move(file_name);
+    }
     void say(std::string text, bool error = false) {
         message_ = std::move(text);
         message_error_ = error;
@@ -105,7 +114,7 @@ public:
     [[nodiscard]] std::vector<std::string> lines() const;
 
 private:
-    enum class Page : std::uint8_t { Game, Saves, Video, Audio, Controls, Capture, Settings };
+    enum class Page : std::uint8_t { Game, Saves, Video, Audio, Controls, Capture, Cheats, Settings };
     struct TabInfo {
         Page page;
         const char *id;
@@ -135,6 +144,8 @@ private:
     std::string game_title_;
     display::Settings *display_{};
     bool *patches_{};
+    cheats::CheatFile *cheats_{};
+    std::string cheat_folder_, cheat_file_name_;
 
     bool open_{};
     Page page_{Page::Game};

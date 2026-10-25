@@ -283,6 +283,8 @@ TEST_CASE("menu: tabs, settings, rebinding and the input file") {
     press(menu, pad::kLeft);
     CHECK(menu.lines()[1] == "[tabs]");
     press(menu, pad::kDown);
+    CHECK(menu.lines()[0] == "== Cheats ==");
+    press(menu, pad::kDown);
     CHECK(menu.lines()[0] == "== Settings ==");
     press(menu, pad::kRight);
     press(menu, pad::kRight);  // Language
@@ -394,6 +396,71 @@ TEST_CASE("menu: the Video tab edits the display settings and the patches switch
     press(menu, pad::kDown);
     CHECK(changed(press(menu, pad::kCross)));
     CHECK(!patches_on);
+}
+
+// A cheat file as PPSSPP keeps them: two cheats and one AnyPSP refuses.
+const char *const kCheatText = "_S ULUS-10001\n_G Test Quest Portable\n"
+                               "_C1 Infinite health\n_L 0x10123456 0x000003E7\n"
+                               "_C0 Max money\n_L 0x20123458 0x0098967F\n_L 0x20123460 0x0098967F\n"
+                               "_C0 Rumble on hit\n_L 0xA0000000 0x00000000\n";
+
+TEST_CASE("menu: the Cheats tab turns cheats on and off and says where cheat files go") {
+    InputMap map;
+    bool fullscreen = false;
+    Menu menu(map, fullscreen, 2);
+    menu.set_cheats(nullptr, "/data/anypsp/cheats", "ULUS10001.ini");
+    menu.open();
+    menu.click({anyui::HitKind::Tab, 5});
+    CHECK(menu.lines()[0] == "== Cheats ==");
+    auto rows = menu.view().page.rows;
+    CHECK(rows.size() == 2);
+    if (rows.size() != 2) return;
+    CHECK(rows[0].label == "No cheat file for this game");
+    CHECK(rows[1].label == "Import cheat file");
+    CHECK(rows[1].detail == "Copy a CWCheat file (PPSSPP's cheats/ULUS10001.ini) into /data/anypsp/cheats");
+    CHECK(menu.view().hint == "Cross on/off   L/R tabs   Circle close");
+
+    const fs::path dir = scratch("cheats");
+    const fs::path file = dir / "ULUS10001.ini";
+    std::ofstream(file, std::ios::binary) << kCheatText;
+    anypsp::cheats::CheatFile cheats = anypsp::cheats::CheatFile::load(file, "ULUS10001");
+    menu.set_cheats(&cheats, dir.string(), "ULUS10001.ini");
+    menu.click({anyui::HitKind::Tab, 5});
+    rows = menu.view().page.rows;
+    CHECK(rows.size() == 4);
+    if (rows.size() != 4) return;
+    CHECK(menu.lines()[1] == "> [x] Infinite health  1 code");
+    CHECK(menu.lines()[2] == "  [ ] Max money  2 codes");
+    CHECK(rows[2].kind == anyui::RowKind::Check);
+    CHECK(!rows[2].enabled);
+    CHECK(rows[2].detail.find("vibration") != std::string::npos);
+    CHECK(rows[3].kind == anyui::RowKind::Info);
+
+    // Cross turns a cheat off and on; the host saves the file.
+    auto actions = press(menu, pad::kCross);
+    CHECK(actions.size() == 1 && actions[0] == anypsp::menu::Action::CheatsChanged);
+    CHECK(!cheats.cheats()[0].enabled);
+    CHECK(menu.lines()[1] == "> [ ] Infinite health  1 code");
+    CHECK(menu.lines().back() == "! Off: Infinite health");
+    press(menu, pad::kDown);
+    actions = menu.click({anyui::HitKind::Row, 1});
+    CHECK(actions.size() == 1 && actions[0] == anypsp::menu::Action::CheatsChanged);
+    CHECK(cheats.cheats()[1].enabled);
+    cheats.save();
+    const auto saved = anypsp::cheats::CheatFile::load(file, "ULUS10001");
+    CHECK(!saved.cheats()[0].enabled);
+    CHECK(saved.cheats()[1].enabled);
+    // A refused cheat stays off and says why.
+    press(menu, pad::kDown);
+    CHECK(press(menu, pad::kCross).empty());
+    CHECK(!cheats.cheats()[2].enabled);
+    CHECK(menu.lines().back() ==
+          "! Cannot turn on: vibration and post-processing codes (0xA) change no memory and are not supported (line 9: _L "
+          "0xA0000000 0x00000000)");
+    // Vietnamese.
+    map.player().language = "vi";
+    CHECK(menu.lines()[0] == "== M\xC3\xA3 gian l\xE1\xBA\xADn ==");
+    CHECK(menu.lines()[2] == "  [x] Max money  2 m\xC3\xA3");
 }
 
 TEST_CASE("menu: graphics presets set the quality settings and show Custom after a change") {
@@ -594,7 +661,9 @@ TEST_CASE("menu: golden pictures of every tab at 1x and 2x, dark and light") {
     bool patches_on = true;
     menu.set_display(&display);
     menu.set_patches(&patches_on);
-    const std::array<const char *, 6> names = {"game", "saves", "video", "audio", "controls", "settings"};
+    anypsp::cheats::CheatFile cheats = anypsp::cheats::CheatFile::parse(kCheatText, "ULUS10001");
+    menu.set_cheats(&cheats, "/home/player/.local/share/anyport/anypsp/cheats", "ULUS10001.ini");
+    const std::array<const char *, 7> names = {"game", "saves", "video", "audio", "controls", "cheats", "settings"};
     for (const int scale : {1, 2}) {
         const int w = 960 * scale, h = 540 * scale;
         const anyui::Canvas backdrop = scene(w, h);
@@ -634,6 +703,12 @@ TEST_CASE("menu: golden pictures of every tab at 1x and 2x, dark and light") {
                 view.render(out, video, look, 1.f / 60);
                 view.render(out, video, look, 1.f / 60);
                 check_golden("video-end-1x-dark", out);
+                // The Cheats tab without a cheat file.
+                menu.set_cheats(nullptr, "/home/player/.local/share/anyport/anypsp/cheats", "ULUS10001.ini");
+                menu.click({anyui::HitKind::Tab, 5});
+                view.render(out, menu.view(), look, 1.f / 60);
+                check_golden("cheats-none-1x-dark", out);
+                menu.set_cheats(&cheats, "/home/player/.local/share/anyport/anypsp/cheats", "ULUS10001.ini");
             }
         }
     }

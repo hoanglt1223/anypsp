@@ -67,6 +67,9 @@ public:
     void set_display(display::Settings *settings, std::function<void()> changed);
     // Whether the per-game patches apply; null when no patch file is loaded.
     void set_patches(bool *enabled);
+    // The game's cheats (null: no cheat file); the menu saves their switches into the file.
+    // See Menu::set_cheats.
+    void set_cheats(cheats::CheatFile *file, std::string folder, std::string file_name);
 
 private:
     struct State;

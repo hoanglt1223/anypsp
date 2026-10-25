@@ -10,6 +10,7 @@
 #include "display.hpp"
 #include "display_loop.hpp"
 #include "patches.hpp"
+#include "cheats.hpp"
 #include "disc.hpp"
 #include "frame_output.hpp"
 #include "gl_host.hpp"
@@ -68,7 +69,7 @@ const char *const kUsage =
     "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
     "         [--interpolate auto|on|off]\n"
     "         [--refresh auto|hz] [--vrr on|off] [--sync-to-monitor on|off] [--pause-fps 30|60] [--fps-cap off|n]\n"
-    "         [--patches auto|file.ini] [--dialogs auto|show]\n"
+    "         [--patches auto|file.ini] [--dialogs auto|show] [--cheats auto|file.ini|off]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
@@ -95,6 +96,9 @@ const char *const kUsage =
 "--dialogs show draws the PSP's system dialogs (messages, saving and loading) over the game and lets the\n"
 "player answer them (the default in a window; headless, --input answers them and --hashes/--frames-dir\n"
 "capture them); auto answers them at once, as headless runs do by default.\n"
+"--cheats auto (the default in a window; headless runs default to off) applies the CWCheat codes turned on\n"
+"in cheats/<disc ID>.ini (PPSSPP's cheat files, next to the program or in the per-user data folder) after\n"
+"every vblank; --cheats file.ini names a cheat file. The menu's Cheats tab turns them on and off.\n"
     "--input holds the given sceCtrl button mask (hex) from that frame on. --hle-stubs lists imports\n"
     "without HLE that return a fixed value: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
@@ -162,7 +166,7 @@ std::map<std::string, std::uint32_t> read_hle_stubs(const std::string &path) {
 struct Options {
     std::string module, disc = ".", memstick = ".", feedback, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     std::string renderer = "gl", frames_dir, hashes, screenshot, dump, hle_stubs;
-    std::string wav, keymap, write_input, cache, patches, dialogs;
+    std::string wav, keymap, write_input, cache, patches, dialogs, cheats;
     std::map<long, std::uint32_t> input;
     std::vector<std::pair<std::string, std::string>> display; // --smoothing ...: display setting overrides
     long frames = 600, png_every = 1;
@@ -225,6 +229,7 @@ Options parse(int argc, char **argv) {
             if (value != "auto" && value != "show") throw std::invalid_argument("--dialogs takes auto or show");
             o.dialogs = value;
         }
+        else if (flag == "--cheats") o.cheats = value;
         else if (flag == "--refresh") o.display.emplace_back("Refresh", value);
         else if (flag == "--vrr") o.display.emplace_back("VRR", value);
         else if (flag == "--sync-to-monitor") o.display.emplace_back("SyncToMonitor", value);
@@ -404,6 +409,29 @@ int main(int argc, char **argv) {
         anypsp::patches::apply(game_patches, anypsp::patches::When::Load, rt.memory());
         std::uint64_t patch_writes = 0;
         bool patches_on = true;  // the menu's Game patches switch
+        const std::filesystem::path sfo = std::filesystem::path(o.disc) / "PSP_GAME" / "PARAM.SFO";
+        std::string disc_id = anypsp::menu::sfo_string(sfo, "DISC_ID");
+        if (disc_id.empty()) disc_id = anypsp::patches::disc_id(o.disc);
+        std::optional<anypsp::cheats::CheatFile> game_cheats;
+        if (o.cheats.empty()) o.cheats = o.window ? "auto" : "off";
+        if (o.cheats != "off") {
+            std::filesystem::path file = o.cheats;
+            if (o.cheats == "auto") {
+                file = anypsp::cheats::find_file(disc_id, program_dir(), user_dir);
+                if (file.empty()) std::cout << "[anypsp] no cheat file for disc " << (disc_id.empty() ? "(unknown)" : disc_id) << "\n";
+            }
+            if (!file.empty()) {
+                game_cheats = anypsp::cheats::CheatFile::load(file, disc_id);
+                std::size_t on = 0;
+                for (const auto &c : game_cheats->cheats()) on += c.enabled && c.error.empty() ? 1u : 0u;
+                std::cout << "[anypsp] " << game_cheats->cheats().size() << " cheat(s), " << on << " on, from " << file.string() << "\n";
+                for (const auto &w : game_cheats->warnings()) std::cout << "[anypsp] cheats: " << w << "\n";
+                for (const auto &c : game_cheats->cheats())
+                    if (!c.error.empty()) std::cout << "[anypsp] cheat '" << c.name << "' refused: " << c.error << "\n";
+            }
+        }
+        std::uint64_t cheat_writes = 0;
+        std::uint32_t pad_buttons = 0;  // what the game reads, for joker codes
         kernel->boot(module.entry, module.info->gp, o.guest_path);
         std::cout << "[anypsp] " << module.info->name << " at " << psprecomp::hex32(module.base) << "-"
                   << psprecomp::hex32(module.end) << ", " << imports.size() << " imports, " << module.relocations.applied
@@ -433,7 +461,6 @@ int main(int argc, char **argv) {
             controls.emplace(input_map);
             // The menu saves changed bindings and settings to the input file in use, else to a
             // new one in the per-user data folder.
-            const std::filesystem::path sfo = std::filesystem::path(o.disc) / "PSP_GAME" / "PARAM.SFO";
             const std::string disc_title = anypsp::menu::sfo_string(sfo, "TITLE");
             menu = std::make_unique<anypsp::menu::MenuSession>(
                 *gl, *controls, keymap.empty() ? user_dir / anypsp::input::kInputFileName : keymap, o.memstick,
@@ -458,6 +485,8 @@ int main(int argc, char **argv) {
         if (menu) {
             menu->set_display(&window_loop->settings(), [&window_loop] { window_loop->settings_changed(); });
             menu->set_patches(game_patches.empty() ? nullptr : &patches_on);
+            menu->set_cheats(game_cheats ? &*game_cheats : nullptr, (user_dir / "cheats").string(),
+                             (disc_id.empty() ? std::string("<disc ID>") : anypsp::cheats::file_id(disc_id)) + ".ini");
         }
         // The open system dialog over the game: drawn into the window before the frame-rate badge,
         // and into captured frames.
@@ -519,6 +548,7 @@ int main(int argc, char **argv) {
                 if (o.input.empty() && !show_dialogs) {
                     const auto pad = controls->pad();
                     kernel->set_pad(pad.buttons, pad.lx, pad.ly);
+                    pad_buttons = pad.buttons;
                 }
                 if (show_dialogs) {
                     // Mouse clicks and finger taps on the dialog's rows and buttons.
@@ -537,7 +567,10 @@ int main(int argc, char **argv) {
                 }
             }
             if (!show_dialogs) {
-                if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
+                if (const auto press = o.input.find(frame); press != o.input.end()) {
+                    kernel->set_pad(press->second);
+                    pad_buttons = press->second;
+                }
             } else {
                 // The player's buttons answer an open dialog; the game sees none of them meanwhile.
                 std::uint32_t held = 0;
@@ -557,11 +590,13 @@ int main(int argc, char **argv) {
                 if (keys.confirm) kernel->dialog_confirm();
                 else if (keys.back) kernel->dialog_back();
                 kernel->set_pad(keys.game, open ? 128u : lx, open ? 128u : ly);
+                pad_buttons = keys.game;
             }
             running = kernel->frame(50.0);
             ++frame;
             if (!game_patches.empty() && patches_on)
                 patch_writes += anypsp::patches::apply(game_patches, anypsp::patches::When::Vblank, rt.memory());
+            if (game_cheats) cheat_writes += game_cheats->apply(rt.memory(), pad_buttons);
             if (window_loop) {
                 // Faster speeds run several PSP vblanks per shown picture; unlimited shows one
                 // about every 1/60 s and runs vblanks in between as fast as it can.
@@ -625,6 +660,7 @@ int main(int argc, char **argv) {
             std::cout << "[anypsp] " << wav->frames() << " audio frames in " << o.wav << "\n";
         }
         if (!game_patches.empty()) std::cout << "[anypsp] patches wrote " << patch_writes << " value(s) during the run\n";
+        if (game_cheats) std::cout << "[anypsp] cheats changed " << cheat_writes << " value(s) during the run\n";
         if (display.interpolate) {
             const auto &t = kernel->ge().interpolation_totals();
             std::cout << "[anypsp] interpolation: " << t.frames << " game frames, " << t.matched << " of " << t.prims
