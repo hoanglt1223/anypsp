@@ -193,6 +193,7 @@ struct DirectoryEntry {
     std::uint64_t size{};
     bool directory{};
     std::uint32_t lbn{}; // disc files: the sector number games read from st_private[0]
+    std::int64_t time{}; // last written, seconds since 1970 (0: unknown)
 };
 
 struct OpenDirectory {
@@ -411,6 +412,10 @@ private:
     // A function that only returns `result`.
     void hle_value(const char *library, std::uint32_t nid, const char *name, std::uint32_t result);
     void hle_lambda(const char *library, std::uint32_t nid, const char *name, std::function<void(Ctx &)> body);
+    void hle_io(const char *library, std::uint32_t nid, const char *name, void (Kernel::*handler)(Ctx &),
+                std::function<std::uint64_t(const Ctx &, std::uint32_t)> delay);
+    void install_io_timing();
+    void sceIoMkdir(Ctx &ctx);
     void install_rtc();       // rtc.cpp
     std::uint64_t rtc_base_us_{}; // calendar time (since 1970) at guest time 0, set on first use
     void notify_callback(Ctx &ctx, std::int32_t uid, std::int32_t arg);

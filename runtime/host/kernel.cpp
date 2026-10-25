@@ -239,6 +239,21 @@ void Kernel::hle_value(const char *library, std::uint32_t nid, const char *name,
     registered_.insert(std::string(library) + ":" + hex(nid));
 }
 
+// File functions take time on the PSP: the calling thread waits `delay(args, result)` us after
+// the call (PPSSPP's sceIo timings), unless the call already waited or there is no thread.
+void Kernel::hle_io(const char *library, std::uint32_t nid, const char *name, void (Kernel::*handler)(Ctx &),
+                    std::function<std::uint64_t(const Ctx &, std::uint32_t)> delay) {
+    hle(library, nid, name, handler);
+    rt_.register_hle(library, nid, [this, handler, delay = std::move(delay)](psprecomp::Runtime &, Ctx &ctx) {
+        const Ctx args = ctx;
+        const std::int32_t caller = current_uid_;
+        (this->*handler)(ctx);
+        if (current_uid_ != caller || ctx.pc != args.gpr[31] || current() == nullptr || !dispatch_ok() || in_interrupt()) return;
+        const std::uint32_t result = ctx.gpr[2];
+        if (const std::uint64_t us = delay(args, result); us != 0u) delay_result(ctx, result, us);
+    });
+}
+
 void Kernel::hle_lambda(const char *library, std::uint32_t nid, const char *name, std::function<void(Ctx &)> body) {
     rt_.register_hle(library, nid, [body = std::move(body)](psprecomp::Runtime &, Ctx &ctx) { body(ctx); });
     rt_.nids().add(library, nid, name);
@@ -440,6 +455,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle("Kernel_Library", 0xA089ECA4u, "sceKernelMemset", &Kernel::sceKernelMemset);
 
     install_devices();
+    install_io_timing();
     install_callbacks();
     install_sync();
     install_power();

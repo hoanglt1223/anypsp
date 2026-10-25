@@ -5,6 +5,8 @@
 #include "kernel.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <ctime>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -150,16 +152,40 @@ bool Kernel::stat_path(const std::string &psp_path, DirectoryEntry &entry) const
     entry.directory = std::filesystem::is_directory(path, ec);
     entry.size = entry.directory ? 0u : std::filesystem::file_size(path, ec);
     entry.name = path.filename().string();
+    const auto written = std::filesystem::last_write_time(path, ec);
+    if (!ec)
+        entry.time = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::clock_cast<std::chrono::system_clock>(written).time_since_epoch()).count();
     return true;
 }
 
+// SceIoStat: mode, attr, size (64-bit), ctime, atime, mtime (ScePspDateTime each), then six
+// private words. Memory stick files leave the private words alone; disc files get their sector.
 void Kernel::write_stat(std::uint32_t address, const DirectoryEntry &entry) {
-    for (std::uint32_t i = 0; i < 0x58u; i += 4u) rt_.memory().store32(address + i, 0u);
-    rt_.memory().store32(address + 0u, entry.directory ? 0x11FFu : 0x21FFu);
-    rt_.memory().store32(address + 4u, entry.directory ? 0x10u : 0x20u);
-    rt_.memory().store32(address + 8u, static_cast<std::uint32_t>(entry.size));
-    rt_.memory().store32(address + 12u, static_cast<std::uint32_t>(entry.size >> 32u));
-    rt_.memory().store32(address + 0x40u, entry.lbn); // st_private[0]
+    auto &m = rt_.memory();
+    for (std::uint32_t i = 0; i < 0x40u; i += 4u) m.store32(address + i, 0u);
+    m.store32(address + 0u, entry.directory ? 0x11FFu : 0x21FFu);
+    m.store32(address + 4u, entry.directory ? 0x10u : 0x20u);
+    m.store32(address + 8u, static_cast<std::uint32_t>(entry.size));
+    m.store32(address + 12u, static_cast<std::uint32_t>(entry.size >> 32u));
+    if (entry.time != 0) {
+        const auto when = static_cast<std::time_t>(entry.time);
+        std::tm tm{};
+#if defined(_WIN32)
+        gmtime_s(&tm, &when);
+#else
+        gmtime_r(&when, &tm);
+#endif
+        for (std::uint32_t at = 0x10u; at < 0x40u; at += 0x10u) {
+            m.store16(address + at, static_cast<std::uint16_t>(tm.tm_year + 1900));
+            m.store16(address + at + 2u, static_cast<std::uint16_t>(tm.tm_mon + 1));
+            m.store16(address + at + 4u, static_cast<std::uint16_t>(tm.tm_mday));
+            m.store16(address + at + 6u, static_cast<std::uint16_t>(tm.tm_hour));
+            m.store16(address + at + 8u, static_cast<std::uint16_t>(tm.tm_min));
+            m.store16(address + at + 10u, static_cast<std::uint16_t>(tm.tm_sec));
+        }
+    }
+    if (entry.lbn != 0u) m.store32(address + 0x40u, entry.lbn); // st_private[0]
 }
 
 void Kernel::sceIoOpen(Ctx &ctx) {
@@ -188,6 +214,11 @@ void Kernel::sceIoOpen(Ctx &ctx) {
     const std::int32_t fd = allocate_fd();
     if (fd < 0) {
         finish(ctx, kErrorTooManyFiles);
+        return;
+    }
+    std::error_code is_dir;
+    if (std::filesystem::is_directory(host_path(psp_path), is_dir)) {
+        finish(ctx, kErrorFileNotFound); // a folder does not open as a file
         return;
     }
     std::FILE *file = std::fopen(host_path(psp_path).string().c_str(), fopen_mode(ctx.gpr[5]));
@@ -359,6 +390,9 @@ void Kernel::sceIoLseek32(Ctx &ctx) {
 void Kernel::sceIoGetstat(Ctx &ctx) {
     DirectoryEntry entry;
     const std::string psp_path = resolve_lbn_path(read_string(ctx.gpr[4]));
+    // A volume root has no status.
+    if (const auto colon = psp_path.find(':'); colon != std::string::npos && psp_path.find_first_not_of('/', colon + 1u) == std::string::npos)
+        return finish(ctx, 0x80010016u);
     if (!stat_path(psp_path, entry)) {
         finish(ctx, kErrorFileNotFound);
         return;
@@ -369,8 +403,10 @@ void Kernel::sceIoGetstat(Ctx &ctx) {
 }
 
 void Kernel::sceIoRename(Ctx &ctx) {
-    const std::string from = read_string(ctx.gpr[4]);
+    std::string from = read_string(ctx.gpr[4]);
     std::string to = read_string(ctx.gpr[5]);
+    // A path without a device is relative to the current directory.
+    if (from.find(':') == std::string::npos) from = cwd_ + (cwd_.empty() || cwd_.back() == '/' ? "" : "/") + from;
     if (from.find_first_of("*?") != std::string::npos || to.find_first_of("*?") != std::string::npos) {
         finish(ctx, kErrorInvalidArgument);
         return;
@@ -392,6 +428,14 @@ void Kernel::sceIoRename(Ctx &ctx) {
         finish(ctx, kErrorFileNotFound);
         return;
     }
+    // The PSP reports a destination in a missing folder like an existing one; otherwise only the
+    // destination's name counts, and the file stays in its folder.
+    std::error_code missing;
+    if (!std::filesystem::is_directory(host_path(to).parent_path(), missing)) {
+        finish(ctx, kErrorFileExists);
+        return;
+    }
+    to = from.substr(0, from.find_last_of("/:") + 1u) + to.substr(to.find_last_of("/:") + 1u);
     if (stat_path(to, entry)) {
         finish(ctx, kErrorFileExists);
         return;
@@ -438,8 +482,53 @@ void Kernel::sceIoRmdir(Ctx &ctx) {
 }
 
 void Kernel::sceIoChdir(Ctx &ctx) {
-    cwd_ = read_string(ctx.gpr[4]);
+    const std::string path = read_string(ctx.gpr[4]);
+    DirectoryEntry entry;
+    const bool root = path.find(':') != std::string::npos && path.find_first_not_of('/', path.find(':') + 1u) == std::string::npos;
+    if (!root && (!stat_path(path, entry) || !entry.directory)) return finish(ctx, kErrorFileNotFound);
+    cwd_ = path;
     finish(ctx, 0u);
+}
+
+void Kernel::sceIoMkdir(Ctx &ctx) {
+    const std::string path = read_string(ctx.gpr[4]);
+    DirectoryEntry entry;
+    if (std::string relative; disc_relative(path, relative)) return finish(ctx, kErrorReadOnly);
+    if (stat_path(path, entry)) return finish(ctx, kErrorFileExists);
+    const auto host = host_path(path);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(host.parent_path(), ec)) return finish(ctx, kErrorFileNotFound);
+    std::filesystem::create_directory(host, ec);
+    finish(ctx, ec ? kErrorIo : 0u);
+}
+
+// Waits after the file calls, after PPSSPP's sceIo timings: opening takes about 10 ms on the
+// memory stick (4 ms on a disc, 6 ms to find nothing there), reading and writing about 1 us per
+// 100 bytes with 100 us at least, finding a file's status 1 ms.
+void Kernel::install_io_timing() {
+    const char *io = "IoFileMgrForUser";
+    const auto disc = [this](std::uint32_t name) {
+        std::string relative;
+        return disc_relative(read_string(name), relative);
+    };
+    hle_io(io, 0x109F50BCu, "sceIoOpen", &Kernel::sceIoOpen, [disc](const Ctx &args, std::uint32_t result) -> std::uint64_t {
+        if (result == kErrorTooManyFiles) return 1000u;
+        if (result == kErrorFileNotFound) return disc(args.gpr[4]) ? 6000u : 10000u;
+        return disc(args.gpr[4]) ? 4000u : 10000u;
+    });
+    hle_io(io, 0x810C4BC3u, "sceIoClose", &Kernel::sceIoClose, [](const Ctx &, std::uint32_t) -> std::uint64_t { return 100u; });
+    const auto transfer = [](const Ctx &args, std::uint32_t result) -> std::uint64_t {
+        if (static_cast<std::int32_t>(result) < 0 || args.gpr[4] <= 2u) return 0u;
+        return std::max<std::uint64_t>(args.gpr[6] / 100u, 100u);
+    };
+    hle_io(io, 0x6A638D83u, "sceIoRead", &Kernel::sceIoRead, transfer);
+    hle_io(io, 0x42EC03ACu, "sceIoWrite", &Kernel::sceIoWrite, transfer);
+    hle_io(io, 0xACE946E8u, "sceIoGetstat", &Kernel::sceIoGetstat, [](const Ctx &, std::uint32_t) -> std::uint64_t { return 1000u; });
+    hle_io(io, 0x06A70004u, "sceIoMkdir", &Kernel::sceIoMkdir, [](const Ctx &, std::uint32_t) -> std::uint64_t { return 1000u; });
+    hle_io(io, 0x1117C65Fu, "sceIoRmdir", &Kernel::sceIoRmdir, [](const Ctx &, std::uint32_t) -> std::uint64_t { return 1000u; });
+    hle_io(io, 0xF27A9C51u, "sceIoRemove", &Kernel::sceIoRemove, [](const Ctx &, std::uint32_t) -> std::uint64_t { return 100u; });
+    hle_io(io, 0x779103A0u, "sceIoRename", &Kernel::sceIoRename,
+           [](const Ctx &, std::uint32_t result) -> std::uint64_t { return result == kErrorCrossDevice ? 0u : 1000u; });
 }
 
 void Kernel::sceIoDopen(Ctx &ctx) {

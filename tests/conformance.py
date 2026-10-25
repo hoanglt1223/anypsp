@@ -20,6 +20,7 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TESTS = ROOT / "tests" / "corpus" / "pspautotests" / "tests"
+GUEST_PATH = "ms0:/PSP/GAME/__autotest/EBOOT.PBP"
 
 
 def lines(text):
@@ -42,8 +43,13 @@ def run_one(runner, program, frames, timeout, extra=()):
     expected_path = program.with_suffix(".expected")
     with tempfile.TemporaryDirectory() as work:
         output = pathlib.Path(work) / "out.txt"
+        # The work folder is the memory stick, and the program runs from where PPSSPP's test
+        # runner puts it, which the tests print and resolve relative paths against.
+        (pathlib.Path(work) / "PSP" / "GAME" / "__autotest").mkdir(parents=True)
+        (pathlib.Path(work) / "PSP" / "SAVEDATA").mkdir()
         try:
-            result = subprocess.run([str(runner), str(program), "--frames", str(frames), "--output", str(output)] + list(extra),
+            result = subprocess.run([str(runner), str(program), "--frames", str(frames), "--output", str(output),
+                                     "--guest-path", GUEST_PATH] + list(extra),
                                     capture_output=True, text=True, cwd=work, timeout=timeout)
             log = result.stdout + result.stderr
         except subprocess.TimeoutExpired:

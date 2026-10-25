@@ -125,7 +125,6 @@ void Kernel::install_devices() {
     hle(suspend, 0x090CCB3Fu, "sceKernelPowerTick", &Kernel::return_zero);
     // Memory stick callbacks and folders need no work: the memory stick is a host folder.
     hle("IoFileMgrForUser", 0x54F5FB11u, "sceIoDevctl", &Kernel::sceIoDevctl);
-    hle("IoFileMgrForUser", 0x06A70004u, "sceIoMkdir", &Kernel::return_zero);
     hle("IoFileMgrForUser", 0x779103A0u, "sceIoRename", &Kernel::sceIoRename);
     hle("IoFileMgrForUser", 0xF27A9C51u, "sceIoRemove", &Kernel::sceIoRemove);
     hle("IoFileMgrForUser", 0x1117C65Fu, "sceIoRmdir", &Kernel::sceIoRmdir);
