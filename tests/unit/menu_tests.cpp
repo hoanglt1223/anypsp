@@ -22,7 +22,9 @@
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_surface.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -96,6 +98,25 @@ void write_sfo(const fs::path &path, const std::vector<std::pair<std::string, st
     out += keys + data;
     fs::create_directories(path.parent_path());
     std::ofstream(path, std::ios::binary) << out;
+}
+
+bool near(float a, float b) { return std::abs(a - b) < 0.011f; }
+
+anyui::Canvas scene(int w, int h);
+
+// The menu's frame with the Video preview's pictures made as MenuSession makes them, from a
+// made-up game picture at 1x.
+anyui::Frame with_preview(const Menu &menu, const InputMap &map, int w, int h) {
+    static const anyui::Canvas game = scene(480, 272);
+    static anypsp::menu::PreviewPictures pictures;
+    static std::uint64_t version = 0;
+    anyui::Frame f = menu.view();
+    if (f.page.preview.shown) {
+        pictures.make(game.data(), 480, 272, w, h, map.player().sharp);
+        pictures.attach(f.page.preview);
+        f.page.preview.version = ++version;
+    }
+    return f;
 }
 
 // A made-up game scene for the backdrop.
@@ -210,10 +231,13 @@ TEST_CASE("menu: tabs, settings, rebinding and the input file") {
     CHECK(menu.lines()[0] == "== Saves ==");
     CHECK(menu.lines()[1] == "  No saves for this game yet");
     press(menu, pad::kR);  // Video
-    CHECK(menu.lines()[1] == "> Internal resolution  < 2x (960x544) >");
+    CHECK(menu.lines()[1] == "> Graphics preset  < Medium >");
+    press(menu, pad::kDown);
+    CHECK(menu.lines()[2] == "> Internal resolution  < 2x (960x544) >");
     press(menu, pad::kRight);
     CHECK(map.scale() == 3);
     CHECK(menu.lines().back() == "! Applies from the next start");
+    CHECK(menu.lines()[1] == "  Graphics preset  < High >");  // without display settings, scale and scaling decide
     press(menu, pad::kDown);
     const auto fs_actions = press(menu, pad::kCross);
     CHECK(fullscreen);
@@ -330,16 +354,17 @@ TEST_CASE("menu: the Video tab edits the display settings and the patches switch
     menu.set_display(&display);
     menu.set_patches(&patches_on);
     const auto lines = menu.lines();
-    CHECK(lines.size() == 12);
-    if (lines.size() != 12) return;
-    CHECK(lines[4] == "  Smoothing (30 fps games)  Off");
-    CHECK(lines[5] == "  Frame interpolation  Off");
-    CHECK(lines[6] == "  Refresh  < Auto (match monitor) >");
-    CHECK(lines[11] == "  Game patches  On");
+    CHECK(lines.size() == 13);
+    if (lines.size() != 13) return;
+    CHECK(lines[1] == "> Graphics preset  < Medium >");
+    CHECK(lines[5] == "  Smoothing (30 fps games)  Off");
+    CHECK(lines[6] == "  Frame interpolation  Off");
+    CHECK(lines[7] == "  Refresh  < Auto (match monitor) >");
+    CHECK(lines[12] == "  Game patches  On");
     const auto changed = [](const std::vector<anypsp::menu::Action> &a) {
         return a.size() == 1 && a[0] == anypsp::menu::Action::DisplayChanged;
     };
-    for (int i = 0; i < 3; ++i) press(menu, pad::kDown);
+    for (int i = 0; i < 4; ++i) press(menu, pad::kDown);
     CHECK(changed(press(menu, pad::kCross)));
     CHECK(display.smoothing);
     press(menu, pad::kDown);
@@ -363,10 +388,189 @@ TEST_CASE("menu: the Video tab edits the display settings and the patches switch
     press(menu, pad::kDown);
     press(menu, pad::kRight);
     CHECK(display.fps_cap == 30);
-    CHECK(menu.lines()[10] == "> FPS cap  < 30 >");
+    CHECK(menu.lines()[11] == "> FPS cap  < 30 >");
     press(menu, pad::kDown);
     CHECK(changed(press(menu, pad::kCross)));
     CHECK(!patches_on);
+}
+
+TEST_CASE("menu: graphics presets set the quality settings and show Custom after a change") {
+    using anypsp::menu::kCustom;
+    using anypsp::menu::kPresets;
+    using anypsp::menu::preset_of;
+    InputMap map;
+    bool fullscreen = false;
+    anypsp::display::Settings display;
+    Menu menu(map, fullscreen, 2);
+    menu.set_display(&display);
+    menu.open();
+    press(menu, pad::kR);
+    press(menu, pad::kR);  // Video, on the preset row
+    CHECK(menu.lines()[1] == "> Graphics preset  < Medium >");
+    CHECK(preset_of(map, &display) == 2);
+
+    // Right walks up the ladder and sets every covered value; refresh and the others stay.
+    display.refresh = 144;
+    const auto actions = press(menu, pad::kRight);
+    CHECK((actions == std::vector<anypsp::menu::Action>{anypsp::menu::Action::SettingsChanged, anypsp::menu::Action::DisplayChanged}));
+    CHECK(menu.lines()[1] == "> Graphics preset  < High >");
+    CHECK(map.scale() == 3);
+    CHECK(!map.player().sharp);
+    CHECK(display.smoothing);
+    CHECK(!display.interpolate);
+    CHECK(display.refresh == 144);
+    CHECK(menu.lines().back() == "! Applies from the next start");
+    press(menu, pad::kRight);
+    CHECK(menu.lines()[1] == "> Graphics preset  < Very high >");
+    CHECK(display.interpolate);
+    CHECK(!display.interpolate_auto);
+    press(menu, pad::kRight);
+    CHECK(map.scale() == 4);
+    CHECK(menu.lines()[1] == "> Graphics preset  < Ultra >");
+    press(menu, pad::kRight);  // wraps to the cheapest
+    CHECK(menu.lines()[1] == "> Graphics preset  < Very low >");
+    CHECK(map.scale() == 1);
+    CHECK(map.player().sharp);
+    CHECK(!display.smoothing);
+    CHECK(!display.interpolate);
+    for (int i = 0; i < 6; ++i) {
+        CHECK(preset_of(map, &display) == (i + 0) % 6);
+        press(menu, pad::kRight);
+    }
+
+    // A manual change of a covered row shows Custom; changing it back shows the preset again.
+    CHECK(menu.lines()[1] == "> Graphics preset  < Very low >");
+    press(menu, pad::kDown);
+    press(menu, pad::kDown);
+    press(menu, pad::kDown);  // Scaling
+    press(menu, pad::kRight);
+    CHECK(!map.player().sharp);
+    CHECK(menu.lines()[1] == "  Graphics preset  < Low >");  // sharp off at 1x is Low
+    press(menu, pad::kDown);   // Smoothing
+    press(menu, pad::kCross);
+    CHECK(menu.lines()[1] == "  Graphics preset  < Custom >");
+    press(menu, pad::kCross);
+    CHECK(menu.lines()[1] == "  Graphics preset  < Low >");
+    CHECK(menu.view().page.preview.title == "Smoothing (30 fps games): Off");
+
+    // From Custom, Right starts at Very low and Left at Ultra.
+    display.vrr = true;  // not covered
+    display.smoothing = true;
+    CHECK(preset_of(map, &display) == kCustom);
+    press(menu, pad::kUp);
+    press(menu, pad::kUp);
+    press(menu, pad::kUp);
+    press(menu, pad::kUp);
+    press(menu, pad::kLeft);
+    CHECK(preset_of(map, &display) == 5);
+    CHECK(map.scale() == kPresets[5].scale);
+    CHECK(display.vrr);
+
+    // Interpolate = auto counts as what it resolved to, and is kept when it already matches.
+    anypsp::display::Settings autod;
+    autod.interpolate_auto = true;
+    autod.interpolate = true;  // resolved on for this game
+    map.set_scale(3);
+    map.player().sharp = false;
+    autod.smoothing = true;
+    CHECK(preset_of(map, &autod) == 4);
+    anypsp::menu::apply_preset(4, map, &autod);
+    CHECK(autod.interpolate_auto);
+    anypsp::menu::apply_preset(3, map, &autod);
+    CHECK(!autod.interpolate);
+    CHECK(!autod.interpolate_auto);
+}
+
+TEST_CASE("menu: the Video preview's keys, descriptions and pointer") {
+    InputMap map;
+    bool fullscreen = false;
+    anypsp::display::Settings display;
+    bool patches_on = true;
+    Menu menu(map, fullscreen, 1);
+    menu.set_display(&display);
+    menu.set_patches(&patches_on);
+    menu.open();
+    press(menu, pad::kR);
+    press(menu, pad::kR);  // Video
+    anyui::Frame f = menu.view();
+    CHECK(f.page.preview.shown);
+    CHECK(f.hint == "Cross choose   Left/Right change   Select loupe   [ ] or LT/RT divider   L/R tabs   Circle close");
+    CHECK(f.page.preview.title == "Graphics preset: Medium");
+    anyui::PreviewState &st = menu.preview_state();
+    key(menu, SDL_SCANCODE_RIGHTBRACKET);
+    CHECK(near(st.split, 0.6f));
+    MenuInput in;
+    in.buttons = {anypsp::input::kLeftTrigger};
+    menu.update(in);
+    menu.update(in);
+    CHECK(near(st.split, 0.4f));
+    press(menu, pad::kSelect);
+    CHECK(st.loupe);
+    MenuInput shifted;
+    menu.update({});
+    shifted.pad = pad::kDown;
+    shifted.shift = true;
+    menu.update(shifted);
+    CHECK(near(st.loupe_y, 0.55f));
+    CHECK(menu.lines()[1].starts_with("> Graphics preset"));  // the cursor stayed
+    in = {};
+    in.stick_x = -1;
+    menu.update(in);
+    CHECK(st.loupe_x < 0.5f);
+    press(menu, pad::kSelect);
+    CHECK(!st.loupe);
+
+    // Every Video row describes itself, in both languages.
+    for (const char *language : {"en", "vi"}) {
+        map.player().language = language;
+        menu.click({anyui::HitKind::Tab, 2});
+        std::vector<std::string> seen;
+        const auto rows = menu.view().page.rows;
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            menu.click({anyui::HitKind::Row, static_cast<int>(i)});
+            const std::string d = menu.view().page.preview.description;
+            CHECK(!d.empty());
+            CHECK(!d.ends_with(".desc"));
+            CHECK(std::find(seen.begin(), seen.end(), d) == seen.end());
+            seen.push_back(d);
+        }
+        CHECK(seen.size() == 12);
+    }
+    map.player().language = "en";
+
+    // The view: a mouse drag moves the divider, hovering shows the loupe.
+    anyui::ViewOptions look;
+    look.reduce_motion = true;
+    anyui::MenuView view(anypsp::menu::regular_font(), anypsp::menu::bold_font());
+    const anyui::Canvas backdrop = scene(960, 540);
+    view.set_background(backdrop.data(), 960, 540, look);
+    view.open();
+    anyui::Canvas out;
+    view.render(out, with_preview(menu, map, 960, 540), look, 1.f / 60);
+    const anyui::Rect pic = view.rect_of({anyui::HitKind::Preview, -1});
+    CHECK(pic.w > 100);
+    CHECK(std::abs(pic.w / pic.h - 480.f / 272.f) < 0.03f);
+    using Phase = anyui::MenuView::PointerPhase;
+    CHECK(view.preview_pointer(st, Phase::Down, pic.x + pic.w * 0.75f, pic.y + 5, false));
+    CHECK(near(st.split, 0.75f));
+    CHECK(view.preview_pointer(st, Phase::Up, pic.x + pic.w * 0.75f, pic.y + 5, false));
+    CHECK(!view.preview_pointer(st, Phase::Move, pic.x + 10, pic.y + 10, false));
+    CHECK(st.pointer);
+    view.preview_pointer(st, Phase::Move, pic.x + pic.w * 0.73f, pic.y + pic.h * 0.62f, false);
+    view.render(out, with_preview(menu, map, 960, 540), look, 1.f / 60);
+    check_golden("video-loupe-1x-dark", out);
+    view.preview_pointer(st, Phase::Move, 2, 2, false);
+    CHECK(!st.pointer);
+
+    // A preview picture is the game picture at the size it takes in the window.
+    anypsp::menu::PreviewPictures pictures;
+    const anyui::Canvas game = scene(480, 272);
+    pictures.make(game.data(), 480, 272, 1920, 1200, true);
+    CHECK(pictures.width == 1920);
+    CHECK(pictures.height == 1088);
+    CHECK(pictures.before == pictures.after);  // sharp: both nearest
+    pictures.make(game.data(), 480, 272, 1920, 1200, false);
+    CHECK(pictures.before != pictures.after);
 }
 
 TEST_CASE("menu: golden pictures of every tab at 1x and 2x, dark and light") {
@@ -403,7 +607,7 @@ TEST_CASE("menu: golden pictures of every tab at 1x and 2x, dark and light") {
             anyui::Canvas out;
             for (std::size_t tab = 0; tab < names.size(); ++tab) {
                 menu.click({anyui::HitKind::Tab, static_cast<int>(tab)});
-                const anyui::Frame frame = menu.view();
+                const anyui::Frame frame = with_preview(menu, map, w, h);
                 CHECK(frame.tab == static_cast<int>(tab));
                 view.render(out, frame, look, 1.f / 60);
                 check_golden(std::string(names[tab]) + "-" + std::to_string(scale) + "x-" + (dark ? "dark" : "light"), out);
@@ -422,10 +626,11 @@ TEST_CASE("menu: golden pictures of every tab at 1x and 2x, dark and light") {
                 CHECK(menu.lines()[0] == "== Audio ==");
                 // The display settings at the end of the Video tab.
                 menu.click({anyui::HitKind::Tab, 2});
-                view.render(out, menu.view(), look, 1.f / 60);
+                const anyui::Frame video = with_preview(menu, map, w, h);
+                view.render(out, video, look, 1.f / 60);
                 view.wheel(100);
-                view.render(out, menu.view(), look, 1.f / 60);
-                view.render(out, menu.view(), look, 1.f / 60);
+                view.render(out, video, look, 1.f / 60);
+                view.render(out, video, look, 1.f / 60);
                 check_golden("video-end-1x-dark", out);
             }
         }

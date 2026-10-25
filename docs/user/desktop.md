@@ -55,10 +55,12 @@ The tabs:
   second Cross. Game saves are written when the game saves, so nothing is lost.
 - **Saves**: the game's saves on the memory stick (`PSP/SAVEDATA/<disc ID>*`), newest first, with their
   icons, titles and dates. AnyPSP has no save states yet, so there are no state slots.
-- **Video**: *Internal resolution* (1x-4x, from the next start), *Fullscreen*, *Scaling* (smooth or
+- **Video**: *Graphics preset* (see [Graphics presets](#graphics-presets)), *Internal resolution* (1x-4x, from the next start), *Fullscreen*, *Scaling* (smooth or
   sharp), then the [display settings](#display-settings) *Smoothing*, *Frame interpolation* (turning it on applies from the next start), *Refresh*, *Variable refresh*,
   *Sync game to monitor*, *Menu FPS* and *FPS cap*, saved to `anypsp-display.ini` like the hotkeys, and
   *Game patches*, which turns the loaded [patch file](#game-patches) off and on for this run.
+  Beside the rows a live preview shows the paused game and, under it, what the focused setting does
+  (see [Video preview](#video-preview)).
 - **Audio**: *Volume* (0-100%) and *Mute*; `--wav` recordings are not affected.
 - **Controls**: a picture of the PSP with the selected button lit and every binding, keyboard and
   gamepad. Choose one and press the new key or gamepad button; one that belonged to another action
@@ -68,6 +70,47 @@ The tabs:
   second).
 
 Changes are saved at once to the input file in use (or `anypsp-input.ini` in the per-user data folder).
+
+### Video preview
+
+The Video tab's preview is the paused game picture split by a vertical divider: on the left (*Before*) the
+picture enlarged nearest-neighbour, on the right (*After*) as *Scaling* shows it in the window. Both are
+made at the size the game takes in the window and shrunk into the panel, so the loupe shows real pixels.
+The picture is the one the game drew at the internal resolution in use; a different internal resolution,
+smoothing, frame interpolation and the timing settings only show while the game runs (their descriptions
+say so).
+
+- **Divider**: drag it with the mouse (pressing anywhere on the picture moves it there) or a finger started
+  on it; `[` and `]` or the gamepad's left and right triggers move it a tenth at a time.
+- **Loupe**: a 4x circle that follows the mouse over the picture, or a finger held on the picture (it sits
+  above the finger). Select (Backspace; gamepad Back) turns it on and off for the keyboard and gamepad;
+  then the right stick or Shift with the d-pad moves it.
+
+### Graphics presets
+
+The first Video row, *Graphics preset*, sets the quality settings at once: Left/Right step through Very
+low, Low, Medium, High, Very high and Ultra (wrapping around). The row shows the preset whose values are
+all in effect, or *Custom* once one of them is changed by hand; changing it back shows the preset again.
+Nothing extra is saved: the preset is worked out from `Scale` and `Filter` in the input file and
+`Smoothing` and `Interpolate` in `anypsp-display.ini`.
+
+| Preset | Internal resolution | Scaling | Smoothing | Frame interpolation |
+|---|---|---|---|---|
+| Very low | 1x | sharp | off | off |
+| Low | 1x | smooth | off | off |
+| Medium (the defaults) | 2x | smooth | off | off |
+| High | 3x | smooth | on | off |
+| Very high | 3x | smooth | on | on |
+| Ultra | 4x | smooth | on | on |
+
+- Internal resolution and turning frame interpolation on apply from the next start, as on their own rows.
+- `Interpolate = auto` counts as what it decided for this game (on for the games it lists, else off). A
+  preset leaves `auto` alone when that already matches, and otherwise writes an explicit `on` or `off`.
+- Very high stays at 3x so that it differs from Ultra; smoothing stays on with interpolation, which wins
+  when both are on (smoothing still applies while interpolation is not active in this run, for example
+  until the next start).
+- Not part of a preset: fullscreen, refresh, variable refresh, sync to monitor, Menu FPS, FPS cap and game
+  patches.
 
 ## Speed
 

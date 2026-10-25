@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // anyui: the in-game menu toolkit shared by AnyGBA and AnyPSP (identical copies in both
 // repositories; change both). Software rendering into 8-bit RGBA pictures: anti-aliased
-// rounded rectangles, circles, lines and filled outlines, image blits and a box blur.
+// rounded rectangles, circles, lines and filled outlines, image blits, resizing and a box blur.
 #pragma once
 
 #include <algorithm>
@@ -442,6 +442,75 @@ inline void frosted(Canvas& c, int radius, int down, Color tint, float amount) {
             }
             l[x] = pack(out[0] + (tint.r - out[0]) * amount, out[1] + (tint.g - out[1]) * amount,
                         out[2] + (tint.b - out[2]) * amount);
+        }
+    }
+}
+
+enum class Resample : std::uint8_t {
+    Nearest,  // the source pixel under each output pixel's centre: pixel art stays sharp
+    Linear,   // bilinear between the four nearest source pixels (as a GPU's linear filter)
+    Area,     // shrinking: the mean of the source pixels each output pixel covers (no moire
+              // on scanlines or grids); enlarging: nearest
+};
+
+// Resizes a sw x sh picture into dst (dw x dh), opaque. Separable: each output pixel is a
+// weighted sum of source pixels along x, then along y.
+inline void resample(const std::uint32_t* src, int sw, int sh, std::uint32_t* dst, int dw, int dh, Resample mode) {
+    if (!src || !dst || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    struct Tap {
+        int at;
+        float weight;
+    };
+    // taps[i]: the source pixels (and weights summing to 1) for output index i.
+    const auto taps_for = [mode](int s, int d) {
+        std::vector<std::vector<Tap>> taps(static_cast<std::size_t>(d));
+        const float ratio = static_cast<float>(s) / static_cast<float>(d);
+        for (int i = 0; i < d; ++i) {
+            auto& t = taps[static_cast<std::size_t>(i)];
+            if (mode == Resample::Area && ratio > 1) {
+                const float a = static_cast<float>(i) * ratio, b = a + ratio;
+                for (int k = static_cast<int>(a); k < std::min(s, static_cast<int>(std::ceil(b))); ++k) {
+                    const float w = std::min(b, static_cast<float>(k + 1)) - std::max(a, static_cast<float>(k));
+                    if (w > 0) t.push_back({k, w / ratio});
+                }
+            } else if (mode == Resample::Linear) {
+                const float f = std::clamp((static_cast<float>(i) + 0.5f) * ratio - 0.5f, 0.f, static_cast<float>(s - 1));
+                const int k = static_cast<int>(f);
+                const float frac = f - static_cast<float>(k);
+                t.push_back({k, 1 - frac});
+                if (frac > 0) t.push_back({std::min(k + 1, s - 1), frac});
+            } else {
+                t.push_back({std::min(s - 1, static_cast<int>((static_cast<float>(i) + 0.5f) * ratio)), 1.f});
+            }
+        }
+        return taps;
+    };
+    const auto tx = taps_for(sw, dw), ty = taps_for(sh, dh);
+    std::vector<float> rows(static_cast<std::size_t>(dw) * static_cast<std::size_t>(sh) * 3);
+    for (int y = 0; y < sh; ++y) {
+        const std::uint32_t* l = src + static_cast<std::size_t>(y) * static_cast<std::size_t>(sw);
+        float* o = &rows[static_cast<std::size_t>(y) * static_cast<std::size_t>(dw) * 3];
+        for (int x = 0; x < dw; ++x) {
+            float r = 0, g = 0, b = 0;
+            for (const Tap& t : tx[static_cast<std::size_t>(x)]) {
+                const std::uint32_t p = l[t.at];
+                r += static_cast<float>(p & 0xFF) * t.weight;
+                g += static_cast<float>((p >> 8) & 0xFF) * t.weight;
+                b += static_cast<float>((p >> 16) & 0xFF) * t.weight;
+            }
+            o[3 * x] = r, o[3 * x + 1] = g, o[3 * x + 2] = b;
+        }
+    }
+    const auto byte = [](float v) { return static_cast<std::uint32_t>(std::clamp(v + 0.5f, 0.f, 255.f)); };
+    for (int y = 0; y < dh; ++y) {
+        std::uint32_t* l = dst + static_cast<std::size_t>(y) * static_cast<std::size_t>(dw);
+        for (int x = 0; x < dw; ++x) {
+            float r = 0, g = 0, b = 0;
+            for (const Tap& t : ty[static_cast<std::size_t>(y)]) {
+                const float* p = &rows[(static_cast<std::size_t>(t.at) * static_cast<std::size_t>(dw) + static_cast<std::size_t>(x)) * 3];
+                r += p[0] * t.weight, g += p[1] * t.weight, b += p[2] * t.weight;
+            }
+            l[x] = byte(r) | byte(g) << 8 | byte(b) << 16 | 0xFF000000u;
         }
     }
 }

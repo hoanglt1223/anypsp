@@ -66,6 +66,29 @@ const anyui::Font &bold_font() {
     return font;
 }
 
+int preset_of(const input::InputMap &map, const display::Settings *display) {
+    for (int i = 0; i < kPresetCount; ++i) {
+        const Quality &q = kPresets[i];
+        if (q.scale != map.scale() || q.sharp != map.player().sharp) continue;
+        if (display != nullptr && (q.smoothing != display->smoothing || q.interpolate != display->interpolate)) continue;
+        return i;
+    }
+    return kCustom;
+}
+
+void apply_preset(int preset, input::InputMap &map, display::Settings *display) {
+    if (preset < 0 || preset >= kPresetCount) return;
+    const Quality &q = kPresets[preset];
+    map.set_scale(q.scale);
+    map.player().sharp = q.sharp;
+    if (display == nullptr) return;
+    display->smoothing = q.smoothing;
+    if (display->interpolate != q.interpolate) {
+        display->interpolate = q.interpolate;
+        display->interpolate_auto = false;
+    }
+}
+
 std::string Menu::tr(std::string_view key) const {
     strings().set_language(map_.player().language);
     return strings().tr(key);
@@ -98,6 +121,7 @@ void Menu::open() {
     cursor_ = 0;
     confirm_.clear();
     message_.clear();
+    preview_.loupe = preview_.pointer = false;
     ignore_held_ = true;  // buttons still held from opening the menu do nothing
 }
 
@@ -112,6 +136,7 @@ void Menu::go_tab(int index) {
     page_ = t[static_cast<std::size_t>(((index % n) + n) % n)].page;
     cursor_ = 0;
     confirm_.clear();
+    preview_.pointer = false;
     const auto r = rows();
     while (cursor_ < static_cast<int>(r.size()) && !selectable(r[static_cast<std::size_t>(cursor_)])) ++cursor_;
 }
@@ -175,6 +200,7 @@ std::vector<Action> Menu::update(const MenuInput &in) {
         if (press & pad::kCircle) close_menu(out);
         return out;
     }
+    if (page_ == Page::Video && update_preview(press, in)) return out;
     const auto all = rows();
     if (!all.empty()) {
         if (press & pad::kDown) move_cursor(1);
@@ -201,6 +227,22 @@ std::vector<Action> Menu::update(const MenuInput &in) {
         else rail_ = true;
     }
     return out;
+}
+
+// The Video preview's keys. Returns true when they used this frame's d-pad press.
+bool Menu::update_preview(std::uint32_t press, const MenuInput &in) {
+    constexpr float kSplitStep = 0.1f, kLoupeStep = 0.05f, kStickSpeed = 0.025f;
+    const auto key = [&](int code) { return std::find(in.keys.begin(), in.keys.end(), code) != in.keys.end(); };
+    const auto button = [&](int b) { return std::find(in.buttons.begin(), in.buttons.end(), b) != in.buttons.end(); };
+    if (key(SDL_SCANCODE_LEFTBRACKET) || button(input::kLeftTrigger)) preview_.move_split(-kSplitStep);
+    if (key(SDL_SCANCODE_RIGHTBRACKET) || button(input::kRightTrigger)) preview_.move_split(kSplitStep);
+    if (press & pad::kSelect) preview_.loupe = !preview_.loupe;
+    if (in.stick_x != 0 || in.stick_y != 0) preview_.move_loupe(in.stick_x * kStickSpeed, in.stick_y * kStickSpeed);
+    const std::uint32_t dirs = press & (pad::kUp | pad::kDown | pad::kLeft | pad::kRight);
+    if (!in.shift || dirs == 0 || !preview_.loupe_shown()) return false;
+    preview_.move_loupe(((dirs & pad::kRight) ? kLoupeStep : 0) - ((dirs & pad::kLeft) ? kLoupeStep : 0),
+                        ((dirs & pad::kDown) ? kLoupeStep : 0) - ((dirs & pad::kUp) ? kLoupeStep : 0));
+    return true;
 }
 
 void Menu::activate(const Row &row, std::vector<Action> &out) {
@@ -233,6 +275,15 @@ void Menu::step(const Row &row, int dir, std::vector<Action> &out) {
     const std::string &id = row.id;
     input::PlayerSettings &p = map_.player();
     confirm_.clear();
+    if (id == "video.preset") {
+        const int current = preset_of(map_, display_);
+        const int next = current == kCustom ? (dir > 0 ? 0 : kPresetCount - 1) : ((current + dir) % kPresetCount + kPresetCount) % kPresetCount;
+        apply_preset(next, map_, display_);
+        if (map_.scale() != running_scale_) say(tr("video.scale.next"));
+        out.push_back(Action::SettingsChanged);
+        if (display_ != nullptr) out.push_back(Action::DisplayChanged);
+        return;
+    }
     if (id == "video.scale") {
         map_.set_scale((map_.scale() - 1 + dir + 4) % 4 + 1);
         say(map_.scale() == running_scale_ ? tr("video.scale.now") : tr("video.scale.next"));
@@ -380,6 +431,7 @@ std::string Menu::title() const {
 std::string Menu::hint() const {
     if (rail_) return tr("hint.rail");
     if (page_ == Page::Capture) return tr("hint.capture");
+    if (page_ == Page::Video) return tr("hint.video");
     return tr("hint.page");
 }
 
@@ -437,6 +489,8 @@ std::vector<Row> Menu::rows() const {
         }
         break;
     case Page::Video: {
+        const int preset = preset_of(map_, display_);
+        row("video.preset", RowKind::Choice, tr(preset == kCustom ? "preset.custom" : "preset." + std::to_string(preset)), Icon::Settings);
         const int s = map_.scale();
         Row *scale = row("video.scale", RowKind::Choice,
                          std::to_string(s) + "x (" + std::to_string(480 * s) + "x" + std::to_string(272 * s) + ")", Icon::Video);
@@ -517,6 +571,19 @@ anyui::Frame Menu::view() const {
     if (page_ == Page::Capture) {
         p.modal = fmt("controls.capture", {input::action_name(capture_)});
         p.modal_detail = tr("controls.capture.detail");
+    }
+    if (page_ == Page::Video) {
+        // MenuSession supplies the pictures; see docs/user/desktop.md "Video preview".
+        anyui::Preview &pv = p.preview;
+        pv.shown = true;
+        pv.state = preview_;
+        pv.before_label = tr("preview.before");
+        pv.after_label = tr("preview.after");
+        if (cursor_ >= 0 && cursor_ < static_cast<int>(p.rows.size())) {
+            const Row &r = p.rows[static_cast<std::size_t>(cursor_)];
+            pv.title = r.label + (r.value.empty() ? "" : ": " + r.value);
+            pv.description = tr(r.id + ".desc");
+        }
     }
     return f;
 }

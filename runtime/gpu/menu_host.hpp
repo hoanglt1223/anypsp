@@ -30,6 +30,18 @@ std::string sfo_string(const std::filesystem::path &sfo, const std::string &key)
 // is empty), newest first, with PARAM.SFO titles and ICON0.PNG icons.
 std::vector<SaveInfo> scan_saves(const std::filesystem::path &memstick, const std::string &game_id);
 
+// The Video preview's pictures for a w x h window: the game picture (game_w x game_h) enlarged
+// to the size it takes in the window, nearest (before) and as Scaling shows it (after).
+struct PreviewPictures {
+    std::vector<std::uint32_t> before, after;
+    int width{}, height{};
+    void make(const std::uint32_t *game, int game_w, int game_h, int w, int h, bool sharp);
+    void attach(anyui::Preview &preview) const {
+        preview.before = {before.data(), width, height};
+        preview.after = {after.data(), width, height};
+    }
+};
+
 class MenuSession {
 public:
     enum class Result { Resume, Exit, Reset, WindowClosed };

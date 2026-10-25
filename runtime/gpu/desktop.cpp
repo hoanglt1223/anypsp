@@ -322,6 +322,21 @@ bool Controls::held(input::Action a) const {
     return map_.held(a, &Controls::key_held, [this](int b) { return button_held(b); });
 }
 
+std::pair<float, float> Controls::right_stick() const {
+    constexpr float kDeadZone = 8000;
+    float x = 0, y = 0;
+    for (SDL_Gamepad *pad : pads_) {
+        const auto px = static_cast<float>(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX));
+        const auto py = static_cast<float>(SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY));
+        if (std::abs(px) + std::abs(py) > std::abs(x) + std::abs(y)) {
+            x = px;
+            y = py;
+        }
+    }
+    const auto norm = [](float v) { return std::abs(v) < kDeadZone ? 0.f : (v - std::copysign(kDeadZone, v)) / (32767.f - kDeadZone); };
+    return {norm(x), norm(y)};
+}
+
 input::PadState Controls::pad() const {
     const auto key = &Controls::key_held;
     const auto button = [this](int b) { return button_held(b); };

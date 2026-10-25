@@ -125,6 +125,8 @@ public:
     [[nodiscard]] bool menu_requested() const noexcept { return ui_.menu; }
     UiEvents take_ui_events() { return std::exchange(ui_, {}); }
     [[nodiscard]] bool shift_held() const;
+    // The right stick of the gamepad pushed furthest, -1-1 per axis past a dead zone (the menu's loupe).
+    [[nodiscard]] std::pair<float, float> right_stick() const;
     // The bindings and [player] settings in use; the menu changes them.
     [[nodiscard]] input::InputMap &map() noexcept { return map_; }
 

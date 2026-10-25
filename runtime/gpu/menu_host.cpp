@@ -17,6 +17,7 @@
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <tuple>
 #include <cstring>
 
 namespace anypsp::menu {
@@ -123,6 +124,21 @@ std::vector<SaveInfo> scan_saves(const fs::path &memstick, const std::string &ga
     return out;
 }
 
+void PreviewPictures::make(const std::uint32_t *game, int game_w, int game_h, int w, int h, bool sharp) {
+    float fw = static_cast<float>(w), fh = fw * kHeight / kWidth;
+    if (fh > static_cast<float>(h)) {
+        fh = static_cast<float>(h);
+        fw = fh * kWidth / kHeight;
+    }
+    width = std::max(1, static_cast<int>(std::lround(fw)));
+    height = std::max(1, static_cast<int>(std::lround(fh)));
+    const std::size_t n = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    before.resize(n);
+    after.resize(n);
+    anyui::resample(game, game_w, game_h, before.data(), width, height, anyui::Resample::Nearest);
+    anyui::resample(game, game_w, game_h, after.data(), width, height, sharp ? anyui::Resample::Nearest : anyui::Resample::Linear);
+}
+
 struct MenuSession::State {
     gpu::GlHost &gl;
     desktop::Controls &controls;
@@ -134,6 +150,10 @@ struct MenuSession::State {
     anyui::Canvas canvas;
     std::vector<std::uint32_t> game;  // the paused game picture, internal resolution
     int game_w{}, game_h{};
+    PreviewPictures preview;
+    int preview_w{}, preview_h{};
+    bool preview_sharp{};
+    std::uint64_t preview_version{};
     double hz{}, fps{};
     int speed_percent{100};
     const display::Settings *display{};
@@ -182,11 +202,28 @@ struct MenuSession::State {
         gl.set_smooth(!controls.map().player().sharp);
     }
 
+    void update_preview(int w, int h) {
+        const bool sharp = controls.map().player().sharp;
+        if (w == preview_w && h == preview_h && sharp == preview_sharp && preview_version != 0) return;
+        preview_w = w;
+        preview_h = h;
+        preview_sharp = sharp;
+        ++preview_version;
+        preview.make(game.data(), game_w, game_h, w, h, sharp);
+    }
+
     void draw(float dt) {
         const auto [w, h] = gl.window_pixels();
         if (w <= 0 || h <= 0) return;
         if (!view.background_fits(w, h, look())) backdrop(w, h);
-        view.render(canvas, menu.view(), look(), dt);
+        anyui::Frame frame = menu.view();
+        if (frame.page.preview.shown && !game.empty()) {
+            update_preview(w, h);
+            anyui::Preview &pv = frame.page.preview;
+            preview.attach(pv);
+            pv.version = preview_version;
+        }
+        view.render(canvas, frame, look(), dt);
         gl.present_picture(canvas.data(), canvas.width(), canvas.height());
     }
 
@@ -195,6 +232,11 @@ struct MenuSession::State {
         const auto [w, h] = gl.window_pixels();
         for (const desktop::Pointer &e : events) {
             using Kind = desktop::Pointer::Kind;
+            using Phase = anyui::MenuView::PointerPhase;
+            if (e.kind != Kind::Wheel && (!e.touch || drag_finger != e.finger)) {
+                const Phase phase = e.kind == Kind::Down ? Phase::Down : e.kind == Kind::Up ? Phase::Up : Phase::Move;
+                if (view.preview_pointer(menu.preview_state(), phase, e.x, e.y, e.touch)) continue;
+            }
             const auto click = [&] {
                 const auto a = menu.click(view.hit(e.x, e.y));
                 out.insert(out.end(), a.begin(), a.end());
@@ -286,6 +328,7 @@ MenuSession::Result MenuSession::run(std::uint32_t address, std::uint32_t stride
     s.game_w = kWidth * s.gl.scale();
     s.game_h = kHeight * s.gl.scale();
     s.game.resize(static_cast<std::size_t>(s.game_w) * static_cast<std::size_t>(s.game_h));
+    s.preview_version = 0;
     std::memcpy(s.game.data(), rgba.data(), std::min(rgba.size(), s.game.size() * 4u));
     for (std::uint32_t &p : s.game) p |= 0xFF000000u;
     const auto [w, h] = s.gl.window_pixels();
@@ -306,6 +349,7 @@ MenuSession::Result MenuSession::run(std::uint32_t address, std::uint32_t stride
         in.buttons = std::move(events.buttons);
         in.shift = s.controls.shift_held();
         in.menu = events.menu;
+        std::tie(in.stick_x, in.stick_y) = s.controls.right_stick();
         std::vector<Action> actions = s.menu.update(in);
         const auto clicks = s.pointer(events.pointers);
         actions.insert(actions.end(), clicks.begin(), clicks.end());

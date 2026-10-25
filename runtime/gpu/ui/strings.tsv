@@ -63,3 +63,26 @@ theme.light	Light	Sáng
 hint.rail	Up/Down tab   Cross open   Circle close	Lên/Xuống chọn mục   X mở   O đóng
 hint.page	Cross choose   Left/Right change   L/R tabs   Circle close	X chọn   Trái/Phải đổi   L/R chuyển mục   O đóng
 hint.capture	Press a key or button   Esc cancel	Nhấn phím hoặc nút   Esc hủy
+hint.video	Cross choose   Left/Right change   Select loupe   [ ] or LT/RT divider   L/R tabs   Circle close	X chọn   Trái/Phải đổi   Select kính lúp   [ ] hoặc LT/RT vạch chia   L/R chuyển mục   O đóng
+preview.before	Before	Trước
+preview.after	After	Sau
+video.preset	Graphics preset	Mức đồ họa
+preset.0	Very low	Rất thấp
+preset.1	Low	Thấp
+preset.2	Medium	Trung bình
+preset.3	High	Cao
+preset.4	Very high	Rất cao
+preset.5	Ultra	Tối đa
+preset.custom	Custom	Tùy chỉnh
+video.preset.desc	Sets internal resolution, scaling, smoothing and frame interpolation at once, from Very low (fastest) to Ultra. Changing one of them shows Custom; internal resolution and interpolation apply from the next start.	Đặt cùng lúc độ phân giải nội bộ, cách phóng to, làm mượt và nội suy khung hình, từ Rất thấp (nhanh nhất) đến Tối đa. Đổi một mục sẽ hiện Tùy chỉnh; độ phân giải nội bộ và nội suy áp dụng từ lần chạy sau.
+video.scale.desc	The resolution the PSP's 3D is drawn at: 1x is the PSP's own 480x272, higher is sharper and slower. Applies from the next start.	Độ phân giải vẽ hình 3D của PSP: 1x là 480x272 gốc của PSP, cao hơn thì sắc nét hơn và chậm hơn. Áp dụng từ lần chạy sau.
+video.fullscreen.desc	Fills the whole monitor with the game (F11).	Hiển thị trò chơi trên toàn bộ màn hình (F11).
+video.filter.desc	How the picture is enlarged to the window: Smooth blends neighbouring pixels, Sharp keeps them square.	Cách phóng hình ra cửa sổ: Mượt trộn các điểm ảnh cạnh nhau, Sắc nét giữ chúng vuông.
+video.smoothing.desc	For games drawing at 30 fps: the vblank between two frames shows a 50/50 blend of them (F9). A still picture does not show it.	Cho trò chơi vẽ 30 fps: nhịp quét giữa hai khung hình hiển thị hình trộn 50/50 của chúng (F9). Hình tĩnh không thể hiện điều này.
+video.interpolate.desc	For games drawing at 30 fps: a real picture half way between two frames, for 60 per second. Interpolate = auto (the default) turns it on for games known to suit it. F10 switches it, at once if the game started with it on, else from the next start.	Cho trò chơi vẽ 30 fps: một hình thật ở giữa hai khung hình, thành 60 hình mỗi giây. Interpolate = auto (mặc định) bật nó cho các trò chơi được biết là phù hợp. F10 bật/tắt, ngay lập tức nếu trò chơi bắt đầu với nó bật, nếu không thì từ lần chạy sau.
+video.refresh.desc	The monitor refresh rate the frame pacing assumes (F5). Auto detects it.	Tần số quét màn hình dùng để điều nhịp khung hình (F5). Tự động sẽ tự dò.
+video.vrr.desc	For G-Sync and FreeSync monitors: each vblank is shown as soon as it is ready (F6).	Cho màn hình G-Sync và FreeSync: mỗi nhịp quét được hiển thị ngay khi sẵn sàng (F6).
+video.sync.desc	Runs the PSP's vblanks up to 1% faster or slower to match the monitor exactly, for even scrolling (F7).	Chạy nhịp quét của PSP nhanh hoặc chậm hơn tối đa 1% để khớp chính xác với màn hình, giúp cuộn đều hơn (F7).
+video.menu_fps.desc	Pictures per second while this menu is open (F4).	Số hình mỗi giây khi menu này đang mở (F4).
+video.fps_cap.desc	The most pictures shown per second (F8). Off shows as many as the monitor allows.	Số hình tối đa hiển thị mỗi giây (F8). Tắt sẽ hiển thị nhiều nhất màn hình cho phép.
+video.patches.desc	Applies the memory patches in this game's patch file (--patches).	Áp dụng các bản vá bộ nhớ trong tệp vá của trò chơi này (--patches).

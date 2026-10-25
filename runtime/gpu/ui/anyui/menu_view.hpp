@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <utility>
 #include <vector>
@@ -64,6 +65,40 @@ struct Slot {
 
 enum class Diagram : std::uint8_t { None, Gba, Psp };
 
+// Where the user has put the Video tab's preview divider and loupe. The controller owns it
+// (keys and the stick move them); MenuView::preview_pointer moves them with a mouse or a
+// finger, and the view draws them from Preview::state.
+struct PreviewState {
+    float split = 0.5f;                    // the divider across the picture: before on its left, after on its right
+    bool loupe = false;                    // the loupe is on (keys, the stick)
+    bool pointer = false;                  // a mouse over the picture or a finger held on it shows the loupe
+    float loupe_x = 0.5f, loupe_y = 0.5f;  // the loupe's centre over the picture, 0-1
+
+    bool loupe_shown() const { return loupe || pointer; }
+    void move_split(float d) { split = std::clamp(split + d, 0.f, 1.f); }
+    void move_loupe(float dx, float dy) {
+        loupe = true;
+        loupe_x = std::clamp(loupe_x + dx, 0.f, 1.f);
+        loupe_y = std::clamp(loupe_y + dy, 0.f, 1.f);
+    }
+};
+
+// The Video tab's live preview: the paused game picture plain (before) and with the current
+// settings (after) on either side of a divider, a loupe that magnifies both, and what the
+// focused row does. The pictures may have any size and shape (each is fitted into the
+// panel); the larger they are, the more detail the loupe shows.
+struct Preview {
+    bool shown = false;
+    Thumb before, after;
+    std::uint64_t version = 0;  // changes whenever the pictures do
+    std::string before_label, after_label;
+    std::string title;        // the focused row and its value
+    std::string description;  // what that setting does
+    std::string note;         // e.g. why the picture does not show it yet
+    float zoom = 4;           // the loupe's magnification over the panel
+    PreviewState state;
+};
+
 struct Page {
     std::string title;
     std::string crumb;  // where in a tree the page is ("Items / Potions")
@@ -85,6 +120,7 @@ struct Page {
     std::string modal;      // e.g. "Press a key for A"; drawn over the page
     std::string modal_detail;
     std::string empty_text;
+    Preview preview;  // shown: the rows share the page with a live preview (Video)
 };
 
 struct Tab {
@@ -159,7 +195,7 @@ struct ViewOptions {
     bool touch = false;  // bigger rows and targets
 };
 
-enum class HitKind : std::uint8_t { None, Tab, Row, Decrease, Increase, Slot, Popup, Close, Back, Search, Outside };
+enum class HitKind : std::uint8_t { None, Tab, Row, Decrease, Increase, Slot, Popup, Close, Back, Search, Outside, Preview };
 
 struct Hit {
     HitKind kind = HitKind::None;
@@ -192,6 +228,7 @@ public:
         scroll_ = scroll_target_ = 0;
         manual_ = false;
         first_ = true;
+        split_drag_ = finger_loupe_ = false;
     }
     // Starts the closing animation; done once closed() is true.
     void close() { target_open_ = 0; }
@@ -223,12 +260,67 @@ public:
         return {};
     }
 
+    enum class PointerPhase : std::uint8_t { Down, Move, Up };
+    // A mouse or finger over the Video preview, at window pixels (x, y). A mouse dragged on the
+    // picture moves the divider and shows the loupe while over it; a finger moves the divider
+    // when it starts near it, else holds the loupe under it. Returns true when the preview took
+    // the event (no click, scroll or tap should follow from it).
+    bool preview_pointer(PreviewState& s, PointerPhase phase, float x, float y, bool touch) {
+        const Rect r = preview_pic_;
+        if (r.w <= 0 || r.h <= 0) {
+            split_drag_ = finger_loupe_ = false;
+            s.pointer = false;
+            return false;
+        }
+        const float nx = std::clamp((x - r.x) / r.w, 0.f, 1.f), ny = std::clamp((y - r.y) / r.h, 0.f, 1.f);
+        const auto follow = [&] {
+            s.pointer = true;
+            s.loupe_x = nx;
+            s.loupe_y = ny;
+        };
+        switch (phase) {
+        case PointerPhase::Down:
+            if (!r.contains(x, y)) return false;
+            if (!touch || std::abs(x - (r.x + s.split * r.w)) <= 28 * u_) {
+                split_drag_ = true;
+                s.split = nx;
+            } else {
+                finger_loupe_ = true;
+            }
+            if (!touch || finger_loupe_) follow();
+            touch_loupe_ = touch && finger_loupe_;
+            return true;
+        case PointerPhase::Move:
+            if (split_drag_) {
+                s.split = nx;
+                if (!touch) follow();
+                return true;
+            }
+            if (finger_loupe_) {
+                follow();
+                return true;
+            }
+            if (touch) return false;
+            if (r.contains(x, y)) follow();
+            else s.pointer = false;
+            touch_loupe_ = false;
+            return false;
+        case PointerPhase::Up:
+            if (!split_drag_ && !finger_loupe_) return false;
+            if (touch) s.pointer = false;
+            split_drag_ = finger_loupe_ = touch_loupe_ = false;
+            return true;
+        }
+        return false;
+    }
+
     // Draws the frame over the backdrop into `out` (resized to the backdrop when needed).
     // `dt` is the time since the last call, in seconds.
     void render(Canvas& out, const Frame& f, const ViewOptions& o, float dt) {
         const int W = sharp_.width(), H = sharp_.height();
         if (out.width() != W || out.height() != H) out.resize(W, H);
         hits_.clear();
+        preview_pic_ = {};
         const Theme t = Theme::make(o.dark);
         const auto approach = [&](float& v, float target, float rate) {
             if (o.reduce_motion || first_) {
@@ -407,6 +499,17 @@ public:
                     draw_diagram(out, t, p, {list.x, list.y, list.w, dh}, ca);
                     rows_area.y += dh + 8 * u;
                     rows_area.h -= dh + 8 * u;
+                }
+            } else if (p.preview.shown) {
+                if (list.w >= 560 * u) {
+                    const float pw = std::round(list.w * 0.46f);
+                    draw_preview(out, t, p.preview, {list.right() - pw, list.y, pw, list.h}, ca, o, true);
+                    rows_area.w -= pw + 12 * u;
+                } else {
+                    const float ph = std::min(list.h * 0.42f, 170 * u);
+                    draw_preview(out, t, p.preview, {list.x, list.y, list.w, ph}, ca, o, false);
+                    rows_area.y += ph + 8 * u;
+                    rows_area.h -= ph + 8 * u;
                 }
             }
             if (p.search) {
@@ -731,6 +834,212 @@ private:
                   HitKind::Popup, {}, 0, false);
     }
 
+    // `text` broken at spaces into at most `max_lines` lines of `width`; the last one ends
+    // with "…" when the text does not fit.
+    std::vector<std::string> wrap(const Font& font, const std::string& text, float px, float width, int max_lines) const {
+        std::vector<std::string> lines;
+        std::string line;
+        std::size_t i = 0;
+        while (i < text.size() && static_cast<int>(lines.size()) < max_lines) {
+            std::size_t end = text.find(' ', i);
+            if (end == std::string::npos) end = text.size();
+            const std::string word = text.substr(i, end - i);
+            const std::string joined = line.empty() ? word : line + " " + word;
+            if (line.empty() || font.measure(joined, px) <= width) {
+                line = joined;
+                i = end + 1;
+                continue;
+            }
+            lines.push_back(line);
+            line.clear();
+        }
+        if (!line.empty() && static_cast<int>(lines.size()) < max_lines) lines.push_back(line);
+        if (!lines.empty()) {
+            const bool cut = i < text.size();
+            lines.back() = font.fit(cut ? lines.back() + " \xE2\x80\xA6" : lines.back(), px, width);
+        }
+        return lines;
+    }
+
+    // A picture resized once into a cache for the panel (shrunk by area, so scanlines and
+    // grids do not turn into moire), redone when the picture or the size changes.
+    struct Scaled {
+        const std::uint32_t* source = nullptr;
+        int sw = 0, sh = 0;
+        std::uint64_t version = 0;
+        Canvas picture;
+    };
+    static const Canvas& scaled(Scaled& cache, const Thumb& src, std::uint64_t version, int w, int h) {
+        if (cache.source != src.pixels || cache.sw != src.width || cache.sh != src.height || cache.version != version ||
+            cache.picture.width() != w || cache.picture.height() != h) {
+            cache.source = src.pixels;
+            cache.sw = src.width;
+            cache.sh = src.height;
+            cache.version = version;
+            cache.picture.resize(w, h);
+            resample(src.pixels, src.width, src.height, cache.picture.data(), w, h, Resample::Area);
+        }
+        return cache.picture;
+    }
+
+    // `src` fitted (centred, its own shape) into `box`, on whole pixels.
+    static Rect fitted(const Thumb& src, Rect box) {
+        float w = box.w, h = box.w * static_cast<float>(src.height) / static_cast<float>(src.width);
+        if (h > box.h) {
+            h = box.h;
+            w = h * static_cast<float>(src.width) / static_cast<float>(src.height);
+        }
+        return {std::round(box.x + (box.w - w) / 2), std::round(box.y + (box.h - h) / 2), std::max(1.f, std::round(w)),
+                std::max(1.f, std::round(h))};
+    }
+
+    // The Video tab's preview panel: the picture (before | after), its labels, the divider and
+    // the loupe; then the focused setting and what it does. `wide`: text under the picture,
+    // else beside it.
+    void draw_preview(Canvas& out, const Theme& t, const Preview& pv, Rect area, float a, const ViewOptions& o, bool wide) {
+        const float u = u_;
+        out.fill_round_rect(area, 12 * u, t.field.alpha(a));
+        const float pad = 10 * u;
+        const float tpx = 14.5f * u, dpx = 12.5f * u;
+        const Thumb& shape = !pv.after.empty() ? pv.after : pv.before;
+        const float aspect = shape.empty() ? 1.5f : static_cast<float>(shape.width) / static_cast<float>(shape.height);
+        Rect pic, text;
+        if (wide) {
+            const float text_h = bold_.line_height(tpx) + 3 * regular_.line_height(dpx) + 4 * u;
+            float pw = area.w - 2 * pad, ph = pw / aspect;
+            const float room = std::max(40 * u, area.h - 3 * pad - text_h);
+            if (ph > room) {
+                ph = room;
+                pw = ph * aspect;
+            }
+            pic = {area.x + (area.w - pw) / 2, area.y + pad, pw, ph};
+            text = {area.x + pad + 4 * u, pic.bottom() + pad, area.w - 2 * pad - 8 * u, area.bottom() - pic.bottom() - 2 * pad};
+        } else {
+            float ph = area.h - 2 * pad, pw = ph * aspect;
+            if (pw > area.w * 0.6f) {
+                pw = area.w * 0.6f;
+                ph = pw / aspect;
+            }
+            pic = {area.x + pad, area.y + (area.h - ph) / 2, pw, ph};
+            text = {pic.right() + pad + 4 * u, area.y + pad, area.right() - pic.right() - 2 * pad - 4 * u, area.h - 2 * pad};
+        }
+        pic = {std::round(pic.x), std::round(pic.y), std::round(pic.w), std::round(pic.h)};
+        if (pic.w < 8 || pic.h < 8) return;
+        preview_pic_ = pic;
+        hits_.push_back({pic, {HitKind::Preview, -1}});
+
+        // The two sides, each fitted into the picture's box and clipped at the divider.
+        const PreviewState& st = pv.state;
+        const float dx = pic.x + std::round(std::clamp(st.split, 0.f, 1.f) * pic.w);
+        out.fill_rect(pic, Color::rgb(0x000000, a));
+        const auto side = [&](const Thumb& src, Scaled& cache, Rect clip) {
+            if (src.empty() || clip.w <= 0) return;
+            const Rect place = fitted(src, pic);
+            const Canvas& c = scaled(cache, src, pv.version, static_cast<int>(place.w), static_cast<int>(place.h));
+            out.push_clip(clip);
+            out.image(c.data(), c.width(), c.height(), place, 0, a);
+            out.pop_clip();
+        };
+        side(pv.before, before_cache_, {pic.x, pic.y, dx - pic.x, pic.h});
+        side(pv.after, after_cache_, {dx, pic.y, pic.right() - dx, pic.h});
+
+        const float lpx = 12 * u;
+        const auto chip = [&](const std::string& label, bool left) {
+            if (label.empty()) return;
+            const std::string shown = regular_.fit(label, lpx, pic.w * 0.45f);
+            const float w = regular_.measure(shown, lpx) + 16 * u, h = 22 * u;
+            const Rect c{left ? pic.x + 8 * u : pic.right() - 8 * u - w, pic.y + 8 * u, w, h};
+            if (left ? c.right() > dx - 4 * u : c.x < dx + 4 * u) return;  // no room on that side
+            out.fill_round_rect(c, h / 2, Color::rgb(0x000000, 0.6f * a));
+            regular_.draw(out, c.x + 8 * u, center_baseline(regular_, c.y + h / 2, lpx), shown, lpx, Color::rgb(0xFFFFFF, a));
+        };
+        chip(pv.before_label, true);
+        chip(pv.after_label, false);
+
+        // The divider and its handle.
+        const float lw = std::max(1.f, std::round(2 * u));
+        out.fill_rect({dx - lw / 2, pic.y, lw, pic.h}, Color::rgb(0xFFFFFF, 0.9f * a));
+        const float hy = pic.y + pic.h / 2, hr = 11 * u;
+        out.fill_circle(dx, hy + u, hr + 2 * u, Color::rgb(0x000000, 0.3f * a));
+        out.fill_circle(dx, hy, hr, Color::rgb(0xFFFFFF, a));
+        const float k = 3.5f * u, sw = std::max(1.f, 1.6f * u);
+        const Color arrow = t.accent.alpha(a);
+        out.line(dx - 2 * u, hy - k, dx - 2 * u - k, hy, sw, arrow);
+        out.line(dx - 2 * u - k, hy, dx - 2 * u, hy + k, sw, arrow);
+        out.line(dx + 2 * u, hy - k, dx + 2 * u + k, hy, sw, arrow);
+        out.line(dx + 2 * u + k, hy, dx + 2 * u, hy + k, sw, arrow);
+
+        if (st.loupe_shown()) draw_loupe(out, pv, pic, dx, area, a, o);
+
+        // The focused setting and what it does.
+        if (text.w < 60 * u || text.h < bold_.line_height(tpx)) return;
+        out.push_clip(text);
+        float y = text.y + bold_.ascent(tpx);
+        bold_.draw(out, text.x, y, bold_.fit(pv.title, tpx, text.w), tpx, t.text.alpha(a));
+        y += bold_.line_height(tpx) * 0.25f;
+        const float lh = regular_.line_height(dpx);
+        int room = static_cast<int>((text.bottom() - y) / lh);
+        if (!pv.note.empty()) --room;
+        for (const std::string& line : wrap(regular_, pv.description, dpx, text.w, std::max(0, room))) {
+            y += lh;
+            regular_.draw(out, text.x, y, line, dpx, t.dim.alpha(a));
+        }
+        if (!pv.note.empty() && room >= 0) {
+            y += lh;
+            regular_.draw(out, text.x, y, regular_.fit(pv.note, dpx, text.w), dpx, t.accent.alpha(a));
+        }
+        out.pop_clip();
+    }
+
+    // A round loupe over the picture, `zoom` times the panel, sampling the full-size pictures
+    // (nearest) so single pixels show. A finger would hide it, so with touch it sits above.
+    void draw_loupe(Canvas& out, const Preview& pv, Rect pic, float dx, Rect area, float a, const ViewOptions& o) {
+        const float u = u_;
+        const PreviewState& st = pv.state;
+        const float zoom = std::max(1.f, pv.zoom);
+        const float px = pic.x + st.loupe_x * pic.w, py = pic.y + st.loupe_y * pic.h;
+        const int r = static_cast<int>(std::round(std::min(62 * u, std::min(pic.w, pic.h) * 0.36f)));
+        if (r < 6) return;
+        float cx = px, cy = py;
+        if (touch_loupe_ && o.touch) cy = py - static_cast<float>(r) - 26 * u >= area.y ? py - static_cast<float>(r) - 26 * u : py + static_cast<float>(r) + 26 * u;
+        cx = std::round(cx), cy = std::round(cy);
+        const int d = 2 * r;
+        loupe_.resize(d, d);
+        const std::uint32_t black = 0xFF000000u;
+        const Rect before_at = pv.before.empty() ? Rect{} : fitted(pv.before, pic);
+        const Rect after_at = pv.after.empty() ? Rect{} : fitted(pv.after, pic);
+        const auto sample = [&](const Thumb& src, Rect at, float qx, float qy) {
+            if (src.empty() || !at.contains(qx, qy)) return black;
+            const int sx = std::clamp(static_cast<int>((qx - at.x) / at.w * static_cast<float>(src.width)), 0, src.width - 1);
+            const int sy = std::clamp(static_cast<int>((qy - at.y) / at.h * static_cast<float>(src.height)), 0, src.height - 1);
+            return src.pixels[static_cast<std::size_t>(sy) * static_cast<std::size_t>(src.width) + static_cast<std::size_t>(sx)] | black;
+        };
+        for (int j = 0; j < d; ++j) {
+            std::uint32_t* line = loupe_.row(j);
+            const float qy = py + (static_cast<float>(j) + 0.5f - static_cast<float>(r)) / zoom;
+            for (int i = 0; i < d; ++i) {
+                const float qx = px + (static_cast<float>(i) + 0.5f - static_cast<float>(r)) / zoom;
+                line[i] = !pic.contains(qx, qy) ? black : qx < dx ? sample(pv.before, before_at, qx, qy) : sample(pv.after, after_at, qx, qy);
+            }
+        }
+        // The divider, magnified too.
+        const float ldx = static_cast<float>(r) + (dx - px) * zoom;
+        if (ldx > -2 && ldx < static_cast<float>(d) + 2) loupe_.fill_rect({ldx - std::max(1.f, u), 0, 2 * std::max(1.f, u), static_cast<float>(d)}, Color::rgb(0xFFFFFF, 0.9f));
+        out.push_clip(area);
+        const float fr = static_cast<float>(r);
+        out.fill_circle(cx, cy + 2 * u, fr + 4 * u, Color::rgb(0x000000, 0.35f * a));
+        out.image(loupe_.data(), d, d, {cx - fr, cy - fr, static_cast<float>(d), static_cast<float>(d)}, fr, a);
+        out.stroke_circle(cx, cy, fr, std::max(1.5f, 2.5f * u), Color::rgb(0xFFFFFF, a));
+        const float zpx = 11 * u;
+        char label[16];
+        std::snprintf(label, sizeof label, "%g\xC3\x97", static_cast<double>(zoom));
+        const float zw = regular_.measure(label, zpx) + 12 * u;
+        const Rect z{cx - zw / 2, cy + fr - 10 * u, zw, 18 * u};
+        out.fill_round_rect(z, 9 * u, Color::rgb(0x000000, 0.65f * a));
+        regular_.draw(out, z.x + 6 * u, center_baseline(regular_, z.y + z.h / 2, zpx), label, zpx, Color::rgb(0xFFFFFF, a));
+        out.pop_clip();
+    }
+
     void draw_modal(Canvas& out, const Theme& t, const Page& p, Rect card, float a) {
         const float u = u_;
         out.fill_round_rect(card, 18 * u, (t.dark ? Color::rgb(0x000000, 0.45f) : Color::rgb(0xFFFFFF, 0.55f)).alpha(a));
@@ -854,6 +1163,10 @@ private:
     bool bg_dark_ = true;
     std::vector<std::pair<Rect, Hit>> hits_;
     Hit hover_;
+    Rect preview_pic_;  // where the last render put the preview picture (empty: none)
+    Scaled before_cache_, after_cache_;
+    Canvas loupe_;
+    bool split_drag_ = false, finger_loupe_ = false, touch_loupe_ = false;
     float u_ = 1, row_h_ = 40;
     float open_ = 0, target_open_ = 0;
     float fade_ = 1;
