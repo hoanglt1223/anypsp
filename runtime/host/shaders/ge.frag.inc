@@ -15,8 +15,8 @@ SAMPLER(0) highp sampler2D u_tex;
 PARAMS(vec4, u_p, 8);
 VARYING_IN(0) vec2 v_uv;
 VARYING_IN(1) float v_q;
-VARYING_IN_LINEAR(2) vec4 v_color;
-VARYING_IN_LINEAR(3) float v_fog;
+VARYING_IN(2) vec4 v_color;
+VARYING_IN(3) float v_fog;
 layout(location = 0) out vec4 o_color;
 bool compare(int f, int a, int b) {
     if (f == 0) return false;
@@ -73,7 +73,7 @@ ivec4 sample_texture(int flags) {
 }
 void main() {
     int flags = int(u_p[1].w);
-    // Gouraud colour: screen-linear, floored per pixel (the epsilon absorbs float error at the vertices).
+    // Gouraud colour, floored per pixel (the epsilon absorbs float error at the vertices).
     ivec4 c = ivec4(floor(v_color * 255.0 + 1.0 / 64.0));
     if (!flag(flags, 16)) {
         if (flag(flags, 1)) {

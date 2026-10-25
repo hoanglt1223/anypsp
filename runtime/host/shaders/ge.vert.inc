@@ -9,10 +9,11 @@ layout(location = 4) in float a_fog;
 PARAMS(vec4, u_p, 8);
 VARYING_OUT(0) vec2 v_uv;
 VARYING_OUT(1) float v_q;
-// Gouraud colour is screen-linear on the GE, in 3D too.
-VARYING_OUT_LINEAR(2) vec4 v_color;
-// The fog factor (0..255 per vertex) is screen-linear too.
-VARYING_OUT_LINEAR(3) float v_fog;
+// The GE interpolates colour and fog screen-linearly (PPSSPP's hardware probes), but noperspective
+// varyings break up large geometry that is clipped at the near plane (UNH 1's intro and fades), so
+// both are interpolated with perspective here.
+VARYING_OUT(2) vec4 v_color;
+VARYING_OUT(3) float v_fog; // fog factor, 0..255 per vertex
 void main() {
     float w = a_pos.w;
     v_fog = a_fog;
