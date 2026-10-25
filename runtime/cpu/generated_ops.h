@@ -456,6 +456,64 @@ ANYPSP_GEN_INLINE bool vrot(Runtime &rt, Ctx &ctx, u32 pc) {
     return true;
 }
 
+// vcrsp.t (cross product) and vqmul.q (quaternion product); the pair and single forms give zeros.
+template <u32 Op>
+ANYPSP_GEN_INLINE bool cross_quat(Runtime &rt, Ctx &ctx, u32 pc) {
+    ANYPSP_GEN_PLAIN_OR_INTERPRET(rt, ctx, pc, Op);
+    constexpr u32 n = vec_size(Op);
+    float s[4]{}, t[4]{}, d[4]{};
+    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    read_vector<(Op >> 16) & 0x7Fu, n>(ctx, t);
+    if constexpr (n == 3u) {
+        const float t0[4] = {0.0f, t[2], -t[1], 0.0f}, t1[4] = {-t[2], 0.0f, t[0], 0.0f};
+        const float t2[4] = {t[1], -t[0], t[3], t[2]};
+        d[0] = vfpu_dot(s, t0);
+        d[1] = vfpu_dot(s, t1);
+        d[2] = vfpu_dot(s, t2);
+    } else if constexpr (n == 4u) {
+        const float t0[4] = {t[3], t[2], -t[1], t[0]}, t1[4] = {-t[2], t[3], t[0], t[1]};
+        const float t2[4] = {t[1], -t[0], t[3], t[2]}, t3[4] = {-t[0], -t[1], -t[2], t[3]};
+        d[0] = vfpu_dot(s, t0);
+        d[1] = vfpu_dot(s, t1);
+        d[2] = vfpu_dot(s, t2);
+        d[3] = vfpu_dot(s, t3);
+    } else if constexpr (n == 2u) {
+        d[1] = s[2] * t[0];  // s[2] is zero: no lane of a pair reaches it without a prefix
+    }
+    write_vector<Op & 0x7Fu, n>(ctx, d);
+    return true;
+}
+
+// vocp: 1 - S, a NaN made positive.
+template <u32 Op>
+ANYPSP_GEN_INLINE bool vocp(Runtime &rt, Ctx &ctx, u32 pc) {
+    ANYPSP_GEN_PLAIN_OR_INTERPRET(rt, ctx, pc, Op);
+    constexpr u32 n = vec_size(Op);
+    float s[4], d[4];
+    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    for (u32 i = 0; i < n; ++i) {
+        const float negated = from_bits(bits(s[i]) ^ 0x80000000u);
+        d[i] = is_nan(negated) ? std::fabs(negated) : 1.0f + negated;
+    }
+    write_vector<Op & 0x7Fu, n>(ctx, d);
+    return true;
+}
+
+// vsgn: -1, 0 or 1 by sign; NaN by its sign bit, denormals as zero.
+template <u32 Op>
+ANYPSP_GEN_INLINE bool vsgn(Runtime &rt, Ctx &ctx, u32 pc) {
+    ANYPSP_GEN_PLAIN_OR_INTERPRET(rt, ctx, pc, Op);
+    constexpr u32 n = vec_size(Op);
+    float s[4], d[4];
+    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    for (u32 i = 0; i < n; ++i) {
+        const u32 value = bits(is_nan(s[i]) ? s[i] : s[i] - 0.0f);
+        d[i] = (value & 0x7F800000u) == 0u ? 0.0f : ((value >> 31) == 0u ? 1.0f : -1.0f);
+    }
+    write_vector<Op & 0x7Fu, n>(ctx, d);
+    return true;
+}
+
 // viim.s, vfim.s: an integer or half-float immediate to one lane.
 template <u32 Op>
 ANYPSP_GEN_INLINE bool viim(Runtime &rt, Ctx &ctx, u32 pc) {

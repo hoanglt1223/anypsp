@@ -1098,6 +1098,7 @@ const char *generated_op_template(std::string_view name) {
         {"v(h)tfm2", "vtfm"}, {"v(h)tfm3", "vtfm"}, {"v(h)tfm4", "vtfm"},
         {"vrot", "vrot"},
         {"viim.s", "viim"}, {"vfim.s", "viim"},
+        {"vcrsp.t/vqmul.q", "cross_quat"}, {"vocp", "vocp"}, {"vsgn", "vsgn"},
     };
     const auto found = table.find(name);
     return found == table.end() ? nullptr : found->second;
