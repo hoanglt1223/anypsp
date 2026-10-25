@@ -81,7 +81,10 @@ void Kernel::sceKernelDeleteLwMutex(Ctx &ctx) {
             woke = true;
         }
     }
-    memory.zero(workarea, kWorkareaSize);
+    // What the PSP leaves in the workarea: unlocked, no owner, no mutex.
+    memory.store32(workarea + kLockLevel, 0u);
+    memory.store32(workarea + kLockThread, 0xFFFFFFFFu);
+    memory.store32(workarea + kUid, 0xFFFFFFFFu);
     finish(ctx, 0u);
     if (woke) maybe_preempt(ctx);
 }

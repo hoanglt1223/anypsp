@@ -297,6 +297,7 @@ void Kernel::install_callbacks() {
     hle(tm, 0x730ED8BCu, "sceKernelReferCallbackStatus", &Kernel::sceKernelReferCallbackStatus);
     hle(tm, 0x349D6D6Cu, "sceKernelCheckCallback", &Kernel::sceKernelCheckCallback);
     hle("LoadExecForUser", 0x4AC57943u, "sceKernelRegisterExitCallback", &Kernel::sceKernelRegisterExitCallback);
+    hle("LoadExecForUser", 0x362A956Bu, "LoadExecForUser_362A956B", &Kernel::LoadExecForUser_362A956B);
 }
 
 void Kernel::sceKernelCreateCallback(Ctx &ctx) {
@@ -374,9 +375,27 @@ void Kernel::sceKernelCheckCallback(Ctx &ctx) {
     start_pending_callback(*t, ctx, false, false);
 }
 
+// Validates the exit callback's argument block (pointed at from 8 bytes before its common
+// argument) and marks its parameter area: what LoadExecForUser_362A956B does per PPSSPP.
+void Kernel::LoadExecForUser_362A956B(Ctx &ctx) {
+    auto &m = rt_.memory();
+    const auto it = callbacks_.find(exit_callback_);
+    if (it == callbacks_.end()) return finish(ctx, kErrorUnknownCallback);
+    const std::uint32_t arg = it->second.common;
+    if (!m.contains(arg - 8u, 8u)) return finish(ctx, kErrorIllegalAddr);
+    if (m.load32(arg - 8u) >= 4u) return finish(ctx, kErrorIllegalArgument);
+    const std::uint32_t params = m.load32(arg - 4u);
+    if ((params & 3u) != 0u || !m.contains(params, 12u)) return finish(ctx, kErrorIllegalAddr);
+    if (m.load32(params) < 12u) return finish(ctx, 0x800201BCu); // ILLEGAL_SIZE
+    m.store32(params + 4u, 0u);
+    m.store32(params + 8u, 0xFFFFFFFFu);
+    finish(ctx, 0u);
+}
+
 void Kernel::sceKernelRegisterExitCallback(Ctx &ctx) {
     const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (!callbacks_.contains(uid)) return finish(ctx, kErrorIllegalArgument);
+    // Older SDKs accept an unknown callback.
+    if (!callbacks_.contains(uid)) return finish(ctx, sdk_version_ >= 0x03090500u ? kErrorIllegalArgument : 0u);
     exit_callback_ = uid;
     finish(ctx, 0u);
 }

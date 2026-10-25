@@ -85,6 +85,7 @@ std::uint64_t Kernel::earliest_vtimer() const {
 }
 
 void Kernel::sceKernelCreateVTimer(Ctx &ctx) {
+    if (in_interrupt()) return finish(ctx, err::kIllegalContext);
     if (ctx.gpr[4] == 0u) return finish(ctx, err::kError);
     const std::int32_t uid = new_uid();
     VTimer timer;
@@ -95,6 +96,7 @@ void Kernel::sceKernelCreateVTimer(Ctx &ctx) {
 }
 
 void Kernel::sceKernelDeleteVTimer(Ctx &ctx) {
+    if (in_interrupt()) return finish(ctx, err::kIllegalContext);
     finish(ctx, vtimers_.erase(static_cast<std::int32_t>(ctx.gpr[4])) != 0u ? 0u : err::kUnknownVtid);
 }
 

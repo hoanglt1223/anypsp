@@ -497,6 +497,7 @@ private:
     void sceKernelGetCallbackCount(Ctx &ctx);
     void sceKernelReferCallbackStatus(Ctx &ctx);
     void sceKernelRegisterExitCallback(Ctx &ctx);
+    void LoadExecForUser_362A956B(Ctx &ctx);
     std::map<std::int32_t, Callback> callbacks_;
     std::int32_t exit_callback_{};
     bool cb_call_{};
@@ -601,6 +602,8 @@ private:
     void sceKernelGetThreadmanIdType(Ctx &ctx);
     void sceKernelGetThreadmanIdList(Ctx &ctx);
     bool dispatch_enabled_{true};
+    // Threads switch only with dispatch and interrupts both enabled.
+    [[nodiscard]] bool dispatch_ok() const noexcept { return dispatch_enabled_ && interrupts_enabled_; }
     std::int32_t loader_uid_{-1}; // the thread boot() made to run module_start
     // kernel_sync.cpp
     void install_sync();

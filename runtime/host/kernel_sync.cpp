@@ -239,7 +239,7 @@ void Kernel::sceKernelWaitEventFlag(Ctx &ctx) {
     const std::uint32_t bits = ctx.gpr[5], mode = ctx.gpr[6], out = ctx.gpr[7], timeout = ctx.gpr[8];
     if ((mode & ~kEventWaitKnown) != 0u) return finish(ctx, err::kIllegalMode);
     if (bits == 0u) return finish(ctx, err::kEvfIllegalPattern);
-    if (!dispatch_enabled_) return finish(ctx, err::kCanNotWait);
+    if (!dispatch_ok()) return finish(ctx, err::kCanNotWait);
     const auto it = event_flags_.find(uid);
     if (it == event_flags_.end()) return finish(ctx, err::kUnknownEvfid);
     Thread *self = current();

@@ -460,7 +460,7 @@ void Kernel::sceKernelWaitThreadEnd(Ctx &ctx) {
     const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
     const std::uint32_t timeout = ctx.gpr[5];
     if (uid == 0 || uid == current_uid_) return finish(ctx, err::kIllegalThid);
-    if (!dispatch_enabled_) return finish(ctx, err::kCanNotWait);
+    if (!dispatch_ok()) return finish(ctx, err::kCanNotWait);
     Thread *target = find_thread(uid);
     if (target == nullptr) return finish(ctx, err::kUnknownThid);
     if (target->state == ThreadState::Dormant) return finish(ctx, static_cast<std::uint32_t>(target->exit_status));

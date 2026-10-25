@@ -234,7 +234,7 @@ void Kernel::msgpipe_transfer(Ctx &ctx, bool send, bool poll) {
     if ((size & 0x80000000u) != 0u) return finish(ctx, err::kIllegalAddr);
     if (size != 0u && !m.contains(address, 1u)) return finish(ctx, err::kIllegalAddr);
     if (mode != kWaitAsap && mode != kWaitFull) return finish(ctx, err::kIllegalMode);
-    if (!poll && !dispatch_enabled_) return finish(ctx, err::kCanNotWait);
+    if (!poll && !dispatch_ok()) return finish(ctx, err::kCanNotWait);
     if (!msgpipes_.contains(uid)) return finish(ctx, err::kUnknownMppid);
 
     bool woke = false, wait = false;

@@ -109,7 +109,9 @@ void Kernel::sceKernelCreateTlspl(Ctx &ctx) {
     if (pool.memory_block < 0) return finish(ctx, err::kNoMemory);
     pool.base = blocks_.at(pool.memory_block).address;
     pool.owners.assign(count, 0);
-    const std::int32_t uid = new_uid();
+    // The PSP's ids carry the pool index in bits 3-6, which sceKernelGetTlsAddr relies on.
+    std::int32_t uid = new_uid();
+    while ((static_cast<std::uint32_t>(uid >> 3) & 15u) != index) uid = new_uid();
     tlspls_[uid] = std::move(pool);
     finish(ctx, static_cast<std::uint32_t>(uid));
 }
@@ -138,9 +140,9 @@ void Kernel::sceKernelFreeTlspl(Ctx &ctx) {
 
 void Kernel::sceKernelGetTlsAddr(Ctx &ctx) {
     auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (!dispatch_enabled_) return finish(ctx, 0u);
+    if (!dispatch_ok()) return finish(ctx, 0u);
     if (!tlspls_.contains(uid)) {
-        // An unknown id is looked up by the pool index in its bits 3-6.
+        // An unknown id is looked up by the pool index in its bits 3-6 (pool uids are made to match).
         const auto index = static_cast<std::uint32_t>(uid >> 3) & 15u;
         const auto found = std::find_if(tlspls_.begin(), tlspls_.end(), [index](const auto &entry) { return entry.second.index == index; });
         if (uid < 0 || found == tlspls_.end()) return finish(ctx, 0u);
@@ -165,7 +167,8 @@ void Kernel::sceKernelAllocateTlspl(Ctx &ctx) {
         return ((pointer | (pointer + 4u)) & 0x80000000u) != 0u || (pointer != 0u && !m.contains(pointer, 4u));
     };
     if (out == 0u || bad(out) || bad(timeout)) return finish(ctx, err::kIllegalAddr);
-    if (!dispatch_enabled_) return finish(ctx, err::kCanNotWait);
+    if (in_interrupt()) return finish(ctx, err::kIllegalContext);
+    if (!dispatch_ok()) return finish(ctx, err::kCanNotWait);
     const auto it = tlspls_.find(uid);
     if (it == tlspls_.end()) return finish(ctx, err::kUnknownTlsplId);
     if (const std::uint32_t address = tlspl_allocate(it->second, current_uid_); address != 0u) {
