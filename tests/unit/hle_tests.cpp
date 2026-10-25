@@ -106,6 +106,37 @@ TEST_CASE("__sceSasSetNoise validates voice and frequency") {
     CHECK(h.call("sceSasCore", 0xB7660A23u, kScratch, 32u, 1u) == 0x80420010u);
 }
 
+TEST_CASE("__sceSasCoreWithMix scales the buffer by its volumes and adds the voices at full level") {
+    Hle h;
+    auto &m = h.rt.memory();
+    constexpr std::uint32_t kOut = kScratch + 0x1000u, kGrain = 64u;
+    auto fill = [&](std::int16_t value) {
+        for (std::uint32_t i = 0; i < kGrain * 2u; ++i) m.store16(kOut + i * 2u, static_cast<std::uint16_t>(value));
+    };
+    auto at = [&](std::uint32_t i) { return static_cast<std::int16_t>(m.load16(kOut + i * 2u)); };
+    CHECK(h.call("sceSasCore", 0x42778A9Fu, kScratch, kGrain, 32u, 0u) == 0u);
+    fill(1000);
+    CHECK(h.call("sceSasCore", 0x50A14DFCu, kScratch, kOut, 0x800u, 0x1000u) == 0u);
+    CHECK(at(0u) == 500);
+    CHECK(at(1u) == 1000);
+
+    // A noise voice at full volume with an instant attack: volume 0 drops the old
+    // buffer contents but keeps the voice.
+    CHECK(h.call("sceSasCore", 0xB7660A23u, kScratch, 0u, 63u) == 0u);
+    CHECK(h.call("sceSasCore", 0x440CA7D8u, kScratch, 0u, 0x1000u, 0x1000u) == 0u);
+    CHECK(h.call("sceSasCore", 0xCBCD4F79u, kScratch, 0u, 0x000Fu, 0x1FC0u) == 0u);
+    CHECK(h.call("sceSasCore", 0x76F01ACAu, kScratch, 0u) == 0u);
+    fill(1000);
+    CHECK(h.call("sceSasCore", 0x50A14DFCu, kScratch, kOut, 0u, 0u) == 0u);
+    bool voice_heard = false, old_kept = true;
+    for (std::uint32_t i = kGrain; i < kGrain * 2u; ++i) {
+        voice_heard = voice_heard || at(i) != 0;
+        old_kept = old_kept && at(i) == 1000;
+    }
+    CHECK(voice_heard);
+    CHECK(!old_kept);
+}
+
 TEST_CASE("sceIoRename moves memory stick files and refuses existing targets") {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "anypsp-hle-rename";

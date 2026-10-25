@@ -378,8 +378,10 @@ void Kernel::install_sas() {
     add(0xD5A229C9u, "__sceSasRevEVOL", [](Ctx &) { return 0u; });
     add(0xF983B186u, "__sceSasRevVON", [](Ctx &) { return 0u; });
 
-    // Mixes one grain of every playing voice; `accumulate` adds to the buffer
-    // (scaled by the given volumes) instead of overwriting it.
+    // Mixes one grain of every playing voice; `accumulate` scales the buffer's
+    // existing samples by the given volumes and adds the voices at full level
+    // (PPSSPP's WriteMixedOutput, JPCSP's synthesizeWithMix): volume 0 discards
+    // the old contents, it does not mute the voices.
     auto render = [&sas, &m](std::uint32_t out, bool accumulate, std::int32_t out_left, std::int32_t out_right) {
         const std::uint32_t frames = sas.grain;
         sas.mix.assign(static_cast<std::size_t>(frames) * 2u, 0);
@@ -415,7 +417,7 @@ void Kernel::install_sas() {
             if (accumulate) {
                 std::int16_t existing;
                 std::memcpy(&existing, dst + i * 2u, 2u);
-                value = existing + ((value * ((i & 1u) == 0u ? out_left : out_right)) >> 12);
+                value += (existing * ((i & 1u) == 0u ? out_left : out_right)) >> 12;
             }
             const auto clamped = static_cast<std::int16_t>(std::clamp(value, -32768, 32767));
             std::memcpy(dst + i * 2u, &clamped, 2u);
