@@ -14,6 +14,7 @@ struct GlVertex {
     float u, v;         // texels
     std::uint8_t r, g, b, a;
     float q{1.0f};      // projective texture divisor: the texel is (u, v) / q per pixel
+    float fog{255.0f};  // fog factor 0 (all fog colour) .. 255 (none), already in the GE's 8 bits
 };
 
 // A rectangle copied by a GE block transfer.
@@ -35,11 +36,12 @@ struct GlDrawState {
     bool stencil{};
     std::uint32_t stencil_func{}, stencil_ops{}; // raw STST / SOP registers
     std::uint32_t mask_rgb{}, mask_alpha{};
-    // Fog: factor = w * fog_w + fog_bias per vertex (w is the clip w, a fixed
-    // multiple of the eye-space depth under a perspective projection).
+    // Fog mixes in fog_color by each vertex's GlVertex::fog.
     bool fog{};
-    float fog_w{}, fog_bias{};
     std::uint32_t fog_color{};
+    // Dithering adds dither_rows[y & 3] >> ((x & 3) * 4) (signed 4 bits) to each pixel's colour.
+    bool dither{};
+    std::uint32_t dither_rows[4]{};
     bool texture{};
     std::uint32_t tex_func{};
     bool tex_alpha{}, tex_double{};

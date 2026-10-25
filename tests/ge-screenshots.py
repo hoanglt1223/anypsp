@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Run the pspautotests GE tests that ship a reference screenshot and compare.
 
-  python tests/ge-screenshots.py [--runner exe] [--renderer gl|soft] [--max-mse x] [--out dir]
-                                 [--json file] [filter ...]
+  python tests/ge-screenshots.py [--runner exe] [--renderer gl|vulkan|soft] [--msaa n] [--max-mse x]
+                                 [--out dir] [--json file] [--against dir] [filter ...]
 
-Each program runs headless in anypsp-interp-gpu (hidden GL context, no audio); the
+Each program runs headless in anypsp-interp-gpu (hidden GL context or Vulkan, no audio); the
 picture at its emulator: screenshot request is compared with <test>.expected.bmp the
 way PPSSPP's headless does (mean squared error over RGB of the 480x272 display, alpha
 ignored). A test passes when the MSE is at most --max-mse (default 0, PPSSPP's default).
 Text output is compared too, like tests/conformance.py but without the [r]/[x] marker
 that starts each line (it records whether the kernel rescheduled, not GE behaviour).
+--against dir also compares each picture with the same test's picture of an earlier run in that
+--out folder (for example Vulkan against GL) and reports the MSE between the two.
 Exit code 1 when any selected test fails, 77 when the corpus is missing.
 """
 
@@ -108,7 +110,7 @@ def lines(text):
     return result
 
 
-def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse, coherent=None):
+def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse, coherent=None, msaa=1, against=None):
     name = program.relative_to(TESTS).with_suffix("").as_posix()
     work = out_dir / name.replace("/", "_")
     work.mkdir(parents=True, exist_ok=True)
@@ -117,8 +119,12 @@ def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse, cohere
         stale.unlink(missing_ok=True)
     try:
         result = subprocess.run([str(runner), str(program), "--renderer", renderer, "--frames", str(frames),
-                                 "--output", str(text), "--screenshot", str(shot)]
-                                + (["--coherent", coherent] if coherent else []),
+                                 "--output", str(text), "--screenshot", str(shot),
+                                 # The test's folder is its disc, so files it loads by relative path are found.
+                                 "--disc", str(program.parent), "--guest-path", f"disc0:/{program.name}"]
+                                + (["--coherent", coherent] if coherent else [])
+                                + (["--msaa", str(msaa), "--vk-cache", str(out_dir / "vulkan-pipelines.bin")]
+                                   if renderer == "vulkan" else []),
                                 capture_output=True, text=True, cwd=work, timeout=timeout)
         log = (result.stdout + result.stderr).strip().splitlines()
     except subprocess.TimeoutExpired:
@@ -131,6 +137,11 @@ def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse, cohere
         if (width, height) != (WIDTH, HEIGHT):
             raise ValueError(f"{shot}: {width}x{height}, compare needs 480x272 (scale 1)")
         record["mse"] = round(mse(actual, expected), 4)
+        if against is not None:
+            other = sorted((against / work.name).glob("actual-*.png"))
+            if other:
+                _, _, theirs = read_png(other[0])
+                record["against"] = round(mse(actual, theirs), 4)
     expected_text = program.with_suffix(".expected")
     want = lines(expected_text.read_text(encoding="utf-8", errors="replace")) if expected_text.exists() else []
     got = lines(text.read_text(encoding="utf-8", errors="replace")) if text.exists() else []
@@ -142,8 +153,10 @@ def run_one(runner, renderer, program, frames, timeout, out_dir, max_mse, cohere
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("filters", nargs="*")
-    parser.add_argument("--runner", type=pathlib.Path, default=ROOT / "out" / "msvc" / "Release" / "anypsp-interp-gpu.exe")
-    parser.add_argument("--renderer", choices=("gl", "soft"), default="gl")
+    parser.add_argument("--runner", type=pathlib.Path)
+    parser.add_argument("--renderer", choices=("gl", "vulkan", "soft"), default="gl")
+    parser.add_argument("--msaa", type=int, default=1, help="Vulkan samples per pixel")
+    parser.add_argument("--against", type=pathlib.Path, help="--out folder of an earlier run to compare pictures with")
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--jobs", type=int, default=4)
@@ -153,7 +166,12 @@ def main():
     parser.add_argument("--coherent", choices=("lazy", "1", "0"), help="GL VRAM coherence (runner default: lazy)")
     args = parser.parse_args()
     args.out = args.out.resolve()
+    if args.runner is None:
+        candidates = [ROOT / "out" / "msvc" / "Release" / "anypsp-interp-gpu.exe", ROOT / "out" / "linux" / "anypsp-interp-gpu"]
+        args.runner = next((c for c in candidates if c.exists()), candidates[0])
     args.runner = args.runner.resolve()
+    if args.against is not None:
+        args.against = args.against.resolve()
     if not TESTS.exists():
         print("corpus not fetched; run python tests/fetch-corpus.py")
         return 77
@@ -167,9 +185,11 @@ def main():
         return 77
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda p: run_one(args.runner, args.renderer, p, args.frames, args.timeout, args.out,
-                                                  args.max_mse, args.coherent), programs))
+                                                  args.max_mse, args.coherent, args.msaa, args.against), programs))
     for r in results:
         mse_text = "no screenshot" if r["mse"] is None else f"mse {r['mse']:.4f}"
+        if "against" in r:
+            mse_text += f" (vs {args.against.name}: {r['against']:.4f})"
         print(f"{'PASS' if r['passed'] else 'FAIL'} {r['test']}: {mse_text}, text {'ok' if r['text_matches'] else 'differs'}"
               f" ({r['outcome']})")
     passed = sum(r["passed"] for r in results)

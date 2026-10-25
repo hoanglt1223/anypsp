@@ -362,6 +362,7 @@ void Ge::immediate_vertex(std::uint32_t data) {
     v.u = cmd_float(regs_[0xF3]) * tex_.tw;
     v.v = cmd_float(regs_[0xF4]) * tex_.th;
     v.q = cmd_float(regs_[0xF5]);
+    v.fog = static_cast<float>(regs_[0xF8] & 0xFFu);
     imm_vertices_.push_back(v);
     if (prim != 7u) {
         imm_prim_ = prim;
@@ -380,14 +381,17 @@ void Ge::flush_immediate() {
         return;
     }
     // The first vertex's flags replace shading, culling and texturing; positions are in drawing space.
-    constexpr std::uint32_t kSaved[] = {kVertexType, kShadeMode, kCullEnable, kCull, kTextureEnable};
+    constexpr std::uint32_t kSaved[] = {kVertexType, kShadeMode, kCullEnable, kCull, kTextureEnable, 0x20u};
     std::uint32_t saved[std::size(kSaved)];
     for (std::size_t i = 0; i < std::size(kSaved); ++i) saved[i] = regs_[kSaved[i]];
+    // Fog comes from the vertices, with the immediate fog flag, outside through mode only.
+    imm_fog_ = (saved[0] & (1u << 23u)) == 0u && (imm_flags_ & 0x00400000u) != 0u;
     regs_[kVertexType] = 1u << 23u;
     regs_[kShadeMode] = (imm_flags_ >> 18u) & 1u;
     regs_[kCullEnable] = (imm_flags_ >> 19u) & 1u;
     regs_[kCull] = (imm_flags_ >> 20u) & 1u;
     regs_[kTextureEnable] = (imm_flags_ >> 21u) & 1u;
+    regs_[0x20] = (imm_flags_ >> 23u) & 1u; // dither
     state_dirty_ = true;
     if (scratch_vertices_.size() < count) scratch_vertices_.resize(count);
     if (scratch_indices_.size() < count) scratch_indices_.resize(count);
@@ -410,6 +414,7 @@ void Ge::flush_immediate() {
         strip_parity_ = saved_parity;
     }
     for (std::size_t i = 0; i < std::size(kSaved); ++i) regs_[kSaved[i]] = saved[i];
+    imm_fog_ = false;
     state_dirty_ = true;
 }
 
@@ -483,6 +488,20 @@ void Ge::compute_layout() {
     l.size = (off + biggest - 1u) & ~(biggest - 1u);
     layout_ = l;
 }
+
+namespace {
+
+// The GE's 8-bit fog factor: min(floor(256 * f), 255), NaN and inf by sign (PPSSPP
+// GPU/Common/TransformCommon.h GEFogFactor, measured on hardware).
+float ge_fog_factor(float f) {
+    const auto bits = std::bit_cast<std::uint32_t>(f);
+    const std::uint32_t exp = bits >> 23u;
+    if ((bits & 0x80000000u) != 0u || exp <= 126u - 8u) return 0.0f;
+    if (exp > 126u) return 255.0f;
+    return static_cast<float>(((bits & 0x007FFFFFu) | 0x00800000u) >> (16u + 126u - exp));
+}
+
+} // namespace
 
 void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
     const Layout &l = layout_;
@@ -614,6 +633,13 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
         }
     }
 
+    // A format without texture coordinates or a normal uses the last ones read, by any draw
+    // (PPSSPP GPU/Software/TransformUnit.cpp, gpu/vertices/carry).
+    if (l.tc != 0u) std::copy(uv, uv + 2, carry_uv_.begin());
+    else std::copy(carry_uv_.begin(), carry_uv_.end(), uv);
+    if (l.nrm != 0u) std::copy(nrm, nrm + 3, carry_normal_.begin());
+    else std::copy(carry_normal_.begin(), carry_normal_.end(), nrm);
+
     if (!has_color) {
         float material[3];
         color24(regs_[kMaterialAmbient], material);
@@ -646,6 +672,13 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
         std::memcpy(normal, skinned_n, sizeof normal);
     }
 
+    if ((regs_[0x1F] & 1u) != 0u) {
+        // (view-space z + FOG1) * FOG2 per vertex.
+        float world_p[3];
+        transform43(world_, model, world_p);
+        const float view_z = view_[2] * world_p[0] + view_[5] * world_p[1] + view_[8] * world_p[2] + view_[11];
+        out.fog = ge_fog_factor((view_z + cmd_float(regs_[0xCD])) * cmd_float(regs_[0xCE]));
+    }
     if (use_wvp_) {
         out.cx = model[0] * wvp_[0] + model[1] * wvp_[4] + model[2] * wvp_[8] + wvp_[12];
         out.cy = model[0] * wvp_[1] + model[1] * wvp_[5] + model[2] * wvp_[9] + wvp_[13];
@@ -672,7 +705,7 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
     out.cz = world[0] * pv_[2] + world[1] * pv_[6] + world[2] * pv_[10] + pv_[14];
     out.cw = world[0] * pv_[3] + world[1] * pv_[7] + world[2] * pv_[11] + pv_[15];
 
-    if (lighting) light_vertex(world, world_n, col);
+    if (lighting) light_vertex(world, world_n, col, has_color);
     out.r = col[0];
     out.g = col[1];
     out.b = col[2];
@@ -709,35 +742,96 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
     out.v = t * tex_h;
 }
 
+namespace {
+
+// PPSSPP GPU/Software/Lighting.cpp, GEMath (GPL-2.0-or-later): the GE's light arithmetic as measured
+// on hardware. A colour channel c enters as 2c + 1; a product of two is >> 10.
+Ge::ColorFactor color_factor(std::uint32_t rgba) {
+    Ge::ColorFactor f;
+    for (int i = 0; i < 4; ++i) f[static_cast<std::size_t>(i)] = static_cast<int>((rgba >> (i * 8)) & 0xFFu) * 2 + 1;
+    return f;
+}
+bool any_rgb(const Ge::ColorFactor &f) { return f[0] > 1 || f[1] > 1 || f[2] > 1; }
+Ge::ColorFactor light_product(const Ge::ColorFactor &a, const Ge::ColorFactor &b) {
+    Ge::ColorFactor r;
+    for (std::size_t i = 0; i < 4; ++i) r[i] = (a[i] * b[i]) >> 10;
+    return r;
+}
+// Scales an 8-bit light colour by a factor f made 8-bit: s = floor(256 f), 0 below 0.
+Ge::ColorFactor light_scale(const Ge::ColorFactor &x, float f) {
+    const int s = f >= 0.0f ? std::min(static_cast<int>(256.0f * std::min(f, 2.0f)), 256) : 0;
+    Ge::ColorFactor r;
+    for (std::size_t i = 0; i < 4; ++i) r[i] = ((x[i] * 2 + 1) * (2 * s + 1)) >> 10;
+    return r;
+}
+float light_pow(float v, float e) {
+    if (e <= 0.0f) return 1.0f;
+    if (!(v > 0.0f)) return v;
+    const auto ix = std::bit_cast<std::int32_t>(v);
+    double y = std::trunc(static_cast<double>(e) * static_cast<double>(ix - 0x3F800000) * (1.0 / 16.0)) * 16.0 + 1065353216.0;
+    y = y >= 0.0 ? std::min(y, 2139095039.0) : 0.0;
+    return std::bit_cast<float>(static_cast<std::int32_t>(y));
+}
+float light_exponent(float e) {
+    if (std::isnan(e)) return std::signbit(e) ? 0.0f : 496.0f;
+    if (e >= 512.0f) return 496.0f;
+    const float r = std::bit_cast<float>(std::bit_cast<std::uint32_t>(e) & 0xFFF80000u);
+    return r <= 0.0f ? 0.0f : r;
+}
+float length3(const float v[3]) { return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); }
+float dot3(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+} // namespace
+
 void Ge::build_light_setup() {
     light_dirty_ = false;
     LightSetup &l = light_;
-    l.update = regs_[kMaterialUpdate];
-    color24(regs_[kMaterialAmbient], l.mat_ambient);
-    color24(regs_[kMaterialDiffuse], l.mat_diffuse);
-    color24(regs_[kMaterialEmissive], l.emissive);
-    color24(regs_[kAmbientColor], l.global);
-    l.alpha = static_cast<float>(regs_[kMaterialAlpha] & 0xFFu);
-    l.global_alpha = static_cast<float>(regs_[kAmbientAlpha] & 0xFFu) / 255.0f;
-    l.count = 0;
+    l = LightSetup{};
+    l.update = regs_[kMaterialUpdate] & 7u;
+    l.emissive = {static_cast<int>(regs_[kMaterialEmissive] & 0xFFu), static_cast<int>((regs_[kMaterialEmissive] >> 8u) & 0xFFu),
+                  static_cast<int>((regs_[kMaterialEmissive] >> 16u) & 0xFFu), 0};
+    l.mat_ambient = color_factor((regs_[kMaterialAmbient] & 0xFFFFFFu) | ((regs_[kMaterialAlpha] & 0xFFu) << 24u));
+    l.mat_diffuse = color_factor(regs_[kMaterialDiffuse] & 0xFFFFFFu);
+    l.mat_specular = color_factor(regs_[0x57] & 0xFFFFFFu);
+    l.base_ambient = color_factor((regs_[kAmbientColor] & 0xFFFFFFu) | ((regs_[kAmbientAlpha] & 0xFFu) << 24u));
+    l.specular_exp = light_exponent(cmd_float(regs_[0x5B]));
+    const float view[3] = {view_[2], view_[5], view_[8]};
+    if (const float len = length3(view); len > 0.0f && std::isfinite(len))
+        for (int k = 0; k < 3; ++k) l.view_dir[k] = view[k] / len;
     for (std::uint32_t i = 0; i < 4u; ++i) {
         if ((regs_[kLightEnable0 + i] & 1u) == 0u) continue;
-        LightSetup::Light &light = l.lights[l.count++];
-        light.type = (regs_[kLightType0 + i] >> 8u) & 3u;
+        LightSetup::Light light;
+        const std::uint32_t type = regs_[kLightType0 + i];
+        light.directional = ((type >> 8u) & 3u) == 0u;
+        light.spot = ((type >> 8u) & 3u) >= 2u;
+        light.powered = (type & 3u) == 2u;
+        light.specular = (type & 3u) == 1u;
+        light.ambient_f = color_factor(regs_[kLightColor0 + i * 3u] & 0xFFFFFFu);
+        light.diffuse_f = color_factor(regs_[kLightColor0 + i * 3u + 1u] & 0xFFFFFFu);
+        light.specular_f = color_factor(regs_[kLightColor0 + i * 3u + 2u] & 0xFFFFFFu);
+        light.ambient = any_rgb(light.ambient_f);
+        light.diffuse = any_rgb(light.diffuse_f);
+        light.specular = light.specular && any_rgb(light.specular_f);
+        if (!light.ambient && !light.diffuse && !light.specular) continue;
         for (std::uint32_t k = 0; k < 3u; ++k) {
             light.pos[k] = cmd_float(regs_[kLightPos0 + i * 3u + k]);
             light.att[k] = cmd_float(regs_[kLightAtt0 + i * 3u + k]);
+            light.spot_dir[k] = cmd_float(regs_[kLightDir0 + i * 3u + k]);
         }
-        if (light.type == 0u) { // directional: normalise once
-            const float len = std::sqrt(light.pos[0] * light.pos[0] + light.pos[1] * light.pos[1] + light.pos[2] * light.pos[2]);
-            if (len > 0.0f) for (float &c : light.pos) c /= len;
+        if (light.directional) { // a zero direction stays zero
+            if (const float len = length3(light.pos); len > 0.0f)
+                for (float &c : light.pos) c /= len;
         }
-        color24(regs_[kLightColor0 + i * 3u], light.ambient);
-        color24(regs_[kLightColor0 + i * 3u + 1u], light.diffuse);
-        for (int k = 0; k < 3; ++k) {
-            light.ambient[k] /= 255.0f;
-            light.diffuse[k] /= 255.0f;
+        if (light.spot) {
+            for (float &c : light.spot_dir)
+                if (!std::isfinite(c)) c = std::isnan(c) ? (std::signbit(c) ? -1.0f : 1.0f) : (c < 0.0f ? -1.0f : 1.0f);
+            const float len2 = dot3(light.spot_dir, light.spot_dir);
+            light.spot_rsqrt = len2 > 0.0f && std::isfinite(len2) ? 1.0f / std::sqrt(len2) : 0.0f;
+            light.cutoff = cmd_float(regs_[0x8Bu + i]);
+            if (std::isnan(light.cutoff) && std::signbit(light.cutoff)) light.cutoff = 0.0f;
+            light.spot_exp = light_exponent(cmd_float(regs_[0x87u + i]));
         }
+        l.lights[l.count++] = light;
     }
 }
 
@@ -752,40 +846,68 @@ void Ge::build_tex_setup() {
     tex_.th = static_cast<float>(1u << std::min((regs_[kTexSize0] >> 8u) & 0xFu, 9u));
 }
 
-void Ge::light_vertex(const float pos[3], const float normal[3], float color[4]) const {
+void Ge::light_vertex(const float pos[3], const float normal[3], float color[4], bool has_color) const {
     const LightSetup &setup = light_;
-    const float *mat_ambient = (setup.update & 1u) != 0u ? color : setup.mat_ambient;
-    const float *mat_diffuse = (setup.update & 2u) != 0u ? color : setup.mat_diffuse;
-    const float alpha = (setup.update & 1u) != 0u ? color[3] : setup.alpha;
+    const std::uint32_t update = has_color ? setup.update : 0u;
+    ColorFactor vertex{};
+    for (std::size_t i = 0; i < 4; ++i) vertex[i] = static_cast<int>(clamp255(color[i])) * 2 + 1;
+    const ColorFactor &mac = (update & 1u) != 0u ? vertex : setup.mat_ambient;
+    const ColorFactor &mdc = (update & 2u) != 0u ? vertex : setup.mat_diffuse;
+    const ColorFactor &msc = (update & 4u) != 0u ? vertex : setup.mat_specular;
+    const bool ambient_on = (update & 1u) != 0u || any_rgb(setup.mat_ambient);
+    const bool diffuse_on = (update & 2u) != 0u || any_rgb(setup.mat_diffuse);
+    const bool specular_on = (update & 4u) != 0u || any_rgb(setup.mat_specular);
 
-    float n[3] = {normal[0], normal[1], normal[2]};
-    const float len2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
-    if (len2 > 0.0f) {
-        const float inv = 1.0f / std::sqrt(len2);
-        for (float &c : n) c *= inv;
-    }
-    float out[3];
-    for (int k = 0; k < 3; ++k) out[k] = setup.emissive[k] + setup.global[k] * mat_ambient[k] * (1.0f / 255.0f);
-    for (int i = 0; i < setup.count; ++i) {
-        const LightSetup::Light &light = setup.lights[i];
-        float l[3];
-        float attenuation = 1.0f;
-        if (light.type == 0u) {
-            l[0] = light.pos[0]; l[1] = light.pos[1]; l[2] = light.pos[2];
-        } else {
+    ColorFactor sum = light_product(mac, setup.base_ambient);
+    for (std::size_t i = 0; i < 4; ++i) sum[i] += setup.emissive[i];
+    // The normal stays as the world matrix leaves it; dot products are scaled by its reciprocal length.
+    const float n_len2 = dot3(normal, normal);
+    const float n_rsqrt = n_len2 > 0.0f ? 1.0f / std::sqrt(n_len2) : 0.0f;
+    auto add = [&sum](const ColorFactor &c) {
+        for (std::size_t i = 0; i < 4; ++i) sum[i] += c[i];
+    };
+    for (int li = 0; li < setup.count; ++li) {
+        const LightSetup::Light &light = setup.lights[li];
+        float l[3] = {light.pos[0], light.pos[1], light.pos[2]};
+        float att = 1.0f, spot = 1.0f;
+        if (!light.directional) {
             for (int k = 0; k < 3; ++k) l[k] = light.pos[k] - pos[k];
-            const float d = std::sqrt(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
-            const float denom = light.att[0] + light.att[1] * d + light.att[2] * d * d;
-            attenuation = denom > 0.0f ? std::min(1.0f / denom, 1.0f) : 1.0f;
+            const float d2 = dot3(l, l), d = std::sqrt(d2);
             if (d > 0.0f) for (float &c : l) c /= d;
+            else { l[0] = 0.0f; l[1] = 0.0f; l[2] = 1.0f; }
+            const float den = light.att[0] + light.att[1] * d + light.att[2] * d2;
+            att = den > 0.0f ? 1.0f / den : 0.0f;
+            if (!(att > 0.0f)) att = 0.0f;
+            else if (att > 1.0f) att = 1.0f;
         }
-        const float diffuse = std::max(0.0f, n[0] * l[0] + n[1] * l[1] + n[2] * l[2]);
-        for (int k = 0; k < 3; ++k)
-            out[k] += attenuation * (light.ambient[k] * mat_ambient[k] + light.diffuse[k] * mat_diffuse[k] * diffuse);
+        if (light.spot) {
+            float raw = dot3(light.spot_dir, l) * light.spot_rsqrt;
+            if (std::isnan(raw)) raw = std::signbit(raw) ? 0.0f : 1.0f;
+            spot = raw >= light.cutoff ? light_pow(raw, light.spot_exp) : 0.0f;
+            if (std::isnan(spot)) spot = 0.0f;
+        }
+        auto falloff = [&](ColorFactor c) {
+            if (att < 1.0f) c = light_scale(c, att);
+            if (spot < 1.0f) c = light_scale(c, spot);
+            return c;
+        };
+        if (light.ambient && ambient_on) add(falloff(light_product(light.ambient_f, mac)));
+        float diffuse = 0.0f;
+        if (light.diffuse || light.specular) {
+            diffuse = dot3(l, normal) * n_rsqrt;
+            if (light.powered) diffuse = light_pow(diffuse, setup.specular_exp);
+        }
+        if (light.diffuse && diffuse_on) add(falloff(light_scale(light_product(light.diffuse_f, mdc), diffuse)));
+        if (light.specular && specular_on && diffuse >= 0.0f) {
+            float h[3] = {l[0] + setup.view_dir[0], l[1] + setup.view_dir[1], l[2] + setup.view_dir[2]};
+            if (const float len = length3(h); len > 0.0f) for (float &c : h) c /= len;
+            else { h[0] = 0.0f; h[1] = 0.0f; h[2] = 1.0f; }
+            const float specular = light_pow(dot3(h, normal) * n_rsqrt, setup.specular_exp);
+            // Separate specular colour (LIGHTMODE) is not kept apart: it is added here too.
+            if (specular > 0.0f) add(falloff(light_scale(light_product(light.specular_f, msc), specular)));
+        }
     }
-    for (int k = 0; k < 3; ++k) color[k] = clamp255(out[k]);
-    // Like the colour, the alpha is global ambient x material ambient (emissive adds no alpha).
-    color[3] = clamp255(alpha * setup.global_alpha);
+    for (std::size_t i = 0; i < 4; ++i) color[i] = static_cast<float>(std::clamp(sum[i], 0, 255));
 }
 
 Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
@@ -812,6 +934,7 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
     v.b = cv.b;
     v.a = cv.a;
     v.q = cv.q;
+    v.fog = cv.fog;
     return v;
 }
 
@@ -876,6 +999,8 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         ~GenerationBump() { if (active) ++generation; }
     } bump{vram_generation_, gl_ == nullptr};
     const std::uint32_t decoded = decode_draw(count);
+    // Vertices without a position are culled whole (gpu/primitives/points, invalidprim).
+    if (layout_.pos == 0u) return;
     // Continuations (type 7) join the previous primitive's leftovers and clears cover the
     // target whatever their vertices: both are drawn the same into the two pictures.
     if (interp_ != nullptr && type != 7u && (regs_[kClearMode] & 1u) == 0u) emit_with_in_between(type, count, decoded);
@@ -993,6 +1118,11 @@ std::uint32_t Ge::decode_draw(std::uint32_t count) {
     if (shared) {
         for (std::uint32_t i = 0; i < count; ++i) indices[i] -= min_index;
         for (std::uint32_t i = 0; i < decoded; ++i) decode_vertex(decode_base + i * stride, vertices[i]);
+        // The next draw carries the last vertex in draw order, not in decode order.
+        if (count != 0u) {
+            ClipVertex last;
+            decode_vertex(decode_base + indices[count - 1u] * stride, last);
+        }
     } else {
         // Plain or sparsely indexed: one decode per position.
         for (std::uint32_t i = 0; i < count; ++i) {
@@ -1092,9 +1222,9 @@ int curve_eval_color(const int d[4], const int a[6]) {
     return color_lerp(color_lerp(l0, l1, a[3]), color_lerp(l1, l2, a[4]), a[5]);
 }
 
-constexpr int kCurveFloats = 7; // cx, cy, cz, cw, u, v, q
+constexpr int kCurveFloats = 8; // cx, cy, cz, cw, u, v, q, fog
 float &curve_float(Ge::ClipVertex &v, int j) {
-    float *const f[kCurveFloats] = {&v.cx, &v.cy, &v.cz, &v.cw, &v.u, &v.v, &v.q};
+    float *const f[kCurveFloats] = {&v.cx, &v.cy, &v.cz, &v.cw, &v.u, &v.v, &v.q, &v.fog};
     return *f[j];
 }
 float curve_float(const Ge::ClipVertex &v, int j) { return curve_float(const_cast<Ge::ClipVertex &>(v), j); }
@@ -1330,7 +1460,7 @@ void Ge::emit_vertices(std::uint32_t type, std::uint32_t count, std::uint32_t de
             const Vertex v = to_screen(cv);
             scratch_screen_[i] = GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
                                           static_cast<std::uint8_t>(clamp255(v.r)), static_cast<std::uint8_t>(clamp255(v.g)),
-                                          static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a)), v.q};
+                                          static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a)), v.q, v.fog};
         }
         const bool flat = (regs_[kShadeMode] & 1u) == 0u;
         // Each decoded_count vertex enters the GL batch once, the first time a kept triangle uses it.
@@ -1486,7 +1616,7 @@ void Ge::draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVerte
             auto lerp = [t](float x, float y) { return x + (y - x) * t; };
             out[out_count++] = ClipVertex{lerp(p.cx, q.cx), lerp(p.cy, q.cy), lerp(p.cz, q.cz), lerp(p.cw, q.cw),
                                           lerp(p.u, q.u), lerp(p.v, q.v), lerp(p.r, q.r), lerp(p.g, q.g),
-                                          lerp(p.b, q.b), lerp(p.a, q.a), lerp(p.q, q.q)};
+                                          lerp(p.b, q.b), lerp(p.a, q.a), lerp(p.q, q.q), lerp(p.fog, q.fog)};
         }
     }
     if (out_count < 3u) return;
@@ -2187,19 +2317,16 @@ void Ge::submit_gl_state() {
         st.mask_rgb = regs_[kMaskRgb] & 0xFFFFFFu;
         st.mask_alpha = regs_[kMaskAlpha] & 0xFFu;
         st.texture = p.texture;
-        // Fog factor = (eye z + FOG1) * FOG2.  With a perspective projection
-        // (bottom row 0, 0, p, 0) the clip w is p * eye z, so the factor is
-        // linear in w and the shader derives it from the w it already has.
-        if ((regs_[0x1F] & 1u) != 0u && !layout_.through && proj_[3] == 0.0f && proj_[7] == 0.0f &&
-            proj_[15] == 0.0f && proj_[11] != 0.0f) {
-            auto finite = [](float v) { return std::isfinite(v) ? v : (std::signbit(v) ? -65535.0f : 65535.0f); };
-            const float end = finite(cmd_float(regs_[0xCD])), scale = finite(cmd_float(regs_[0xCE]));
+        // Fog factors are per vertex (decode_vertex); never in through mode.
+        if (imm_fog_ || ((regs_[0x1F] & 1u) != 0u && !layout_.through)) {
             st.fog = true;
-            st.fog_w = scale / proj_[11];
-            st.fog_bias = end * scale;
             st.fog_color = regs_[0xCF] & 0xFFFFFFu;
         }
     }
+    // Dithering applies in clear mode too.
+    st.dither = (regs_[0x20] & 1u) != 0u;
+    if (st.dither)
+        for (std::uint32_t i = 0; i < 4u; ++i) st.dither_rows[i] = regs_[0xE2u + i] & 0xFFFFu;
     if (st.texture) {
         st.tex_func = p.tex_func;
         st.tex_alpha = p.tex_alpha;
@@ -2249,7 +2376,7 @@ void Ge::emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
         const Vertex &col = flat ? c : v;
         return GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
                         static_cast<std::uint8_t>(clamp255(col.r)), static_cast<std::uint8_t>(clamp255(col.g)),
-                        static_cast<std::uint8_t>(clamp255(col.b)), static_cast<std::uint8_t>(clamp255(col.a)), v.q};
+                        static_cast<std::uint8_t>(clamp255(col.b)), static_cast<std::uint8_t>(clamp255(col.a)), v.q, v.fog};
     };
     gl_->triangle(convert(a), convert(b), convert(c));
 }
@@ -2276,10 +2403,10 @@ void Ge::emit_sprite(const Vertex &a_in, const Vertex &b_in) {
         // Projected texture: s and q follow x, t follows y, divided per pixel; the two
         // off-diagonal corners swap coordinates when the corners are given flipped
         // (PPSSPP GPU/Software/Clipper.cpp AddTriangleRect, RotateUV).
-        GlVertex tl{a_in.x, a_in.y, b.z, 1.0f, a_in.u, a_in.v, r, g, bl, al, a_in.q};
-        GlVertex tr{b_in.x, a_in.y, b.z, 1.0f, b_in.u, a_in.v, r, g, bl, al, b_in.q};
-        GlVertex bl_{a_in.x, b_in.y, b.z, 1.0f, a_in.u, b_in.v, r, g, bl, al, a_in.q};
-        const GlVertex br{b_in.x, b_in.y, b.z, 1.0f, b_in.u, b_in.v, r, g, bl, al, b_in.q};
+        GlVertex tl{a_in.x, a_in.y, b.z, 1.0f, a_in.u, a_in.v, r, g, bl, al, a_in.q, b.fog};
+        GlVertex tr{b_in.x, a_in.y, b.z, 1.0f, b_in.u, a_in.v, r, g, bl, al, b_in.q, b.fog};
+        GlVertex bl_{a_in.x, b_in.y, b.z, 1.0f, a_in.u, b_in.v, r, g, bl, al, a_in.q, b.fog};
+        const GlVertex br{b_in.x, b_in.y, b.z, 1.0f, b_in.u, b_in.v, r, g, bl, al, b_in.q, b.fog};
         if ((a_in.x < b_in.x && a_in.y > b_in.y) || (a_in.x > b_in.x && a_in.y < b_in.y)) {
             std::swap(tr.u, bl_.u);
             std::swap(tr.v, bl_.v);
@@ -2289,10 +2416,10 @@ void Ge::emit_sprite(const Vertex &a_in, const Vertex &b_in) {
         gl_->triangle(tr, br, bl_);
         return;
     }
-    const GlVertex tl{a.x, a.y, b.z, 1.0f, a.u, a.v, r, g, bl, al};
-    const GlVertex tr{b.x, a.y, b.z, 1.0f, b.u, a.v, r, g, bl, al};
-    const GlVertex bl_{a.x, b.y, b.z, 1.0f, a.u, b.v, r, g, bl, al};
-    const GlVertex br{b.x, b.y, b.z, 1.0f, b.u, b.v, r, g, bl, al};
+    const GlVertex tl{a.x, a.y, b.z, 1.0f, a.u, a.v, r, g, bl, al, 1.0f, b.fog};
+    const GlVertex tr{b.x, a.y, b.z, 1.0f, b.u, a.v, r, g, bl, al, 1.0f, b.fog};
+    const GlVertex bl_{a.x, b.y, b.z, 1.0f, a.u, b.v, r, g, bl, al, 1.0f, b.fog};
+    const GlVertex br{b.x, b.y, b.z, 1.0f, b.u, b.v, r, g, bl, al, 1.0f, b.fog};
     gl_->triangle(tl, tr, bl_);
     gl_->triangle(tr, br, bl_);
 }

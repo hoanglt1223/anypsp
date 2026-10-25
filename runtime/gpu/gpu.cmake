@@ -24,6 +24,7 @@ FetchContent_MakeAvailable(SDL3)
 set(ANYPSP_GPU_DIR ${CMAKE_CURRENT_LIST_DIR})
 add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/../host/ge_gl.cpp
+    ${ANYPSP_GPU_DIR}/../host/ge_surfaces.cpp
     ${ANYPSP_GPU_DIR}/gl_api.cpp
     ${ANYPSP_GPU_DIR}/gl_host.cpp
     ${ANYPSP_GPU_DIR}/in_between.cpp
@@ -56,6 +57,7 @@ foreach(asset "regular_font;fonts/NotoSans-Regular.ttf" "bold_font;fonts/NotoSan
 endforeach()
 target_compile_definitions(anypsp_gpu PUBLIC ANYPSP_GL_DESKTOP)
 target_link_libraries(anypsp_gpu PUBLIC anypsp_host SDL3::SDL3-static)
+include(${ANYPSP_GPU_DIR}/vulkan/vulkan.cmake)
 if(MSVC)
     target_compile_options(anypsp_gpu PRIVATE /EHsc /permissive- /W3)
     target_compile_definitions(anypsp_gpu PRIVATE _CRT_SECURE_NO_WARNINGS)

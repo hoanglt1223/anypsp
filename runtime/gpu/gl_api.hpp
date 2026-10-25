@@ -86,6 +86,10 @@
     X(UNIFORM2F, glUniform2f)                                                                                          \
     X(UNIFORM2I, glUniform2i)                                                                                          \
     X(UNIFORM3F, glUniform3f)                                                                                          \
+    X(UNIFORM4F, glUniform4f)                                                                                          \
+    X(UNIFORM4FV, glUniform4fv)                                                                                        \
+    X(UNIFORM4I, glUniform4i)                                                                                          \
+    X(UNIFORM4IV, glUniform4iv)                                                                                        \
     X(USEPROGRAM, glUseProgram)                                                                                        \
     X(VERTEXATTRIBPOINTER, glVertexAttribPointer)                                                                      \
     X(VIEWPORT, glViewport)
@@ -178,6 +182,10 @@ const char *load_gl(GlProc (*resolve)(const char *name));
 #define glUniform2f anypsp_glUniform2f
 #define glUniform2i anypsp_glUniform2i
 #define glUniform3f anypsp_glUniform3f
+#define glUniform4f anypsp_glUniform4f
+#define glUniform4fv anypsp_glUniform4fv
+#define glUniform4i anypsp_glUniform4i
+#define glUniform4iv anypsp_glUniform4iv
 #define glUseProgram anypsp_glUseProgram
 #define glVertexAttribPointer anypsp_glVertexAttribPointer
 #define glViewport anypsp_glViewport

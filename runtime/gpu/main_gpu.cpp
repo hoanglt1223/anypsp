@@ -17,6 +17,9 @@
 #include "input_map.hpp"
 #include "menu_host.hpp"
 #include "speed.hpp"
+#ifdef ANYPSP_VULKAN
+#include "vk_gpu.hpp"
+#endif
 
 #include "kernel.hpp"
 
@@ -35,6 +38,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -63,7 +67,7 @@ constexpr bool kWindowByDefault = false;
 const char *const kUsage =
     "usage: anypsp-<runner>-gpu <game.iso|disc folder|EBOOT.BIN|module.prx> [--window|--headless] [--fullscreen]\n"
     "         [--mute] [--wav file.wav] [--keymap file.ini] [--write-input file.ini] [--cache dir]\n"
-    "         [--renderer gl|soft] [--scale n] [--coherent lazy|1|0]\n"
+    "         [--renderer gl|vulkan|soft] [--scale n] [--msaa 1|2|4|8] [--vk-cache file|off] [--coherent lazy|1|0]\n"
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
     "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
@@ -78,6 +82,9 @@ const char *const kUsage =
     "anypsp-input.ini next to the program or in the per-user data folder is used. --write-input writes the\n"
     "current bindings to a file and exits. --scale defaults to the input file's Scale (2) in a window.\n"
     "Headless (the default except for anypsp-play): hidden GL context, no sound device, scripted input.\n"
+    "--renderer vulkan draws with Vulkan without any window (headless only; ANYPSP_VK_VALIDATION=1 turns on the\n"
+    "validation layer, ANYPSP_VK_DEVICE=n picks a GPU); --msaa sets its samples per pixel and --vk-cache its\n"
+    "pipeline cache file (default: cache/vulkan-pipelines.bin in the per-user data folder).\n"
     "--wav records the audio output. --frames-dir writes frame_NNNNNN.png every --png-every\n"
     "frames (default 1); --hashes writes '<frame> <hash>' lines for every frame; --screenshot writes the\n"
     "picture at the program's last emulator: screenshot request; --dump writes the last frame.\n"
@@ -166,11 +173,11 @@ std::map<std::string, std::uint32_t> read_hle_stubs(const std::string &path) {
 struct Options {
     std::string module, disc = ".", memstick = ".", feedback, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     std::string renderer = "gl", frames_dir, hashes, screenshot, dump, hle_stubs;
-    std::string wav, keymap, write_input, cache, patches, dialogs, cheats;
+    std::string wav, keymap, write_input, cache, patches, dialogs, cheats, vk_cache;
     std::map<long, std::uint32_t> input;
     std::vector<std::pair<std::string, std::string>> display; // --smoothing ...: display setting overrides
     long frames = 600, png_every = 1;
-    int scale = 1;
+    int scale = 1, msaa = 1;
     pspweb::GeGl::Coherence coherence = pspweb::GeGl::Coherence::Lazy;
     bool window = kWindowByDefault, fullscreen = false, mute = false, deterministic = false;
     bool frames_set = false, scale_set = false, disc_set = false, ms_set = false, guest_set = false;
@@ -238,13 +245,20 @@ Options parse(int argc, char **argv) {
         else if (flag == "--frames") o.frames = parse_positive(flag, value), o.frames_set = true;
         else if (flag == "--png-every") o.png_every = parse_positive(flag, value);
         else if (flag == "--scale") o.scale = static_cast<int>(std::min(parse_positive(flag, value), 8L)), o.scale_set = true;
+        else if (flag == "--msaa") {
+            o.msaa = static_cast<int>(parse_positive(flag, value));
+            if (o.msaa != 1 && o.msaa != 2 && o.msaa != 4 && o.msaa != 8) throw std::invalid_argument("--msaa takes 1, 2, 4 or 8");
+        } else if (flag == "--vk-cache") o.vk_cache = value;
         else if (flag == "--coherent") {
             if (value == "lazy") o.coherence = pspweb::GeGl::Coherence::Lazy;
             else if (value == "1") o.coherence = pspweb::GeGl::Coherence::Full;
             else if (value == "0") o.coherence = pspweb::GeGl::Coherence::Off;
             else throw std::invalid_argument("--coherent takes lazy, 1 or 0");
         } else if (flag == "--renderer") {
-            if (value != "gl" && value != "soft") throw std::invalid_argument("--renderer takes gl or soft");
+            if (value != "gl" && value != "soft" && value != "vulkan") throw std::invalid_argument("--renderer takes gl, vulkan or soft");
+#ifndef ANYPSP_VULKAN
+            if (value == "vulkan") throw std::invalid_argument("this build has no Vulkan renderer");
+#endif
             o.renderer = value;
         } else {
             throw std::invalid_argument("unknown option " + flag);
@@ -253,6 +267,8 @@ Options parse(int argc, char **argv) {
     if (o.module.empty() && o.write_input.empty()) throw std::invalid_argument("missing game or module");
     if (o.renderer == "soft" && o.scale != 1) throw std::invalid_argument("--scale needs --renderer gl");
     if (o.renderer == "soft" && o.window) throw std::invalid_argument("--window needs --renderer gl");
+    if (o.renderer == "vulkan" && o.window) throw std::invalid_argument("--renderer vulkan runs headless only; use --headless");
+    if (o.msaa != 1 && o.renderer != "vulkan") throw std::invalid_argument("--msaa needs --renderer vulkan");
     return o;
 }
 
@@ -338,6 +354,10 @@ int main(int argc, char **argv) {
 
         // Declared before the kernel so the renderer outlives the GE that points at it.
         std::unique_ptr<anypsp::gpu::GlHost> gl;
+#ifdef ANYPSP_VULKAN
+        std::unique_ptr<pspweb::VkHost> vk;
+#endif
+        int render_scale = 1;
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
         if (o.deterministic) kernel->set_deterministic(true);
         // System dialogs wait for the player in a window; scripted headless runs keep auto answers.
@@ -351,14 +371,34 @@ int main(int argc, char **argv) {
             if (o.coherence == pspweb::GeGl::Coherence::Lazy) kernel->track_gpu_vram();
             kernel->ge().set_gl(&gl->renderer());
             std::cout << "[anypsp] GL renderer: " << gl->device() << ", scale " << gl->scale() << "\n";
+            render_scale = gl->scale();
+#ifdef ANYPSP_VULKAN
+        } else if (o.renderer == "vulkan") {
+            pspweb::VkOptions options;
+            options.msaa = o.msaa;
+            if (o.vk_cache != "off")
+                options.pipeline_cache = o.vk_cache.empty() ? (user_dir / "cache" / "vulkan-pipelines.bin").string() : o.vk_cache;
+            const char *validation = std::getenv("ANYPSP_VK_VALIDATION");
+            vk = std::make_unique<pspweb::VkHost>(rt.memory(), o.scale, options,
+                                                   validation != nullptr && std::string_view(validation) == "1");
+            vk->renderer().set_coherence(o.coherence);
+            if (o.coherence == pspweb::GeGl::Coherence::Lazy) kernel->track_gpu_vram();
+            kernel->ge().set_gl(&vk->renderer());
+            render_scale = vk->scale();
+            std::cout << "[anypsp] Vulkan renderer: " << vk->device() << ", scale " << render_scale << ", MSAA "
+                      << vk->renderer().device().samples() << "x\n";
+#endif
         } else {
             std::cout << "[anypsp] software renderer\n";
         }
-        const int width = 480 * (gl ? gl->scale() : 1), height = 272 * (gl ? gl->scale() : 1);
+        const int width = 480 * render_scale, height = 272 * render_scale;
         std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u);
         auto capture = [&] {
             const auto &d = kernel->display();
             if (gl) gl->capture(d.framebuffer, d.stride, d.format, rgba);
+#ifdef ANYPSP_VULKAN
+            else if (vk) vk->renderer().capture(d.framebuffer, d.stride, d.format, rgba);
+#endif
             else kernel->read_framebuffer(rgba.data());
         };
 
@@ -654,6 +694,9 @@ int main(int argc, char **argv) {
                   << static_cast<long>(seconds > 0.0 ? frame / seconds : 0.0) << " fps, " << kernel->display().buffer_changes
                   << " game frames); "
                   << (closed ? "window closed" : running ? "frame limit reached" : "guest stopped: " + kernel->halt_reason()) << "\n";
+#ifdef ANYPSP_VULKAN
+        if (vk) std::cout << "[anypsp] Vulkan: " << vk->renderer().device().pipelines_created() << " pipelines created\n";
+#endif
         g_audio = nullptr;
         if (wav) {
             wav->close();

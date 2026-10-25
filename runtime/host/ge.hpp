@@ -75,6 +75,8 @@ public:
     // Marks guest VRAM bytes as rewritten so cached textures there revalidate.
     void touch_vram(std::uint32_t address, std::uint32_t bytes);
 
+    // A light or material colour as the GE's lighting uses it: 2c + 1 per channel (ge.cpp light_vertex).
+    using ColorFactor = std::array<int, 4>;
     // Vertex formats are public for the file-local curve evaluation in ge.cpp.
     // Drawing-space vertex: pixels, depth 0..65535, texels, colour 0..255.
     struct Vertex {
@@ -83,6 +85,7 @@ public:
         float u{}, v{};
         float r{}, g{}, b{}, a{};
         float q{1.0f};
+        float fog{255.0f}; // fog factor in the GE's 8 bits (255: none)
     };
     // Clip-space vertex (drawing space directly in through mode).
     struct ClipVertex {
@@ -90,6 +93,7 @@ public:
         float u{}, v{};
         float r{}, g{}, b{}, a{};
         float q{1.0f};
+        float fog{255.0f}; // fog factor in the GE's 8 bits (255: none)
     };
 
 private:
@@ -120,8 +124,11 @@ private:
 
     void compute_layout();
     void decode_vertex(std::uint32_t address, ClipVertex &out) const;
+    // Texture coordinates and normal of the last vertex read, for formats without them.
+    mutable std::array<float, 2> carry_uv_{};
+    mutable std::array<float, 3> carry_normal_{0.0f, 0.0f, 1.0f};
     [[nodiscard]] Vertex to_screen(const ClipVertex &cv) const;
-    void light_vertex(const float pos[3], const float normal[3], float color[4]) const;
+    void light_vertex(const float pos[3], const float normal[3], float color[4], bool has_color) const;
 
     void draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c);
     void draw_line(const ClipVertex &a, const ClipVertex &b);
@@ -210,6 +217,7 @@ private:
     // or any other command arrives.
     std::vector<ClipVertex> imm_vertices_;
     std::uint32_t imm_prim_{8}, imm_flags_{};
+    bool imm_fog_{}; // drawing immediate vertices that carry their own fog factor
     // Host view of the current primitive's vertex data (null: use GuestMemory).
     const std::uint8_t *vertex_raw_{};
     std::uint32_t vertex_raw_base_{};
@@ -247,16 +255,20 @@ private:
     std::vector<std::uint32_t> scratch_batch_index_;
     // Lighting and texture-mapping parameters decoded from the registers once
     // per change instead of once per vertex.
+    // Lighting in the GE's arithmetic (light_vertex): colours enter as factors 2c + 1 (8 bits each).
     struct LightSetup {
-        float mat_ambient[3]{}, mat_diffuse[3]{}, emissive[3]{}, global[3]{};
-        float alpha{};
-        float global_alpha{1}; // the global ambient's alpha scales the lit alpha
-        std::uint32_t update{};
+        ColorFactor emissive{}, mat_ambient{}, mat_diffuse{}, mat_specular{}, base_ambient{};
+        bool color_ambient{}, color_diffuse{}, color_specular{}; // material colours taken from the vertex
+        float specular_exp{};
+        float view_dir[3]{0, 0, 1};
         int count{};
         struct Light {
-            std::uint32_t type{};
-            float pos[3]{}, att[3]{}, ambient[3]{}, diffuse[3]{};
+            bool directional{}, spot{}, powered{}, ambient{}, diffuse{}, specular{};
+            ColorFactor ambient_f{}, diffuse_f{}, specular_f{};
+            float pos[3]{}, att[3]{}, spot_dir[3]{};
+            float spot_rsqrt{}, cutoff{}, spot_exp{};
         } lights[4];
+        std::uint32_t update{};
     } light_{};
     struct TexSetup {
         float su{1}, sv{1}, ou{}, ov{}, tw{1}, th{1};
