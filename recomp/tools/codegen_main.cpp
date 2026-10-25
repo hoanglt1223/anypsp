@@ -586,16 +586,28 @@ int generate_auto(const std::filesystem::path &elf_path,
     if (executable_base > program.executable_ranges.front().start)
         throw psprecomp::Error("--unit-origin must not lie above the module's code");
 
+    // Import stubs (two words each) are never guest code here: the registry binds
+    // them to HLE wrappers. Translating one (a call target seeds it as a function)
+    // made it a local dispatch label, so `jal stub` / `jr` to it ran the stub's
+    // placeholder `jr ra` instead of the import.
+    std::set<std::uint32_t> covered_labels = program.covered_labels;
+    for (const auto stub : import_stubs) {
+        covered_labels.erase(stub);
+        covered_labels.erase(stub + 4u);
+    }
+
     // Emit every discovered guest instruction once. Function seeds remain analysis
     // metadata and dispatcher entries, but overlapping CFGs no longer duplicate C++.
-    std::set<std::uint32_t> global_entries = program.covered_entry_labels;
+    std::set<std::uint32_t> global_entries;
+    for (const auto entry : program.covered_entry_labels)
+        if (covered_labels.contains(entry)) global_entries.insert(entry);
     for (const auto &[seed, source] : program.seeds) {
         (void)source;
-        if (program.covered_labels.contains(seed)) global_entries.insert(seed);
+        if (covered_labels.contains(seed)) global_entries.insert(seed);
     }
-    for (const auto pc : program.covered_labels) {
+    for (const auto pc : covered_labels) {
         const std::uint32_t bucket_start = executable_base + ((pc - executable_base) / unit_span_bytes) * unit_span_bytes;
-        if (pc == bucket_start || !program.covered_labels.contains(pc - 4u)) global_entries.insert(pc);
+        if (pc == bucket_start || !covered_labels.contains(pc - 4u)) global_entries.insert(pc);
     }
 
     struct Unit {
@@ -604,7 +616,7 @@ int generate_auto(const std::filesystem::path &elf_path,
         std::set<std::uint32_t> entries;
     };
     std::map<std::uint32_t, Unit> units_by_bucket;
-    for (const auto pc : program.covered_labels) {
+    for (const auto pc : covered_labels) {
         const std::uint32_t bucket = (pc - executable_base) / unit_span_bytes;
         auto &unit = units_by_bucket[bucket];
         unit.bucket = bucket;
@@ -729,7 +741,7 @@ int generate_auto(const std::filesystem::path &elf_path,
            << "  \"emission\": \"single_copy_basic_blocks\",\n"
            << "  \"partitioning\": \"fixed_executable_address_span\",\n"
            << "  \"discovered_function_seeds\": " << program.seeds.size() << ",\n"
-           << "  \"unique_emitted_instructions\": " << program.covered_labels.size() << ",\n"
+           << "  \"unique_emitted_instructions\": " << covered_labels.size() << ",\n"
            << "  \"unique_registered_block_entries\": " << registered_entries << ",\n"
            << "  \"translation_units\": " << units.size() << ",\n"
            << "  \"rewritten_translation_units\": " << rewritten_units << ",\n"
@@ -741,7 +753,7 @@ int generate_auto(const std::filesystem::path &elf_path,
 
     std::cout << "Automatic global codegen completed\n"
               << "  function seeds:    " << program.seeds.size() << "\n"
-              << "  emitted code PCs:  " << program.covered_labels.size() << "\n"
+              << "  emitted code PCs:  " << covered_labels.size() << "\n"
               << "  registered blocks: " << registered_entries << "\n"
               << "  source units:      " << units.size() << "\n"
               << "  rewritten units:   " << rewritten_units << "\n"

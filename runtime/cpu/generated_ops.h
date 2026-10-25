@@ -52,7 +52,15 @@ using u32 = std::uint32_t;
 using Ctx = psprecomp::AllegrexContext;
 using Runtime = psprecomp::Runtime;
 
+// Forced inline when optimising, where stack slots of the inlined ops are shared. Without
+// optimisation (the -O0 / "d" runner builds) every inlined op would keep its own arrays in the
+// generated function's frame, which reached a megabyte and overflowed the stack across chained
+// calls; there the ops stay ordinary calls.
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__OPTIMIZE__)
+#define ANYPSP_GEN_INLINE inline
+#else
 #define ANYPSP_GEN_INLINE PSPRECOMP_CONTEXT_FORCEINLINE
+#endif
 
 // Lanes of a vector register, as in GetVectorRegs / ReadVector.
 constexpr u32 vec_size(u32 op) { return ((op >> 7) & 1u) + ((op >> 14) & 2u) + 1u; }
