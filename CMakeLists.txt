@@ -74,7 +74,7 @@ if(ANYPSP_BUILD_HOST)
     add_library(anypsp_host STATIC
         runtime/host/atrac.cpp runtime/host/devices.cpp runtime/host/font.cpp runtime/host/ge.cpp
         runtime/host/ge_interp.cpp runtime/host/ge_surfaces.cpp runtime/host/ge_worker.cpp runtime/host/io.cpp runtime/host/kernel.cpp runtime/host/kernel_callbacks.cpp runtime/host/kernel_lwmutex.cpp runtime/host/kernel_msgpipe.cpp runtime/host/kernel_objects.cpp runtime/host/kernel_sync.cpp runtime/host/kernel_threads.cpp runtime/host/kernel_tls.cpp runtime/host/kernel_vtimer.cpp runtime/host/modules.cpp
-        runtime/host/mp3.cpp runtime/host/mpeg.cpp runtime/host/net.cpp runtime/host/power.cpp runtime/host/sas.cpp runtime/host/savedata.cpp runtime/host/webfs.cpp)
+        runtime/host/mp3.cpp runtime/host/mpeg.cpp runtime/host/net.cpp runtime/host/osk.cpp runtime/host/power.cpp runtime/host/sas.cpp runtime/host/savedata.cpp runtime/host/webfs.cpp)
     target_include_directories(anypsp_host PUBLIC runtime/host)
     # minimp3 (CC0), header-only, for sceMp3.
     target_include_directories(anypsp_host PRIVATE runtime/third_party/minimp3)
@@ -110,7 +110,7 @@ if(ANYPSP_BUILD_HOST)
         target_link_options(anypsp-interp PRIVATE /STACK:67108864)
     endif()
 
-    add_executable(anypsp_hle_tests tests/unit/main.cpp tests/unit/hle_tests.cpp tests/unit/ge_texture_tests.cpp tests/unit/ge_interp_tests.cpp tests/unit/ge_transform_tests.cpp tests/unit/ge_surfaces_tests.cpp runtime/host/no_generated.cpp
+    add_executable(anypsp_hle_tests tests/unit/main.cpp tests/unit/hle_tests.cpp tests/unit/hle_tests_kernel.cpp tests/unit/ge_texture_tests.cpp tests/unit/ge_interp_tests.cpp runtime/host/no_generated.cpp
         runtime/host/no_modules.cpp runtime/host/no_dynamic_code.cpp)
     target_include_directories(anypsp_hle_tests PRIVATE tests/unit)
     target_link_libraries(anypsp_hle_tests PRIVATE anypsp_host anypsp_loader)

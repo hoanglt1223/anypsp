@@ -434,6 +434,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     install_sync();
     install_power();
     install_mp3();
+    install_osk();
     install_msgpipe();
     install_tlspl();
     install_vtimer();

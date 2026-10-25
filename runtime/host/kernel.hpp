@@ -385,6 +385,12 @@ public:
     void dialog_focus(int index);
     void dialog_confirm();
     void dialog_back();
+    // Keyboard dialog: types text from a real keyboard (UTF-8), or deletes the last character.
+    void dialog_type(std::string_view utf8);
+    void dialog_erase();
+    // Texts the keyboard dialog answers with when dialogs are not interactive, one per dialog in
+    // order; without one it answers with the game's initial text.
+    void set_osk_texts(std::vector<std::string> texts) { osk_texts_ = std::move(texts); }
     [[nodiscard]] bool interrupt_pending() const noexcept { return ge_event_pending_.load(std::memory_order_relaxed); }
 
 private:
@@ -433,6 +439,17 @@ private:
     void sceMp3LowLevelInit(Ctx &ctx);
     void sceMp3LowLevelDecode(Ctx &ctx);
     std::shared_ptr<void> mp3_;
+    // osk.cpp
+    void install_osk();
+    [[nodiscard]] std::string read_utf16(std::uint32_t address, std::size_t limit) const;
+    [[nodiscard]] std::uint32_t osk_max_length() const;
+    void osk_write(const std::string &text, bool confirmed);
+    void osk_answer(bool confirmed);
+    void sceUtilityOskInitStart(Ctx &ctx);
+    void sceUtilityOskGetStatus(Ctx &ctx);
+    void sceUtilityOskShutdownStart(Ctx &ctx);
+    UtilityDialog osk_dialog_{};
+    std::vector<std::string> osk_texts_;
     // power.cpp
     void install_power();
     void scePowerRegisterCallback(Ctx &ctx);
@@ -944,10 +961,11 @@ private:
     void install_atrac();    // atrac.cpp: ATRAC3/ATRAC3+ streams (music, speech)
     void install_savedata();
     std::shared_ptr<void> savedata_;
-    enum class DialogOwner : std::uint8_t { None, Message, Savedata };
+    enum class DialogOwner : std::uint8_t { None, Message, Savedata, Keyboard };
     void open_dialog(SystemDialog dialog, DialogOwner owner);
     void close_dialog() noexcept { dialog_owner_ = DialogOwner::None; }
     void dialog_answer(bool confirmed);
+    [[nodiscard]] int dialog_choices() const;
     void msg_dialog_answer(bool confirmed);
     void savedata_answer(bool confirmed);
     void savedata_show(int step);  // savedata.cpp

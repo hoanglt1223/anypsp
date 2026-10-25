@@ -107,6 +107,11 @@ dialog.done.delete	Delete completed.	Đã xóa xong.
 dialog.failed.load	Unable to load data. ({0})	Không thể tải dữ liệu. ({0})
 dialog.failed.save	Unable to save data. ({0})	Không thể lưu dữ liệu. ({0})
 dialog.failed.delete	Unable to delete data. ({0})	Không thể xóa dữ liệu. ({0})
+dialog.key.space	Space	Dấu cách
+dialog.key.delete	Delete	Xóa
+dialog.key.done	Done	Xong
+dialog.type	Type	Gõ
+dialog.cancel	Cancel	Hủy
 tab.cheats	Cheats	Mã gian lận
 cheats.code	1 code	1 mã
 cheats.codes	{0} codes	{0} mã

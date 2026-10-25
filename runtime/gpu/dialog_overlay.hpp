@@ -38,6 +38,10 @@ struct Frame {
     int focus{};          // the list row or the button
     bool cross_confirms{true};
     std::string confirm_hint, back_hint;  // beside the Cross and Circle glyphs at the bottom
+    // Keyboard: the text typed so far and the keys, key_columns to a row (focus is the key).
+    std::string input;
+    std::vector<std::string> keys;
+    int key_columns{};
 };
 
 // "2026-10-24 21:05" in local time; empty for 0.

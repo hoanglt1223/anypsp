@@ -562,16 +562,19 @@ void Kernel::open_dialog(SystemDialog dialog, DialogOwner owner) {
 
 void Kernel::dialog_move(int delta) {
     if (dialog_owner_ == DialogOwner::None || delta == 0) return;
-    const int count = dialog_.kind == SystemDialog::Kind::SaveList ? static_cast<int>(dialog_.items.size())
-                      : dialog_.buttons == SystemDialog::Buttons::YesNo ? 2 : 1;
-    dialog_focus(std::clamp(dialog_.focus + delta, 0, count - 1));
+    dialog_focus(std::clamp(dialog_.focus + delta, 0, dialog_choices() - 1));
 }
 
 void Kernel::dialog_focus(int index) {
     if (dialog_owner_ == DialogOwner::None) return;
-    const int count = dialog_.kind == SystemDialog::Kind::SaveList ? static_cast<int>(dialog_.items.size())
-                      : dialog_.buttons == SystemDialog::Buttons::YesNo ? 2 : 1;
-    if (index >= 0 && index < count) dialog_.focus = index;
+    if (index >= 0 && index < dialog_choices()) dialog_.focus = index;
+}
+
+// What focus can point at: the saves of a list, the keys of a keyboard, else the buttons.
+int Kernel::dialog_choices() const {
+    if (dialog_.kind == SystemDialog::Kind::SaveList) return static_cast<int>(dialog_.items.size());
+    if (dialog_.kind == SystemDialog::Kind::Keyboard) return kOskKeyCount;
+    return dialog_.buttons == SystemDialog::Buttons::YesNo ? 2 : 1;
 }
 
 void Kernel::dialog_confirm() { dialog_answer(true); }
@@ -581,6 +584,7 @@ void Kernel::dialog_answer(bool confirmed) {
     switch (dialog_owner_) {
     case DialogOwner::Message: msg_dialog_answer(confirmed); break;
     case DialogOwner::Savedata: savedata_answer(confirmed); break;
+    case DialogOwner::Keyboard: osk_answer(confirmed); break;
     case DialogOwner::None: break;
     }
 }

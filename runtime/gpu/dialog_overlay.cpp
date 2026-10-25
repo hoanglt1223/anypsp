@@ -122,6 +122,20 @@ Frame make_frame(const pspweb::SystemDialog &d, const anyui::Strings &strings,
     }
     f.focus = d.focus;
     f.back_hint = strings.tr("dialog.back");
+    if (d.kind == pspweb::SystemDialog::Kind::Keyboard) {
+        f.message = d.text;
+        f.input = d.input;
+        f.key_columns = pspweb::kOskColumns;
+        for (int i = 0; i < pspweb::kOskKeyCount; ++i) {
+            if (i == pspweb::kOskSpace) f.keys.push_back(strings.tr("dialog.key.space"));
+            else if (i == pspweb::kOskDelete) f.keys.push_back(strings.tr("dialog.key.delete"));
+            else if (i == pspweb::kOskDone) f.keys.push_back(strings.tr("dialog.key.done"));
+            else f.keys.emplace_back(pspweb::kOskKeys[i]);
+        }
+        f.confirm_hint = strings.tr("dialog.type");
+        f.back_hint = strings.tr("dialog.cancel");
+        return f;
+    }
     if (d.kind == pspweb::SystemDialog::Kind::SaveList) {
         f.list = true;
         f.confirm_hint = strings.tr("dialog.choose");
@@ -192,6 +206,13 @@ void View::render(anyui::Canvas &out, const Frame &f, const anyui::ViewOptions &
         card_w = std::min(W - 2 * margin, 720 * u);
         const float rows_h = static_cast<float>(std::max<std::size_t>(f.rows.size(), 1)) * row_h;
         card_h = std::min(H - 2 * margin, 22 * u + head_h + rows_h + 8 * u + foot_h + 10 * u);
+    } else if (!f.keys.empty()) {
+        card_w = std::min(W - 2 * margin, 640 * u);
+        lines = wrap(regular_, f.message, mpx, card_w - 2 * pad);
+        const float key_rows = static_cast<float>((f.keys.size() + static_cast<std::size_t>(f.key_columns) - 1u) /
+                                                  static_cast<std::size_t>(f.key_columns));
+        card_h = 24 * u + static_cast<float>(lines.size()) * line_h + 14 * u + 40 * u + 14 * u + key_rows * 34 * u + foot_h + 10 * u;
+        card_h = std::min(card_h, H - 2 * margin);
     } else {
         card_w = std::min(W - 2 * margin, 560 * u);
         lines = wrap(regular_, f.message, mpx, card_w - 2 * pad);
@@ -219,7 +240,46 @@ void View::render(anyui::Canvas &out, const Frame &f, const anyui::ViewOptions &
         out.fill_rect({card.x + pad, y - 10 * u, card.w - 2 * pad, std::max(1.f, u)}, t.line.alpha(a));
     }
 
-    if (f.list) {
+    if (!f.keys.empty()) {
+        for (const std::string &line : lines) {
+            const float lw = regular_.measure(line, mpx);
+            regular_.draw(out, card.x + (card.w - lw) / 2, y + regular_.ascent(mpx), line, mpx, t.text.alpha(a));
+            y += line_h;
+        }
+        y += 14 * u;
+        // The text field, with a caret after the text.
+        const Rect field{card.x + pad, y, card.w - 2 * pad, 40 * u};
+        out.fill_round_rect(field, 8 * u, t.field.alpha(a));
+        out.stroke_round_rect(field, 8 * u, std::max(1.f, u), t.control.alpha(a));
+        const float ipx = 17 * u;
+        const std::string shown = regular_.fit(f.input + "|", ipx, field.w - 24 * u);
+        regular_.draw(out, field.x + 12 * u, center_baseline(regular_, field.y + field.h / 2, ipx), shown, ipx, t.text.alpha(a));
+        y += field.h + 14 * u;
+        // The keys: a grid of key_columns, the last row spread over the whole width.
+        const int columns = std::max(1, f.key_columns);
+        const float gap = 4 * u, key_h = 30 * u, kpx = 14 * u;
+        const float key_w = (card.w - 2 * pad - gap * static_cast<float>(columns - 1)) / static_cast<float>(columns);
+        const int count = static_cast<int>(f.keys.size());
+        const int full_rows = count / columns;
+        for (int i = 0; i < count; ++i) {
+            const int row = i / columns, column = i % columns;
+            Rect k{card.x + pad + static_cast<float>(column) * (key_w + gap), y + static_cast<float>(row) * (key_h + gap), key_w, key_h};
+            if (row == full_rows) {
+                // The action row: its keys share the width.
+                const int in_row = count - full_rows * columns;
+                const float w = (card.w - 2 * pad - gap * static_cast<float>(in_row - 1)) / static_cast<float>(in_row);
+                k.x = card.x + pad + static_cast<float>(column) * (w + gap);
+                k.w = w;
+            }
+            const bool focused = i == f.focus;
+            out.fill_round_rect(k, 6 * u, (focused ? t.accent : t.field).alpha(a));
+            if (!focused) out.stroke_round_rect(k, 6 * u, std::max(1.f, u), t.control.alpha(a));
+            const std::string label = bold_.fit(f.keys[static_cast<std::size_t>(i)], kpx, k.w - 6 * u);
+            bold_.draw(out, k.x + (k.w - bold_.measure(label, kpx)) / 2, center_baseline(bold_, k.y + k.h / 2, kpx), label, kpx,
+                       (focused ? t.on_accent : t.text).alpha(a));
+            hits_.push_back({k, {Hit::Kind::Button, i}});
+        }
+    } else if (f.list) {
         const Rect area{card.x + 14 * u, y, card.w - 28 * u, card.bottom() - foot_h - 6 * u - y};
         const float total = static_cast<float>(f.rows.size()) * row_h;
         const int focus = std::clamp(f.focus, 0, std::max(0, static_cast<int>(f.rows.size()) - 1));
@@ -367,9 +427,11 @@ Keys::Out Keys::update(const pspweb::SystemDialog *d, std::uint32_t held) {
     std::uint32_t moves = pressed & kDirections;
     if ((held & kDirections) == 0u || moves != 0u) repeat_frames_ = 0;
     else if (++repeat_frames_ >= 24 && (repeat_frames_ - 24) % 5 == 0) moves = held & kDirections;
-    // A list moves up and down; Yes and No sit side by side, so left and right move too.
-    if ((moves & pad::kUp) != 0u) out.move -= 1;
-    if ((moves & pad::kDown) != 0u) out.move += 1;
+    // A list moves up and down; Yes and No sit side by side, so left and right move too. On the
+    // keyboard up and down go a row of keys at a time.
+    const int row = d->kind == pspweb::SystemDialog::Kind::Keyboard ? pspweb::kOskColumns : 1;
+    if ((moves & pad::kUp) != 0u) out.move -= row;
+    if ((moves & pad::kDown) != 0u) out.move += row;
     if (d->kind != pspweb::SystemDialog::Kind::SaveList) {
         if ((moves & pad::kLeft) != 0u) out.move -= 1;
         if ((moves & pad::kRight) != 0u) out.move += 1;

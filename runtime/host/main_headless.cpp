@@ -34,14 +34,16 @@ const char *const kUsage =
     "usage: anypsp-run-<game> <EBOOT.BIN|module.prx> [--disc dir] [--ms dir] [--frames n]\n"
     "                         [--feedback file] [--dump frame.ppm] [--guest-path path]\n"
     "                         [--output file] [--input frame:buttons,...] [--dump-at frame,...]\n"
-    "                         [--hle-stubs file] [--deterministic]\n"
+    "                         [--hle-stubs file] [--deterministic] [--osk text]...\n"
     "Runs headless: no window, no audio. --feedback appends the code addresses that had no\n"
     "translated code (input for anypsp-analyze --feedback). --output writes what the program\n"
     "sends to the emulator: device (test output; default: standard output). --input holds\n"
     "the given sceCtrl button mask (hex) from that frame on; --dump-at writes frame<N>.ppm.\n"
     "Calling an imported function with no HLE implementation stops the run unless the\n"
     "--hle-stubs file lists it: one 'Library::name = value' (or Library::0xNID) per line.\n"
-    "--deterministic drives guest time from executed code instead of the host clock.\n";
+    "--deterministic drives guest time from executed code instead of the host clock.\n"
+    "--osk answers the next on-screen keyboard with that text (repeat it for later ones; without\n"
+    "one the keyboard answers with the game's initial text).\n";
 
 // Import stubs without a translated wrapper (always, in the interpreter-only
 // runner) are bound here, by address.
@@ -119,6 +121,7 @@ int main(int argc, char **argv) {
     std::string disc = ".", memstick = ".", feedback, dump, output, input, dump_at, hle_stubs, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     long frames = 600;
     bool deterministic = false;
+    std::vector<std::string> osk_texts;
     for (int i = 2; i < argc; i += 2) {
         const std::string flag = argv[i];
         if (flag == "--deterministic") {
@@ -140,6 +143,7 @@ int main(int argc, char **argv) {
         else if (flag == "--dump-at") dump_at = value;
         else if (flag == "--hle-stubs") hle_stubs = value;
         else if (flag == "--guest-path") guest_path = value;
+        else if (flag == "--osk") osk_texts.push_back(value);
         else if (flag == "--frames") {
             try {
                 frames = std::stol(value);
@@ -182,6 +186,7 @@ int main(int argc, char **argv) {
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
         if (!hle_stubs.empty()) kernel->set_hle_stubs(read_hle_stubs(hle_stubs));
         if (deterministic) kernel->set_deterministic(true);
+        kernel->set_osk_texts(osk_texts);
         std::ofstream output_file;
         if (!output.empty()) {
             output_file.open(output, std::ios::binary);
