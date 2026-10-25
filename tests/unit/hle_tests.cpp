@@ -7,6 +7,8 @@
 
 #include "psprecomp/runtime.hpp"
 
+#include <algorithm>
+#include <bit>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -25,12 +27,16 @@ struct Hle {
     Hle() : kernel(std::make_unique<pspweb::Kernel>(rt)) { kernel->install({}); }
 
     std::uint32_t call(const char *library, std::uint32_t nid, std::uint32_t a0 = 0u, std::uint32_t a1 = 0u,
-                       std::uint32_t a2 = 0u, std::uint32_t a3 = 0u) {
+                       std::uint32_t a2 = 0u, std::uint32_t a3 = 0u, std::uint32_t t0 = 0u, std::uint32_t t1 = 0u,
+                       std::uint32_t t2 = 0u) {
         psprecomp::AllegrexContext ctx{};
         ctx.gpr[4] = a0;
         ctx.gpr[5] = a1;
         ctx.gpr[6] = a2;
         ctx.gpr[7] = a3;
+        ctx.gpr[8] = t0;
+        ctx.gpr[9] = t1;
+        ctx.gpr[10] = t2;
         ctx.gpr[31] = kReturn;
         rt.invoke_import(library, nid, ctx);
         CHECK(ctx.pc == kReturn);
@@ -661,4 +667,185 @@ TEST_CASE("interactive savedata list delete goes back to the list while saves re
     h.kernel->dialog_back();
     CHECK(m.load32(kParams + 0x1Cu) == 1u);
     fs::remove_all(root);
+}
+
+extern const unsigned char anypsp_font_sans_jp[];
+extern const std::size_t anypsp_font_sans_jp_size;
+
+namespace {
+
+// sceLibFont through the HLE table, with flash0/font in a temporary folder.
+struct FontLib {
+    static constexpr const char *kLib = "sceLibFont";
+    static constexpr std::uint32_t kError = kScratch + 0x10u, kStyle = kScratch + 0x100u, kInfo = kScratch + 0x200u,
+                                   kChar = kScratch + 0x400u, kImage = kScratch + 0x500u, kPixels = kScratch + 0x1000u;
+    Hle h;
+    std::uint32_t lib{};
+
+    explicit FontLib(const std::filesystem::path &flash) {
+        h.kernel->set_flash_root(flash);
+        lib = h.call(kLib, 0x67F17ED7u, kScratch, kError);
+        CHECK(lib != 0u);
+    }
+
+    std::uint32_t find(std::uint16_t family, std::uint16_t style, std::uint16_t language) {
+        auto &m = h.rt.memory();
+        for (std::uint32_t i = 0; i < 168u; i += 4u) m.store32(kStyle + i, 0u);
+        m.store32(kStyle, std::bit_cast<std::uint32_t>(15.0f));
+        m.store32(kStyle + 4u, std::bit_cast<std::uint32_t>(15.0f));
+        m.store16(kStyle + 20u, family);
+        m.store16(kStyle + 22u, style);
+        m.store16(kStyle + 26u, language);
+        const std::uint32_t index = h.call(kLib, 0x099EF33Cu, lib, kStyle, kError);
+        CHECK_EQ(m.load32(kError), 0u);
+        return index;
+    }
+
+    std::uint32_t open(std::uint32_t index) {
+        const std::uint32_t font = h.call(kLib, 0xA834319Du, lib, index, 0u, kError);
+        CHECK_EQ(h.rt.memory().load32(kError), 0u);
+        return font;
+    }
+
+    std::string file_of(std::uint32_t index) {
+        CHECK_EQ(h.call(kLib, 0xBC75D85Bu, lib, kStyle, index + 1u), 0u);
+        std::string name;
+        for (std::uint32_t at = kStyle + index * 168u + 96u; char c = static_cast<char>(h.rt.memory().load8(at)); ++at) name += c;
+        return name;
+    }
+
+    std::int32_t char_info(std::uint32_t font, std::uint32_t code, std::uint32_t field) {
+        CHECK_EQ(h.call(kLib, 0xDCC80C2Fu, font, code, kChar), 0u);
+        return static_cast<std::int32_t>(h.rt.memory().load32(kChar + field * 4u));
+    }
+
+    // Draws `code` at the origin of a cleared 32x32 image and returns its pixels (0-255).
+    std::vector<std::uint8_t> draw(std::uint32_t font, std::uint32_t code, std::uint32_t format, std::int32_t clip_w = -1) {
+        auto &m = h.rt.memory();
+        constexpr std::uint32_t kSize = 32u;
+        const std::uint32_t stride = format == 0u ? kSize / 2u : kSize;
+        for (std::uint32_t i = 0; i < stride * kSize; ++i) m.store8(kPixels + i, 0u);
+        m.store32(kImage, format);
+        m.store32(kImage + 4u, 0u);
+        m.store32(kImage + 8u, 0u);
+        m.store16(kImage + 12u, kSize);
+        m.store16(kImage + 14u, kSize);
+        m.store16(kImage + 16u, static_cast<std::uint16_t>(stride));
+        m.store32(kImage + 20u, kPixels);
+        if (clip_w < 0) CHECK_EQ(h.call(kLib, 0x980F4895u, font, code, kImage), 0u);
+        else CHECK_EQ(h.call(kLib, 0xCA1E6945u, font, code, kImage, 0u, 0u, static_cast<std::uint32_t>(clip_w), kSize), 0u);
+        std::vector<std::uint8_t> pixels(kSize * kSize);
+        for (std::uint32_t y = 0; y < kSize; ++y)
+            for (std::uint32_t x = 0; x < kSize; ++x) {
+                const std::uint8_t byte = m.load8(kPixels + y * stride + (format == 0u ? x / 2u : x));
+                pixels[y * kSize + x] = format == 0u ? static_cast<std::uint8_t>(((x & 1u) ? byte >> 4u : byte & 0x0Fu) * 17u) : byte;
+            }
+        return pixels;
+    }
+};
+
+std::filesystem::path empty_flash(const char *name) {
+    const auto root = std::filesystem::temp_directory_path() / name;
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root / "font");
+    return root;
+}
+
+} // namespace
+
+TEST_CASE("sceLibFont serves the bundled fonts when flash0/font is empty") {
+    FontLib f(empty_flash("anypsp-hle-font-empty"));
+    auto &m = f.h.rt.memory();
+    CHECK_EQ(f.h.call(FontLib::kLib, 0x27F6E642u, f.lib, FontLib::kError), 18u);
+    CHECK_EQ(m.load32(FontLib::kError), 0u);
+
+    const std::uint32_t latin = f.find(1u, 1u, 2u);
+    CHECK(f.file_of(latin) == "ltn0.pgf");
+    CHECK(f.file_of(f.find(2u, 5u, 2u)) == "ltn5.pgf");
+    CHECK(f.file_of(f.find(0u, 0u, 1u)) == "jpn0.pgf");
+    CHECK(f.file_of(f.find(0u, 0u, 3u)) == "kr0.pgf");
+
+    const std::uint32_t font = f.open(latin);
+    CHECK_EQ(f.h.call(FontLib::kLib, 0x0DA7535Eu, font, FontLib::kInfo), 0u);
+    const std::uint32_t style = FontLib::kInfo + 92u;
+    CHECK_EQ(std::bit_cast<float>(m.load32(style)), 10.125f); // 0x288 / 64 points, as the PSP's ltn0
+    CHECK_EQ(std::bit_cast<float>(m.load32(style + 8u)), 128.0f);
+    CHECK_EQ(m.load16(style + 20u), 1u);
+    CHECK_EQ(m.load16(style + 26u), 2u);
+    CHECK_EQ(m.load32(FontLib::kInfo + 260u), 4u); // 4 bits per pixel
+    const auto ascender = static_cast<std::int32_t>(m.load32(FontLib::kInfo + 8u));
+    const auto descender = static_cast<std::int32_t>(m.load32(FontLib::kInfo + 12u));
+    CHECK(ascender >= 14 * 64 && ascender <= 22 * 64);
+    CHECK(descender < 0 && descender > -8 * 64);
+    CHECK(m.load16(FontLib::kInfo + 82u) <= 32u); // max glyph height in pixels
+    CHECK(m.load32(FontLib::kInfo + 84u) > 300u);  // glyph count
+
+    // 'A' sits on the baseline: its bitmap top is its height, its descender 0.
+    const std::int32_t width = f.char_info(font, 'A', 0u), height = f.char_info(font, 'A', 1u), top = f.char_info(font, 'A', 3u);
+    CHECK(width >= 9 && width <= 15);
+    CHECK(height >= 11 && height <= 15);
+    CHECK_EQ(top, height);
+    CHECK_EQ(f.char_info(font, 'A', 4u), width * 64);
+    CHECK_EQ(f.char_info(font, 'A', 5u), height * 64);
+    CHECK_EQ(f.char_info(font, 'A', 6u), top * 64);
+    CHECK_EQ(f.char_info(font, 'A', 7u), 0);
+    CHECK_EQ(f.char_info(font, 'A', 9u), top * 64);
+    const std::int32_t advance = f.char_info(font, 'A', 12u);
+    CHECK(advance >= width * 64 && advance % 64 == 0);
+    CHECK(f.char_info(font, 'g', 1u) > f.char_info(font, 'g', 3u)); // reaches below the baseline
+    CHECK(f.char_info(font, ' ', 0u) == 0 && f.char_info(font, ' ', 12u) > 0);
+
+    // A character the font lacks is measured and drawn as the alternate character ('_' by default).
+    CHECK_EQ(f.char_info(font, 0x4E00u, 0u), f.char_info(font, '_', 0u));
+    CHECK_EQ(f.char_info(font, 0x4E00u, 12u), f.char_info(font, '_', 12u));
+    CHECK(f.draw(font, 0x4E00u, 2u) == f.draw(font, '_', 2u));
+    CHECK_EQ(f.h.call(FontLib::kLib, 0xEE232411u, f.lib, '-'), 0u);
+    CHECK_EQ(f.char_info(font, 0x4E00u, 0u), f.char_info(font, '-', 0u));
+
+    // The 8-bit image covers exactly the glyph's bitmap at the origin, with full-intensity pixels.
+    const auto bytes = f.draw(font, 'A', 2u);
+    std::int32_t x0 = 32, y0 = 32, x1 = -1, y1 = -1;
+    bool solid = false;
+    for (std::int32_t y = 0; y < 32; ++y)
+        for (std::int32_t x = 0; x < 32; ++x)
+            if (const std::uint8_t v = bytes[static_cast<std::size_t>(y * 32 + x)]; v != 0u) {
+                x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
+                solid = solid || v == 255u;
+            }
+    CHECK(x0 == 0 && y0 == 0 && x1 == width - 1 && y1 == height - 1);
+    CHECK(solid);
+
+    // 4-bit images hold the same pixels at 4-bit precision; clipping leaves the rest untouched.
+    const auto nibbles = f.draw(font, 'A', 0u);
+    for (std::size_t i = 0; i < bytes.size(); ++i) CHECK_EQ(nibbles[i], static_cast<std::uint8_t>(bytes[i] / 17u * 17u));
+    const auto clipped = f.draw(font, 'A', 2u, 4);
+    for (std::size_t i = 0; i < bytes.size(); ++i) CHECK_EQ(clipped[i], i % 32u < 4u ? bytes[i] : 0u);
+
+    CHECK_EQ(f.h.call(FontLib::kLib, 0x3AEA8CB6u, font), 0u);
+    CHECK_EQ(f.h.call(FontLib::kLib, 0x574B6FBCu, f.lib), 0u);
+}
+
+TEST_CASE("sceLibFont's bundled Japanese and Korean fonts cover kana, common kanji and hangul") {
+    FontLib f(empty_flash("anypsp-hle-font-cjk"));
+    const std::uint32_t jp = f.open(f.find(0u, 0u, 1u));
+    const std::uint32_t kr = f.open(f.find(0u, 0u, 3u));
+    for (const std::uint32_t code : {0x3042u, 0x30CAu, 0x706Bu, 0x5F71u, 0x41u}) // あ ナ 火 影
+        CHECK(f.char_info(jp, code, 0u) > 4 && f.char_info(jp, code, 0u) != f.char_info(jp, '_', 0u));
+    for (const std::uint32_t code : {0xB098u, 0xD55Cu, 0x41u}) // 나 한
+        CHECK(f.char_info(kr, code, 0u) > 4 && f.char_info(kr, code, 0u) != f.char_info(kr, '_', 0u));
+}
+
+TEST_CASE("sceLibFont prefers a PGF file in flash0/font over the bundled font") {
+    const auto flash = empty_flash("anypsp-hle-font-file");
+    // Any valid PGF works as the stand-in: the bundled Japanese font, saved as ltn0.pgf.
+    std::ofstream(flash / "font" / "ltn0.pgf", std::ios::binary)
+        .write(reinterpret_cast<const char *>(anypsp_font_sans_jp), static_cast<std::streamsize>(anypsp_font_sans_jp_size));
+    std::ofstream(flash / "font" / "ltn1.pgf", std::ios::binary) << "not a font";
+    FontLib f(flash);
+    const std::uint32_t from_file = f.open(f.find(1u, 1u, 2u));
+    const std::uint32_t bundled = f.open(f.find(1u, 5u, 2u));
+    CHECK(f.char_info(from_file, 0x3042u, 0u) != f.char_info(from_file, '_', 0u));
+    CHECK_EQ(f.char_info(bundled, 0x3042u, 0u), f.char_info(bundled, '_', 0u));
+    // An unreadable file falls back to the bundled font too.
+    CHECK(f.char_info(f.open(f.find(2u, 1u, 2u)), 'A', 0u) > 0);
 }

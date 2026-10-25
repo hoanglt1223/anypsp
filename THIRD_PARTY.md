@@ -31,6 +31,12 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 - Noto Sans Regular and SemiBold 2.015 from [notofonts/latin-greek-cyrillic](https://github.com/notofonts/latin-greek-cyrillic) (release `NotoSans-v2.015`, unhinted TTF), subset with fontTools `pyftsubset` to the Latin and Vietnamese letters the menu needs (no layout tables, no hinting), compiled into the desktop player. Copyright 2022 The Noto Project Authors. License text: `runtime/gpu/ui/fonts/OFL.txt`.
 
+## Noto Sans, Noto Serif and Noto Sans CJK (SIL Open Font License 1.1): `runtime/host/fonts/`
+
+- Fallback PSP system fonts for sceLibFont, compiled into every runner: PGF files pre-rasterised by `tools/gen-fallback-fonts.py` (FreeType through Pillow, at the PSP fonts' 10.125 pt and 7 pt sizes, 128 dpi, 4 bits per pixel) and named "AnyPSP Sans"/"AnyPSP Serif", since the Noto name is a trademark and the CJK fonts reserve the name "Source".
+- Sources, pinned by commit and SHA-256 in the script: Noto Sans and Noto Serif Regular, Bold, Italic and Bold Italic (hinted TTF) from [notofonts/notofonts.github.io](https://github.com/notofonts/notofonts.github.io) at `d3abdda968b38bb6eb0ec59f6f9f58b8c2139bca`, subset to Latin-1, Latin Extended-A and common punctuation; Noto Sans CJK JP Medium and KR Regular (`SubsetOTF`) from [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk) at `f8d157532fbfaeda587e826d4cd5b21a49186f7c`, subset to Shift JIS up to JIS X 0208 level 1 and to the 2350 KS X 1001 hangul syllables, each plus the Latin set.
+- Copyright 2022 The Noto Project Authors; Copyright 2014-2021 Adobe. License text: `runtime/host/fonts/OFL.txt`.
+
 ## SDL3 (zlib): fetched at build time, not in the repository
 
 - [libsdl-org/SDL](https://github.com/libsdl-org/SDL) release 3.4.18, pinned by SHA-256 in `runtime/gpu/gpu.cmake` and linked statically into the GPU runners (`anypsp-interp-gpu`, `anypsp-run-<name>-gpu`). It provides the hidden-window OpenGL context, the GL function lookup and PNG writing (SDL's bundled miniz, MIT). License text: `LICENSE.txt` in the fetched source.

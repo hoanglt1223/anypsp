@@ -76,6 +76,20 @@ if(ANYPSP_BUILD_HOST)
         runtime/host/ge_interp.cpp runtime/host/ge_worker.cpp runtime/host/io.cpp runtime/host/kernel.cpp runtime/host/kernel_lwmutex.cpp runtime/host/kernel_objects.cpp runtime/host/modules.cpp
         runtime/host/mpeg.cpp runtime/host/net.cpp runtime/host/sas.cpp runtime/host/savedata.cpp runtime/host/webfs.cpp)
     target_include_directories(anypsp_host PUBLIC runtime/host)
+    # Bundled replacements for the PSP's system fonts (runtime/host/fonts, see font.cpp), compiled in.
+    file(GLOB ANYPSP_FALLBACK_FONTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/runtime/host/fonts/*.pgf)
+    foreach(font ${ANYPSP_FALLBACK_FONTS})
+        get_filename_component(name "${font}" NAME_WE)
+        string(REPLACE "-" "_" name "${name}")
+        set(generated "${CMAKE_CURRENT_BINARY_DIR}/anypsp_font_${name}.cpp")
+        add_custom_command(OUTPUT "${generated}"
+            COMMAND "${CMAKE_COMMAND}" "-DIN=${font}" "-DOUT=${generated}" "-DNAME=anypsp_font_${name}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-file.cmake"
+            DEPENDS "${font}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-file.cmake"
+            COMMENT "Embedding runtime/host/fonts/${name}"
+            VERBATIM)
+        target_sources(anypsp_host PRIVATE "${generated}")
+    endforeach()
     target_link_libraries(anypsp_host PUBLIC psprecomp_core anypsp_at3)
     target_compile_definitions(anypsp_host PRIVATE _CRT_SECURE_NO_WARNINGS)
     if(MSVC)

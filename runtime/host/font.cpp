@@ -13,8 +13,23 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+// Fonts compiled in from runtime/host/fonts (tools/gen-fallback-fonts.py, Noto under the SIL OFL 1.1),
+// served for any of the PSP's fonts that is missing from flash0/font.
+#define ANYPSP_FALLBACK_FONTS(X)                                                                                \
+    X(sans_regular) X(sans_bold) X(sans_italic) X(sans_bold_italic) X(serif_regular) X(serif_bold)               \
+    X(serif_italic) X(serif_bold_italic) X(sans_regular_small) X(sans_bold_small) X(sans_italic_small)           \
+    X(sans_bold_italic_small) X(serif_regular_small) X(serif_bold_small) X(serif_italic_small)                   \
+    X(serif_bold_italic_small) X(sans_jp) X(sans_kr)
+
+#define ANYPSP_DECLARE_FONT(name)                                                                               \
+    extern const unsigned char anypsp_font_##name[];                                                            \
+    extern const std::size_t anypsp_font_##name##_size;
+ANYPSP_FALLBACK_FONTS(ANYPSP_DECLARE_FONT)
+#undef ANYPSP_DECLARE_FONT
 
 namespace pspweb {
 namespace {
@@ -23,19 +38,43 @@ constexpr std::uint32_t kErrorInvalidLibrary = 0x80460002u;
 constexpr std::uint32_t kErrorInvalidParameter = 0x80460003u;
 constexpr std::size_t kHeaderSize = 392u;
 
+struct Fallback {
+    const unsigned char *data;
+    std::size_t size;
+};
+
+#define ANYPSP_FONT(name) Fallback{anypsp_font_##name, anypsp_font_##name##_size}
+
 struct Registry {
     const char *file;
     std::uint16_t family, style, language, country;
+    Fallback fallback;
 };
 
-constexpr Registry kRegistry[] = {
-    {"jpn0.pgf", 1, 103, 1, 1},
-    {"ltn0.pgf", 1, 1, 2, 1}, {"ltn1.pgf", 2, 1, 2, 1}, {"ltn2.pgf", 1, 2, 2, 1}, {"ltn3.pgf", 2, 2, 2, 1},
-    {"ltn4.pgf", 1, 5, 2, 1}, {"ltn5.pgf", 2, 5, 2, 1}, {"ltn6.pgf", 1, 6, 2, 1}, {"ltn7.pgf", 2, 6, 2, 1},
-    {"ltn8.pgf", 1, 1, 2, 1}, {"ltn9.pgf", 2, 1, 2, 1}, {"ltn10.pgf", 1, 2, 2, 1}, {"ltn11.pgf", 2, 2, 2, 1},
-    {"ltn12.pgf", 1, 5, 2, 1}, {"ltn13.pgf", 2, 5, 2, 1}, {"ltn14.pgf", 1, 6, 2, 1}, {"ltn15.pgf", 2, 6, 2, 1},
-    {"kr0.pgf", 1, 1, 3, 3},
+// The PSP's flash0:/font set. Family 1 = sans-serif, 2 = serif; style 1 = regular, 2 = italic, 5 = bold,
+// 6 = bold italic, 103 = DB; language 1 = Japanese, 2 = Latin, 3 = Korean. ltn8-15 are the 7 pt sizes.
+const Registry kRegistry[] = {
+    {"jpn0.pgf", 1, 103, 1, 1, ANYPSP_FONT(sans_jp)},
+    {"ltn0.pgf", 1, 1, 2, 1, ANYPSP_FONT(sans_regular)},
+    {"ltn1.pgf", 2, 1, 2, 1, ANYPSP_FONT(serif_regular)},
+    {"ltn2.pgf", 1, 2, 2, 1, ANYPSP_FONT(sans_italic)},
+    {"ltn3.pgf", 2, 2, 2, 1, ANYPSP_FONT(serif_italic)},
+    {"ltn4.pgf", 1, 5, 2, 1, ANYPSP_FONT(sans_bold)},
+    {"ltn5.pgf", 2, 5, 2, 1, ANYPSP_FONT(serif_bold)},
+    {"ltn6.pgf", 1, 6, 2, 1, ANYPSP_FONT(sans_bold_italic)},
+    {"ltn7.pgf", 2, 6, 2, 1, ANYPSP_FONT(serif_bold_italic)},
+    {"ltn8.pgf", 1, 1, 2, 1, ANYPSP_FONT(sans_regular_small)},
+    {"ltn9.pgf", 2, 1, 2, 1, ANYPSP_FONT(serif_regular_small)},
+    {"ltn10.pgf", 1, 2, 2, 1, ANYPSP_FONT(sans_italic_small)},
+    {"ltn11.pgf", 2, 2, 2, 1, ANYPSP_FONT(serif_italic_small)},
+    {"ltn12.pgf", 1, 5, 2, 1, ANYPSP_FONT(sans_bold_small)},
+    {"ltn13.pgf", 2, 5, 2, 1, ANYPSP_FONT(serif_bold_small)},
+    {"ltn14.pgf", 1, 6, 2, 1, ANYPSP_FONT(sans_bold_italic_small)},
+    {"ltn15.pgf", 2, 6, 2, 1, ANYPSP_FONT(serif_bold_italic_small)},
+    {"kr0.pgf", 1, 1, 3, 3, ANYPSP_FONT(sans_kr)},
 };
+
+#undef ANYPSP_FONT
 
 struct Glyph {
     bool valid{};
@@ -290,16 +329,28 @@ void Kernel::install_fonts() {
     auto load = [this, state] {
         if (state->loaded) return;
         state->loaded = true;
+        std::size_t bundled = 0u;
         for (const Registry &entry : kRegistry) {
-            std::ifstream file(flash_root_ / "font" / entry.file, std::ios::binary);
-            if (!file) continue;
             Font font;
             font.registry = entry;
-            font.data.assign(std::istreambuf_iterator<char>(file), {});
-            if (parse(font)) state->fonts.push_back(std::move(font));
-            else std::fprintf(stderr, "[font] cannot read %s\n", entry.file);
+            if (std::ifstream file(flash_root_ / "font" / entry.file, std::ios::binary); file) {
+                font.data.assign(std::istreambuf_iterator<char>(file), {});
+                if (parse(font)) {
+                    state->fonts.push_back(std::move(font));
+                    continue;
+                }
+                std::fprintf(stderr, "[font] cannot read %s, using the bundled font\n", entry.file);
+                font = Font{};
+                font.registry = entry;
+            }
+            font.data.assign(entry.fallback.data, entry.fallback.data + entry.fallback.size);
+            if (!parse(font)) throw std::runtime_error(std::string("[font] bundled replacement for ") + entry.file + " is corrupt");
+            state->fonts.push_back(std::move(font));
+            ++bundled;
         }
-        if (state->fonts.empty()) std::fprintf(stderr, "[font] no system fonts in %s\n", (flash_root_ / "font").string().c_str());
+        if (bundled != 0u)
+            std::fprintf(stderr, "[font] %zu of %zu system fonts not usable in %s: using AnyPSP's bundled Noto replacements\n", bundled,
+                         std::size(kRegistry), (flash_root_ / "font").string().c_str());
     };
     auto opened = [state](std::uint32_t handle) -> Font * {
         const auto it = state->open.find(handle);
