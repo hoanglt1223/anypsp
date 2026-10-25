@@ -112,6 +112,27 @@ Nothing extra is saved: the preset is worked out from `Scale` and `Filter` in th
 - Not part of a preset: fullscreen, refresh, variable refresh, sync to monitor, Menu FPS, FPS cap and game
   patches.
 
+## System dialogs
+
+The PSP draws some dialogs itself for the game: messages and questions, and the save and load screens.
+In a window AnyPSP draws them over the running game, in the menu's language, theme and size, and waits
+for the player as a PSP does:
+
+- **Messages**: the game's text, or "An error has occurred. (80XXXXXX)", with *OK* or *Yes*/*No*.
+- **Loading, saving, deleting**: the game's saves with their icons, titles, details and dates, plus *New
+  data* slots when saving. Saving over a save and deleting ask first (starting on *No*), loading or saving
+  one save the game names asks "Do you want to load/save this data?", and an empty memory stick shows
+  "There is no data.". A short "Save completed." (or load, delete) closes after about a second.
+
+Cross confirms and Circle goes back (swapped for games that use the Japanese layout); the d-pad moves
+between saves and between *Yes* and *No*. A mouse click or a tap on a save or a button chooses it. The
+game sees no buttons while a dialog is open, and a button still held when it closes reaches the game
+only after it is released. The game keeps running underneath, and the menu still opens over it.
+
+`--dialogs auto` answers every dialog at once instead (the save the game focuses, *Yes*), which is the default
+headless. `--dialogs show` makes a headless run wait too: `--input` answers the dialogs and `--frames-dir`
+and `--hashes` capture them.
+
 ## Speed
 
 *Speed* (100, 200, 300 or 400%) sets how fast the game runs; while the FastForward key is held (Space
