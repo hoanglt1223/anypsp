@@ -16,7 +16,7 @@ enum class Action {
     Up, Down, Left, Right, Cross, Circle, Square, Triangle, L, R, Start, Select,
     AnalogUp, AnalogDown, AnalogLeft, AnalogRight,
     Fullscreen,
-    Smoothing,
+    Smoothing, Interpolation,
     Refresh, Vrr, SyncToMonitor, FpsCap, PauseFps, Pause,
     Menu,
     FastForward,  // held: run at the fast-forward speed

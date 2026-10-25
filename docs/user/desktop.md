@@ -89,7 +89,7 @@ the file for one run.
 ```ini
 [display]
 Smoothing = off
-Interpolate = off
+Interpolate = auto
 Refresh = auto
 VRR = off
 SyncToMonitor = off
@@ -100,7 +100,7 @@ FpsCap = off
 | Setting | Option | Hotkey | |
 |---|---|---|---|
 | `Smoothing` | `--smoothing on\|off` | F9 | Off by default. See below. |
-| `Interpolate` | `--interpolate on\|off` | | Off by default; read when the game starts. See [Frame interpolation](#frame-interpolation). |
+| `Interpolate` | `--interpolate auto\|on\|off` | F10 | `auto` (the default) turns it on in a window for games that draw at 30 fps and interpolate well (UNH 1, ULUS-10299) and off for others and headless runs. Read when the game starts; F10 switches it on and off at once when the game started with it on, otherwise from the next start. See [Frame interpolation](#frame-interpolation). |
 | `Refresh` | `--refresh auto\|60\|75\|90\|120\|144\|165\|240` | F5 cycles | `auto` reads the refresh of the monitor the window is on (again every second, so moving the window is followed). |
 | `VRR` | `--vrr on\|off` | F6 | Variable refresh monitor (G-Sync, FreeSync): no vsync, each vblank presented as soon as it is ready. |
 | `SyncToMonitor` | `--sync-to-monitor on\|off` | F7 | Runs the PSP's vblanks at the monitor's rate when it (or a half, third, quarter of it) is within 1% of 59.94. |
@@ -137,7 +137,7 @@ title shows `smoothing` while it is on.
 
 ### Frame interpolation
 
-`Interpolate = on` (or `--interpolate on`) gives games drawing at 30 fps a real 60 pictures per
+`Interpolate = on` (or `--interpolate on`, and `auto` for UNH 1) gives games drawing at 30 fps a real 60 pictures per
 second without touching the game: its code, timers, input and sound run exactly as before, and every
 picture the game draws is shown unchanged. What is added is the picture on the vblank in between.
 
@@ -215,6 +215,7 @@ AnalogLeft = J
 AnalogRight = L
 Fullscreen = F11
 Smoothing = F9
+Interpolation = F10
 Refresh = F5
 VRR = F6
 SyncToMonitor = F7

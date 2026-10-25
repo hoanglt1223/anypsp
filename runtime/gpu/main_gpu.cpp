@@ -64,7 +64,7 @@ const char *const kUsage =
     "         [--frames n] [--frames-dir dir] [--png-every n] [--hashes file] [--screenshot file.png]\n"
     "         [--dump file.png] [--disc dir] [--ms dir] [--feedback file] [--guest-path path] [--output file]\n"
     "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
-    "         [--interpolate on|off]\n"
+    "         [--interpolate auto|on|off]\n"
     "         [--refresh auto|hz] [--vrr on|off] [--sync-to-monitor on|off] [--pause-fps 30|60] [--fps-cap off|n]\n"
     "         [--patches auto|file.ini]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
@@ -83,7 +83,8 @@ const char *const kUsage =
     "debugging); 0 never writes back.\n"
     "--deterministic drives guest time from executed code instead of the host clock, so scripted runs repeat.\n"
 "Display settings (a window only; docs/user/desktop.md): --smoothing on blends the in-between vblank of games\n"
-"drawing at 30 fps (F9); --refresh sets the monitor rate pacing assumes (F5; auto detects it); --vrr presents\n"
+"drawing at 30 fps (F9); --interpolate draws real in-between pictures for them (F10; auto = on for UNH 1 in a\n"
+"window); --refresh sets the monitor rate pacing assumes (F5; auto detects it); --vrr presents\n"
 "each vblank when ready (F6); --sync-to-monitor runs vblanks at the monitor rate within 1% (F7); --fps-cap\n"
 "limits pictures shown (F8); --pause-fps sets the menu's frame rate (F4; the Pause key opens the menu). They are kept in\n"
 "anypsp-display.ini next to the program or in the per-user data folder.\n"
@@ -399,6 +400,8 @@ int main(int argc, char **argv) {
         const std::filesystem::path display_file = anypsp::display::find_file(program_dir(), user_dir);
         if (o.window) display = anypsp::display::load(display_file);
         for (const auto &[name, value] : o.display) anypsp::display::apply_setting(display, name, value, "--");
+        // Headless runs keep auto off, so scripted captures do not change with the game.
+        if (o.window && gl) anypsp::display::resolve_interpolation(display, anypsp::patches::disc_id(o.disc));
         if (display.interpolate) {
             if (!gl) throw std::invalid_argument("--interpolate needs --renderer gl");
             kernel->ge().set_interpolation(&gl->enable_in_between());

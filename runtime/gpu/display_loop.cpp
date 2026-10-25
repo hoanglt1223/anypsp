@@ -41,6 +41,13 @@ void DisplayLoop::hotkeys(const std::vector<input::Action> &pressed) {
             settings_.smoothing = !settings_.smoothing;
             changed("smoothing " + on_off(settings_.smoothing));
             break;
+        case Action::Interpolation:
+            settings_.interpolate = !settings_.interpolate;
+            settings_.interpolate_auto = false;
+            // The second renderer only exists when the game started with interpolation on.
+            changed("frame interpolation " + on_off(settings_.interpolate) +
+                    (settings_.interpolate && !gl_.has_in_between() ? " from the next start" : ""));
+            break;
         case Action::Refresh:
             settings_.refresh = display::next_value(display::kRefreshRates, settings_.refresh);
             changed("refresh " + number(settings_.refresh, "auto"));

@@ -64,7 +64,10 @@ std::string choice_name(int value, const char *zero) { return value == 0 ? zero 
 void apply_setting(Settings &settings, const std::string &name, const std::string &value, const std::string &where) {
     const std::string key = lower(name);
     if (key == "smoothing") settings.smoothing = parse_bool(value, where, "Smoothing");
-    else if (key == "interpolate") settings.interpolate = parse_bool(value, where, "Interpolate");
+    else if (key == "interpolate") {
+        settings.interpolate_auto = lower(value) == "auto";
+        settings.interpolate = !settings.interpolate_auto && parse_bool(value, where, "Interpolate");
+    }
     else if (key == "refresh") settings.refresh = parse_choice(value, kRefreshRates, "auto", where, "Refresh");
     else if (key == "vrr") settings.vrr = parse_bool(value, where, "VRR");
     else if (key == "synctomonitor") settings.sync_to_monitor = parse_bool(value, where, "SyncToMonitor");
@@ -102,8 +105,9 @@ std::string to_ini(const Settings &s) {
            "Smoothing = " +
            std::string(s.smoothing ? "on" : "off") +
            "\n# Frame interpolation for 30 fps games: draws the in-between vblank with everything moved half way.\n"
-           "# Costs a second GPU picture per frame and one vblank of latency; read when the game starts.\nInterpolate = " +
-           (s.interpolate ? "on" : "off") +
+           "# Costs a second GPU picture per frame and one vblank of latency; read when the game starts.\n"
+           "# auto: on for games known to draw at 30 fps and interpolate well (UNH 1), off otherwise.\nInterpolate = " +
+           (s.interpolate_auto ? "auto" : s.interpolate ? "on" : "off") +
            "\n# Monitor refresh: auto (detected per monitor) or 60, 75, 90, 120, 144, 165, 240.\nRefresh = " +
            choice_name(s.refresh, "auto") +
            "\n# Variable refresh monitor (G-Sync, FreeSync): present each vblank as soon as it is ready.\nVRR = " +
@@ -112,6 +116,12 @@ std::string to_ini(const Settings &s) {
            (s.sync_to_monitor ? "on" : "off") + "\n# Pictures per second while the menu is open: 30 or 60.\nPauseFps = " +
            std::to_string(s.menu_fps) + "\n# Most pictures per second: off, 30, 60, 120.\nFpsCap = " +
            choice_name(s.fps_cap, "off") + "\n";
+}
+
+void resolve_interpolation(Settings &settings, const std::string &disc_id) {
+    if (!settings.interpolate_auto) return;
+    settings.interpolate = std::find(std::begin(kInterpolateByDefault), std::end(kInterpolateByDefault), disc_id) !=
+                           std::end(kInterpolateByDefault);
 }
 
 std::filesystem::path find_file(const std::filesystem::path &program_dir, const std::filesystem::path &user_dir) {

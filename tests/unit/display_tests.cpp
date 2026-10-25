@@ -121,6 +121,28 @@ TEST_CASE("Interpolation shows the in-between picture only between 30 fps frames
     Settings back;
     anypsp::display::apply_ini(back, anypsp::display::to_ini(s), "round");
     CHECK(back.interpolate);
+    CHECK(!back.interpolate_auto);
+}
+
+TEST_CASE("Interpolate = auto turns interpolation on for UNH 1 only and survives a save") {
+    using anypsp::display::resolve_interpolation;
+    Settings s;
+    CHECK(s.interpolate_auto);
+    resolve_interpolation(s, "ULUS-10299");
+    CHECK(s.interpolate);
+    Settings back;
+    anypsp::display::apply_ini(back, anypsp::display::to_ini(s), "round");
+    CHECK(back.interpolate_auto);
+    resolve_interpolation(back, "ULUS-10000");
+    CHECK(!back.interpolate);
+
+    Settings off;
+    anypsp::display::apply_setting(off, "Interpolate", "off", "--");
+    resolve_interpolation(off, "ULUS-10299");
+    CHECK(!off.interpolate);
+    anypsp::display::apply_setting(off, "Interpolate", "AUTO", "--");
+    CHECK(off.interpolate_auto);
+    CHECK_THROWS(anypsp::display::apply_setting(off, "Interpolate", "maybe", "--"));
 }
 
 TEST_CASE("The frame tracker reports how long the frame before was up") {

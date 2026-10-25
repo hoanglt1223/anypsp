@@ -26,7 +26,7 @@ constexpr std::size_t kCount = static_cast<std::size_t>(Action::Count);
 
 constexpr std::array<const char *, kCount> kActionNames = {
     "Up", "Down", "Left", "Right", "Cross", "Circle", "Square", "Triangle", "L", "R", "Start", "Select",
-    "AnalogUp", "AnalogDown", "AnalogLeft", "AnalogRight", "Fullscreen", "Smoothing",
+    "AnalogUp", "AnalogDown", "AnalogLeft", "AnalogRight", "Fullscreen", "Smoothing", "Interpolation",
     "Refresh", "VRR", "SyncToMonitor", "FpsCap", "PauseFps", "Pause", "Menu", "FastForward"};
 
 constexpr std::array<std::uint32_t, 12> kPadBits = {
@@ -135,6 +135,7 @@ InputMap::InputMap() {
     bind(Action::AnalogRight, {SDL_SCANCODE_L}, {});
     bind(Action::Fullscreen, {SDL_SCANCODE_F11}, {});
     bind(Action::Smoothing, {SDL_SCANCODE_F9}, {});
+    bind(Action::Interpolation, {SDL_SCANCODE_F10}, {});
     bind(Action::Refresh, {SDL_SCANCODE_F5}, {});
     bind(Action::Vrr, {SDL_SCANCODE_F6}, {});
     bind(Action::SyncToMonitor, {SDL_SCANCODE_F7}, {});

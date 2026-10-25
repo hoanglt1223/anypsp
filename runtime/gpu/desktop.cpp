@@ -243,7 +243,7 @@ bool Controls::poll(gpu::GlHost &gl) {
             if (std::find(map_.keys(input::Action::Fullscreen).begin(), map_.keys(input::Action::Fullscreen).end(),
                           static_cast<int>(event.key.scancode)) != map_.keys(input::Action::Fullscreen).end())
                 gl.set_fullscreen(!gl.fullscreen());
-            for (const input::Action a : {input::Action::Smoothing, input::Action::Refresh, input::Action::Vrr,
+            for (const input::Action a : {input::Action::Smoothing, input::Action::Interpolation, input::Action::Refresh, input::Action::Vrr,
                                           input::Action::SyncToMonitor, input::Action::FpsCap, input::Action::PauseFps}) {
                 const auto &keys = map_.keys(a);
                 if (std::find(keys.begin(), keys.end(), static_cast<int>(event.key.scancode)) != keys.end()) hotkeys_.push_back(a);

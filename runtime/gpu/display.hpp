@@ -18,6 +18,8 @@ struct Settings {
     // Frame interpolation: the vblank between two frames of a game drawing at 30 fps shows the
     // game's next picture with everything moved half way back (host/ge_interp.hpp). Read at start.
     bool interpolate = false;
+    // Interpolate = auto: `interpolate` is decided per game when a window starts (resolve_interpolation).
+    bool interpolate_auto = true;
     int refresh = 0;               // monitor refresh in Hz pacing assumes; 0 = detect (Auto)
     bool vrr = false;              // variable refresh monitor: present each vblank when it is ready
     bool sync_to_monitor = false;  // run the PSP's vblanks at the monitor's rate when within 1%
@@ -32,6 +34,11 @@ inline constexpr int kRefreshRates[] = {0, 60, 75, 90, 120, 144, 165, 240};
 inline constexpr int kPauseFps[] = {30, 60};
 inline constexpr int kFpsCaps[] = {0, 30, 60, 120};
 inline constexpr double kPspHz = 1e9 / 16683000.0; // the kernel's vblank rate, 59.94 Hz
+
+// Games that draw at 30 fps and interpolate well (disc IDs): Interpolate = auto turns it on for them.
+inline constexpr const char *kInterpolateByDefault[] = {"ULUS-10299"};
+// Decides `interpolate` for Interpolate = auto; an explicit on or off is kept.
+void resolve_interpolation(Settings &settings, const std::string &disc_id);
 
 // Steps a setting to the next allowed value (hotkeys).
 [[nodiscard]] int next_value(std::span<const int> allowed, int value);

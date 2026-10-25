@@ -256,7 +256,10 @@ void Menu::step(const Row &row, int dir, std::vector<Action> &out) {
             return allowed[static_cast<std::size_t>(((i + dir) % n + n) % n)];
         };
         if (id == "video.smoothing") d.smoothing = !d.smoothing;
-        else if (id == "video.interpolate") d.interpolate = !d.interpolate;
+        else if (id == "video.interpolate") {
+            d.interpolate = !d.interpolate;
+            d.interpolate_auto = false;
+        }
         else if (id == "video.refresh") d.refresh = cycle(display::kRefreshRates, d.refresh);
         else if (id == "video.vrr") d.vrr = !d.vrr;
         else if (id == "video.sync") d.sync_to_monitor = !d.sync_to_monitor;
