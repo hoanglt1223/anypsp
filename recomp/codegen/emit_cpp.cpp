@@ -13,6 +13,7 @@
 #include <regex>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 
 namespace anypsp::codegen {
 
@@ -1075,21 +1076,102 @@ bool inline_kind(const psprecomp::DecodedInstruction &d) {
 
 } // namespace
 
+namespace {
+
+// Instructions emitted as a call to an inline template of cpu/generated_ops.h,
+// by interpreter instruction name. The template takes the instruction word.
+const char *generated_op_template(std::string_view name) {
+    static const std::unordered_map<std::string_view, const char *> table{
+        {"vadd", "vec3"}, {"vsub", "vec3"}, {"vdiv", "vec3"}, {"vmul", "vec3"},
+        {"vmov", "vv2"}, {"vabs", "vv2"}, {"vneg", "vv2"}, {"vsat0", "vv2"}, {"vsat1", "vv2"},
+        {"vrcp", "vv2"}, {"vrsq", "vv2"}, {"vsin", "vv2"}, {"vcos", "vv2"}, {"vexp2", "vv2"},
+        {"vlog2", "vv2"}, {"vsqrt", "vv2"}, {"vasin", "vv2"}, {"vnrcp", "vv2"}, {"vnsin", "vv2"},
+        {"vrexp2", "vv2"},
+        {"vdot", "dot"}, {"vhdp", "dot"}, {"vfad", "dot"}, {"vavg", "dot"},
+        {"vscl", "vscl"},
+        {"vmin", "compare3"}, {"vmax", "compare3"}, {"vsge", "compare3"}, {"vslt", "compare3"},
+        {"vscmp", "compare3"},
+        {"vcmp", "vcmp"}, {"vcmov", "vcmov"},
+        {"vcst", "vcst"}, {"vidt", "vidt"},
+        {"vmidt", "matrix_init"}, {"vmzero", "matrix_init"}, {"vmone", "matrix_init"},
+        {"vmmov", "vmmov"}, {"vmmul", "vmmul"}, {"vmscl", "vmscl"},
+        {"v(h)tfm2", "vtfm"}, {"v(h)tfm3", "vtfm"}, {"v(h)tfm4", "vtfm"},
+        {"vrot", "vrot"},
+        {"viim.s", "viim"}, {"vfim.s", "viim"},
+    };
+    const auto found = table.find(name);
+    return found == table.end() ? nullptr : found->second;
+}
+
+// Interpreter-only instructions with an inline translation that is not an
+// upstream decoder kind. Same contract as emit_regular.
+std::optional<std::string> emit_generated_op(std::uint32_t word, std::uint32_t pc) {
+    const auto info = anypsp::cpu::instruction_info(word);
+    if (!info.valid || info.control_flow) return std::nullopt;
+    const std::string_view name = info.name;
+    const std::string w = psprecomp::hex32(word) + "u";
+    const std::uint32_t rt = (word >> 16u) & 31u, rd = (word >> 11u) & 31u;
+    if (const char *op = generated_op_template(name))
+        return "    if (!anypsp::cpu::gen::" + std::string(op) + "<" + w + ">(rt, ctx, " + psprecomp::hex32(pc) +
+               "u)) return; // " + std::string(name) + "\n";
+    if (name == "vzero" || name == "vone")
+        return "    if (!anypsp::cpu::gen::vector_init<" + w + ", " + (name == "vone" ? "true" : "false") +
+               ">(rt, ctx, " + psprecomp::hex32(pc) + "u)) return; // " + std::string(name) + "\n";
+    if (name == "madd" || name == "maddu" || name == "msub" || name == "msubu")
+        return "    anypsp::cpu::gen::multiply_accumulate<" + w + ">(ctx); // " + std::string(name) + "\n";
+    if (name == "vflush") {
+        // Only 0xFFFF0000 and above keep the prefixes.
+        if ((word & 0xFFFF0000u) == 0xFFFF0000u) return std::string("    // vflush\n");
+        return std::string("    ctx.vfpu_ctrl[0] = 0xE4u; ctx.vfpu_ctrl[1] = 0xE4u; ctx.vfpu_ctrl[2] = 0u; // vflush\n");
+    }
+    if (name == "mfv") {  // to a control register (data registers are an upstream kind)
+        const std::uint32_t imm = word & 0xFFu;
+        if (rt == 0u) return std::string("    // mfv to $zero\n");
+        if (imm >= 128u + 16u) return std::string("    // mfv past the control registers leaves rt alone\n");
+        return "    ctx.gpr[" + std::to_string(rt) + "] = ctx.vfpu_ctrl[" + std::to_string(imm - 128u) + "]; // mfvc\n";
+    }
+    if (name == "vmfvc") {
+        const std::uint32_t imm = (word >> 8u) & 0x7Fu;
+        const std::string lane = std::to_string(psprecomp::AllegrexContext::vfpu_scalar_index(word & 0x7Fu));
+        return "    ctx.vfpu[" + lane + "] = std::bit_cast<float>(" +
+               (imm < 16u ? "ctx.vfpu_ctrl[" + std::to_string(imm) + "]" : std::string("0u")) + "); // vmfvc\n";
+    }
+    if (name == "mfic")
+        return rt == 0u ? std::string("    // mfic to $zero\n")
+                        : "    ctx.gpr[" + std::to_string(rt) + "] = rt.interrupts_enabled() ? 1u : 0u; // mfic\n";
+    if (name == "mtic")
+        return "    rt.set_interrupts_enabled((" + reg(rt) + " & 1u) != 0u); // mtic\n";
+    if (name == "cfc1") {
+        if (rt == 0u) return std::string("    // cfc1 to $zero\n");
+        const std::string value = rd == 31u ? "ctx.fcr31" : rd == 0u ? "0x00003351u" : "0u";
+        return "    ctx.gpr[" + std::to_string(rt) + "] = " + value + "; // cfc1\n";
+    }
+    if (name == "ctc1") {
+        // The host FPU runs in the guest's rounding mode, so it switches here.
+        if (rd != 31u) return std::string("    // ctc1 to a register other than FCR31 is ignored\n");
+        return "    ctx.fcr31 = " + reg(rt) + " & 0x0181FFFFu; anypsp::cpu::enter_guest(ctx); // ctc1\n";
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
 bool translated_inline(const psprecomp::DecodedInstruction &d) {
-    if (!inline_kind(d)) return false;
-    // The generic decoder and the reference tables must agree on what the word
-    // is: Allegrex decodes fewer bits than MIPS32 in several encodings.
     const auto info = anypsp::cpu::instruction_info(d.word);
     if (!info.valid || info.control_flow) return false;
+    if (!inline_kind(d)) return emit_generated_op(d.word, 0u).has_value();
+    // The generic decoder and the reference tables must agree on what the word
+    // is: Allegrex decodes fewer bits than MIPS32 in several encodings.
     if (d.kind == K::FpuCompare) return std::string_view(info.name).starts_with("c.");
-    if (d.kind == K::Lvq || d.kind == K::Svq) return d.mnemonic == info.name;
-    if (d.kind == K::Vpfx) return d.mnemonic == info.name;
     if (d.kind == K::Nop) return d.word == 0u;
     return d.mnemonic == info.name;
 }
 
 std::string emit_instruction(const psprecomp::DecodedInstruction &d, std::uint32_t pc) {
-    if (translated_inline(d)) return emit_regular(d, pc);
+    if (inline_kind(d) && translated_inline(d)) return emit_regular(d, pc);
+    if (!inline_kind(d)) {
+        if (auto code = emit_generated_op(d.word, pc)) return *code;
+    }
     return "    if (!anypsp::cpu::execute(rt, ctx, " + psprecomp::hex32(pc) + "u, " + psprecomp::hex32(d.word) +
            "u)) return; // " + anypsp::cpu::instruction_info(d.word).name + "\n";
 }

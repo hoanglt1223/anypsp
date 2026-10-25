@@ -22,6 +22,7 @@
 
 #include "interp_ops.h"
 #include "ppsspp_compat.h"
+#include "vfpu_nan.h"
 #include "vfpu_utils.h"
 
 #include <algorithm>
@@ -541,7 +542,7 @@ namespace MIPSInt
 
 		for (int a = 0; a < n - 1; a++) {
 			for (int b = 0; b < n; b++) {
-				d[a * 4 + b] = s[a * 4 + b] * t[0];
+				d[a * 4 + b] = vfpu_mul(s[a * 4 + b], t[0]);
 			}
 		}
 
@@ -556,7 +557,7 @@ namespace MIPSInt
 		ApplyPrefixST(mips, t, VFPURewritePrefix(mips, VFPU_CTRL_TPREFIX, tprefixRemove, tprefixAdd), V_Quad);
 
 		for (int b = 0; b < n; b++) {
-			d[(n - 1) * 4 + b] = s[(n - 1) * 4 + b] * t[b];
+			d[(n - 1) * 4 + b] = vfpu_mul(s[(n - 1) * 4 + b], t[b]);
 		}
 
 		// The D prefix is applied to the last row.
@@ -1523,7 +1524,7 @@ namespace MIPSInt
 
 		int n = GetNumVectorElements(sz);
 		for (int i = 0; i < n; i++) {
-			d[i] = s[i] * t[i];
+			d[i] = vfpu_mul(s[i], t[i]);
 		}
 		ApplyPrefixD(mips, d, sz);
 		WriteVector(mips, d, sz, vd);
@@ -2084,10 +2085,10 @@ namespace MIPSInt
 
 		for (int i = 0; i < (int)n; i++) {
 			switch (optype) {
-			case 0: d.f[i] = s[i] + t[i]; break; //vadd
-			case 1: d.f[i] = s[i] - t[i]; break; //vsub
-			case 7: d.f[i] = s[i] / t[i]; break; //vdiv
-			case 8: d.f[i] = s[i] * t[i]; break; //vmul
+			case 0: d.f[i] = vfpu_add(s[i], t[i]); break; //vadd
+			case 1: d.f[i] = vfpu_sub(s[i], t[i]); break; //vsub
+			case 7: d.f[i] = vfpu_div(s[i], t[i]); break; //vdiv
+			case 8: d.f[i] = vfpu_mul(s[i], t[i]); break; //vmul
 			}
 
 			if (USE_VFPU_RESULT_FIXUP) {

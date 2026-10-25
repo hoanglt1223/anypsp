@@ -505,7 +505,7 @@ int generate_manual(const std::filesystem::path &elf_path,
 
     std::ofstream out(output_path);
     if (!out) throw psprecomp::Error("Cannot create generated source");
-    out << "#include \"psprecomp/runtime.hpp\"\n#include \"cpu/interp.h\"\n#include <bit>\n#include <cmath>\n#include <cstdint>\n#include <limits>\n\nnamespace psprecomp {\n";
+    out << "#include \"psprecomp/runtime.hpp\"\n#include \"cpu/generated_ops.h\"\n#include <bit>\n#include <cmath>\n#include <cstdint>\n#include <limits>\n\nnamespace psprecomp {\n";
 
     std::vector<GeneratedFunctionInput> generated;
     for (const auto &function : functions) {
@@ -673,7 +673,7 @@ int generate_auto(const std::filesystem::path &elf_path,
         };
 
         std::ostringstream out;
-        out << "#include \"psprecomp/runtime.hpp\"\n#include \"cpu/interp.h\"\n#include \"generated_units.hpp\"\n#include <bit>\n#include <cmath>\n#include <cstdint>\n#include <limits>\n\n"
+        out << "#include \"psprecomp/runtime.hpp\"\n#include \"cpu/generated_ops.h\"\n#include \"generated_units.hpp\"\n#include <bit>\n#include <cmath>\n#include <cstdint>\n#include <limits>\n\n"
             << open_namespace(options);
         // The register-cache lowering passes (per-basic-block GPR/FPR caches and
         // the cross-unit hot-register cache) are deliberately absent.  They kept
@@ -702,7 +702,7 @@ int generate_auto(const std::filesystem::path &elf_path,
     const auto registry_path = output_dir / "generated_registry.cpp";
     expected_cpp.insert(registry_path.filename());
     std::ostringstream registry;
-    registry << "#include \"psprecomp/runtime.hpp\"\n#include \"cpu/interp.h\"\n#include <cstdint>\n\n" << open_namespace(options);
+    registry << "#include \"psprecomp/runtime.hpp\"\n#include \"cpu/generated_ops.h\"\n#include <cstdint>\n\n" << open_namespace(options);
     for (const auto &unit : units) registry << "void register_generated_unit_" << unit.bucket << "(Runtime &runtime);\n";
     registry << "\n";
     write_import_wrappers(registry, imports, options.import_slot_base);
@@ -786,7 +786,7 @@ int generate_dynamic(const std::filesystem::path &listing, const std::filesystem
         ++count;
     }
     std::ostringstream out;
-    out << "#include \"psprecomp/interpreter.hpp\"\n#include \"psprecomp/runtime.hpp\"\n#include \"cpu/interp.h\"\n#include <bit>\n#include <cmath>\n"
+    out << "#include \"psprecomp/interpreter.hpp\"\n#include \"psprecomp/runtime.hpp\"\n#include \"cpu/generated_ops.h\"\n#include <bit>\n#include <cmath>\n"
         << "#include <cstdint>\n#include <limits>\n\nnamespace psprecomp {\n\n" << functions.str()
         << "void register_dynamic_code() {\n" << registry.str() << "}\n\n} // namespace psprecomp\n";
     write_text_if_changed(output, out.str());
