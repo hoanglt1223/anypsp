@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <utility>
+#include <string>
 #include <vector>
 
 struct SDL_AudioStream;
@@ -99,6 +100,7 @@ struct UiEvents {
     std::vector<int> keys;     // SDL scancodes pressed (no auto-repeat)
     std::vector<int> buttons;  // gamepad buttons pressed, triggers as input::kLeftTrigger/kRightTrigger
     std::vector<Pointer> pointers;
+    std::string text;          // typed text (UTF-8) while SDL text input is on (the keyboard dialog)
     bool menu{};               // the Menu binding (Escape, F1) or Back+Start on a gamepad
 };
 
@@ -117,7 +119,8 @@ public:
 
     // Handles pending events. Returns false when the user closed the window.
     bool poll(gpu::GlHost &gl);
-    [[nodiscard]] input::PadState pad() const;
+    // `keyboard` false leaves the keyboard's bindings out (while it types into the keyboard dialog).
+    [[nodiscard]] input::PadState pad(bool keyboard = true) const;
     // True while a key or gamepad button bound to `a` is held (FastForward).
     [[nodiscard]] bool held(input::Action a) const;
     // Display hotkeys (Smoothing...) pressed since the last call; Fullscreen is handled by poll.

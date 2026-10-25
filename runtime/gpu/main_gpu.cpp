@@ -31,6 +31,7 @@
 #include "psprecomp/runtime.hpp"
 
 #include <SDL3/SDL_filesystem.h>
+#include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_video.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_stdinc.h>
@@ -533,6 +534,7 @@ int main(int argc, char **argv) {
         anypsp::dialog::Overlay dialogs(controls ? controls->map() : input_map);
         anypsp::dialog::Keys dialog_keys;
         std::uint32_t scripted_pad = 0;
+        bool typing = false;  // SDL text input on for the keyboard dialog
         std::uint64_t dialog_drawn_ns = 0;
         if (show_dialogs && controls) {
             gl->set_overlay([&, badge = gl->overlay()](int w, int h) {
@@ -591,8 +593,29 @@ int main(int argc, char **argv) {
                     pad_buttons = pad.buttons;
                 }
                 if (show_dialogs) {
+                    const anypsp::desktop::UiEvents events = controls->take_ui_events();
+                    // The keyboard dialog takes text from a real keyboard: SDL text input is on while it
+                    // is open, Backspace deletes and Enter finishes; the keyboard's pad bindings rest meanwhile.
+                    const pspweb::SystemDialog *open = kernel->system_dialog();
+                    const bool keyboard_dialog = open != nullptr && open->kind == pspweb::SystemDialog::Kind::Keyboard;
+                    if (keyboard_dialog != typing) {
+                        typing = keyboard_dialog;
+                        if (typing) SDL_StartTextInput(gl->window());
+                        else SDL_StopTextInput(gl->window());
+                    }
+                    if (typing) {
+                        if (!events.text.empty()) kernel->dialog_type(events.text);
+                        for (const int key : events.keys) {
+                            if (key == SDL_SCANCODE_BACKSPACE) {
+                                kernel->dialog_erase();
+                            } else if (key == SDL_SCANCODE_RETURN || key == SDL_SCANCODE_KP_ENTER) {
+                                kernel->dialog_focus(pspweb::kOskDone);
+                                kernel->dialog_confirm();
+                            }
+                        }
+                    }
                     // Mouse clicks and finger taps on the dialog's rows and buttons.
-                    for (const anypsp::desktop::Pointer &p : controls->take_ui_events().pointers) {
+                    for (const anypsp::desktop::Pointer &p : events.pointers) {
                         using Kind = anypsp::desktop::Pointer::Kind;
                         if (kernel->system_dialog() == nullptr) break;
                         if (p.kind == Kind::Wheel) {
@@ -617,7 +640,7 @@ int main(int argc, char **argv) {
                 std::uint8_t lx = 128u, ly = 128u;
                 if (const auto press = o.input.find(frame); press != o.input.end()) scripted_pad = press->second;
                 if (controls && o.input.empty()) {
-                    const auto pad = controls->pad();
+                    const auto pad = controls->pad(!typing);
                     held = pad.buttons;
                     lx = pad.lx;
                     ly = pad.ly;

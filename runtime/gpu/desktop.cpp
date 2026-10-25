@@ -231,6 +231,9 @@ bool Controls::poll(gpu::GlHost &gl) {
                      static_cast<std::int64_t>(event.tfinger.fingerID)});
             break;
         }
+        case SDL_EVENT_TEXT_INPUT:
+            if (event.text.text != nullptr && ui_.text.size() < 256) ui_.text += event.text.text;
+            break;
         case SDL_EVENT_KEY_DOWN: {
             if (event.key.repeat) break;
             // The Pause key opens and closes the menu, which pauses the game.
@@ -337,8 +340,8 @@ std::pair<float, float> Controls::right_stick() const {
     return {norm(x), norm(y)};
 }
 
-input::PadState Controls::pad() const {
-    const auto key = &Controls::key_held;
+input::PadState Controls::pad(bool keyboard) const {
+    const auto key = [keyboard](int code) { return keyboard && key_held(code); };
     const auto button = [this](int b) { return button_held(b); };
     // The stick pushed furthest wins when several gamepads are connected.
     int x = 0, y = 0;
