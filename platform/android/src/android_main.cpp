@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Android host of a translated game (libmain.so, started by GameActivity through SDL): the HLE
-// kernel with the translated code, the GE drawn with the OpenGL ES 3 backend (host/ge_gl.cpp),
+// kernel with the translated code, the GE drawn with the Vulkan backend (gpu/vulkan, presented
+// through vk_present.cpp) when the device has Vulkan 1.1, else with OpenGL ES 3 (host/ge_gl.cpp),
 // SDL audio, and input from the touch overlay (GameActivity's TouchOverlay), gamepads and
 // keyboards. Game files are prepared by SetupActivity in the app's files folder:
 //   anypsp/game.properties, anypsp/nids.toml   from the APK
@@ -13,12 +14,16 @@
 //   --frames N   stop after N vblanks      --dump file.png   write the last frame
 //   --hashes F   write "<frame> <hash>" lines per vblank   --input frame:mask,...   scripted pad
 //   --scale N    internal resolution (default 2)
+//   --renderer auto|vulkan|gl   (auto: Vulkan when the build and the device have it, else GL ES 3)
 // The same host builds on Linux with Mesa's OpenGL ES 3 (anypsp-game-gles, cmake/hosts.cmake), for
 // GLES-only ARM handhelds and to test the Android path on a desktop; there the files folder is argv[1].
 
 #include "disc.hpp"
 #include "frame_output.hpp"
 #include "ge_gl.hpp"
+#ifdef ANYPSP_VULKAN
+#include "vk_present.hpp"
+#endif
 #include "kernel.hpp"
 
 #include "elf_prx.hpp"
@@ -129,7 +134,7 @@ struct Options {
     fs::path files;
     long frames = -1;
     int scale = 2;
-    std::string dump, hashes;
+    std::string dump, hashes, renderer = "auto";
     std::map<long, std::uint32_t> input;
 };
 
@@ -139,7 +144,7 @@ Options parse(int argc, char **argv) {
 #ifdef __ANDROID__
     else if (const char *path = SDL_GetAndroidInternalStoragePath()) o.files = path;
 #else
-    else throw psprecomp::Error("usage: anypsp-game-gles <files folder> [--frames N] [--dump f.png] [--hashes f] [--input s] [--scale n]");
+    else throw psprecomp::Error("usage: anypsp-game-gles <files folder> [--frames N] [--dump f.png] [--hashes f] [--input s] [--scale n] [--renderer auto|vulkan|gl]");
 #endif
     for (int i = 2; i + 1 < argc; i += 2) {
         const std::string flag = argv[i], value = argv[i + 1];
@@ -148,6 +153,10 @@ Options parse(int argc, char **argv) {
         else if (flag == "--dump") o.dump = value;
         else if (flag == "--hashes") o.hashes = value;
         else if (flag == "--input") o.input = parse_input_script(value);
+        else if (flag == "--renderer") {
+            if (value != "auto" && value != "vulkan" && value != "gl") throw psprecomp::Error("--renderer takes auto, vulkan or gl");
+            o.renderer = value;
+        }
         else std::cerr << "[anypsp] ignoring unknown argument " << flag << "\n";
     }
     return o;
@@ -241,11 +250,45 @@ Pad gamepad_state(const std::vector<SDL_Gamepad *> &pads) {
     return p;
 }
 
+// Where the GE draws and how its pictures reach the window.
 class Screen {
 public:
-    Screen(psprecomp::GuestMemory &memory, int scale) : renderer_(memory) {
-        if (!renderer_.init()) throw psprecomp::Error("the GE's OpenGL ES 3 backend failed to start");
-        scale_ = renderer_.set_render_scale(scale);
+    virtual ~Screen() = default;
+    virtual pspweb::GeSurfaces &renderer() = 0;
+    virtual void render(const pspweb::DisplayState &d) = 0;  // the displayed framebuffer into the output picture
+    virtual void show() = 0;                                  // the output picture letterboxed into the window
+    virtual std::vector<std::uint8_t> read() = 0;            // the output picture, RGBA rows, top row first
+    virtual std::string device() const = 0;
+    int width() { return kWidth * renderer().render_scale(); }
+    int height() { return kHeight * renderer().render_scale(); }
+};
+
+SDL_Window *make_window(const std::string &title, SDL_WindowFlags api) {
+    SDL_Window *window = SDL_CreateWindow(title.c_str(), 0, 0, api | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (window == nullptr) throw psprecomp::Error(std::string("cannot create the window: ") + SDL_GetError());
+    return window;
+}
+
+class GlScreen final : public Screen {
+public:
+    GlScreen(psprecomp::GuestMemory &memory, int scale, const std::string &title) {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+        window_ = make_window(title, SDL_WINDOW_OPENGL);
+        context_ = SDL_GL_CreateContext(window_);
+        if (context_ == nullptr) {
+            SDL_DestroyWindow(window_);
+            throw psprecomp::Error(std::string("cannot create an OpenGL ES 3 context: ") + SDL_GetError());
+        }
+        SDL_GL_MakeCurrent(window_, context_);
+        SDL_GL_SetSwapInterval(1);
+        device_ = std::string(reinterpret_cast<const char *>(glGetString(GL_RENDERER))) + ", " +
+                  reinterpret_cast<const char *>(glGetString(GL_VERSION));
+        renderer_ = std::make_unique<pspweb::GeGl>(memory);
+        if (!renderer_->init()) throw psprecomp::Error("the GE's OpenGL ES 3 backend failed to start");
+        renderer_->set_render_scale(scale);
         glGenTextures(1, &texture_);
         glBindTexture(GL_TEXTURE_2D, texture_);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width(), height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -257,16 +300,21 @@ public:
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) throw psprecomp::Error("output framebuffer incomplete");
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
-    pspweb::GeGl &renderer() { return renderer_; }
-    int width() const { return kWidth * scale_; }
-    int height() const { return kHeight * scale_; }
+    ~GlScreen() override {
+        renderer_.reset();
+        SDL_GL_DestroyContext(context_);
+        SDL_DestroyWindow(window_);
+    }
+    pspweb::GeSurfaces &renderer() override { return *renderer_; }
+    std::string device() const override { return "OpenGL ES: " + device_; }
 
-    void render(const pspweb::DisplayState &d) { renderer_.present(d.framebuffer, d.stride, d.format, fbo_, width(), height()); }
+    void render(const pspweb::DisplayState &d) override {
+        renderer_->present(d.framebuffer, d.stride, d.format, fbo_, width(), height());
+    }
 
-    // The picture letterboxed into the window.
-    void show(SDL_Window *window) {
+    void show() override {
         int w = 0, h = 0;
-        SDL_GetWindowSizeInPixels(window, &w, &h);
+        SDL_GetWindowSizeInPixels(window_, &w, &h);
         int pw = w, ph = w * kHeight / kWidth;
         if (ph > h) {
             ph = h;
@@ -282,10 +330,10 @@ public:
         glClear(GL_COLOR_BUFFER_BIT);
         glBlitFramebuffer(0, 0, width(), height(), x, y, x + pw, y + ph, GL_COLOR_BUFFER_BIT, GL_LINEAR);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        SDL_GL_SwapWindow(window_);
     }
 
-    // RGBA rows, top row first.
-    std::vector<std::uint8_t> read() {
+    std::vector<std::uint8_t> read() override {
         const auto row = static_cast<std::size_t>(width()) * 4u;
         std::vector<std::uint8_t> bottom_up(row * static_cast<std::size_t>(height())), rgba(bottom_up.size());
         glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
@@ -298,23 +346,71 @@ public:
     }
 
 private:
-    pspweb::GeGl renderer_;
-    int scale_ = 1;
+    SDL_Window *window_ = nullptr;
+    SDL_GLContext context_ = nullptr;
+    std::string device_;
+    std::unique_ptr<pspweb::GeGl> renderer_;
     GLuint fbo_ = 0, texture_ = 0;
 };
 
-// The window and its GL context, released after everything drawing into them.
-struct GlWindow {
-    SDL_Window *window = nullptr;
-    SDL_GLContext context = nullptr;
-    GlWindow() = default;
-    GlWindow(const GlWindow &) = delete;
-    GlWindow &operator=(const GlWindow &) = delete;
-    ~GlWindow() {
-        if (context != nullptr) SDL_GL_DestroyContext(context);
-        if (window != nullptr) SDL_DestroyWindow(window);
+#ifdef ANYPSP_VULKAN
+class VkScreen final : public Screen {
+public:
+    VkScreen(psprecomp::GuestMemory &memory, int scale, const std::string &title, const fs::path &pipeline_cache)
+        : window_(make_window(title, SDL_WINDOW_VULKAN)) {
+        try {
+            presenter_ = std::make_unique<anypsp::android::VkPresenter>(window_);
+            pspweb::VkOptions options;
+            options.pipeline_cache = pipeline_cache.string();
+            renderer_ = std::make_unique<pspweb::GeVk>(memory, presenter_->context(), options);
+            renderer_->set_render_scale(scale);
+        } catch (...) {
+            renderer_.reset();
+            presenter_.reset();
+            SDL_DestroyWindow(window_);
+            throw;
+        }
     }
+    ~VkScreen() override {
+        renderer_.reset();
+        presenter_.reset();
+        SDL_DestroyWindow(window_);
+    }
+    pspweb::GeSurfaces &renderer() override { return *renderer_; }
+    std::string device() const override { return "Vulkan: " + presenter_->context().device_name; }
+    void render(const pspweb::DisplayState &d) override { renderer_->render_output(d.framebuffer, d.stride, d.format); }
+    void show() override {
+        renderer_->device().finish();
+        presenter_->present(renderer_->device().output_image(), width(), height());
+    }
+    std::vector<std::uint8_t> read() override {
+        std::vector<std::uint8_t> rgba;
+        renderer_->device().read_output(rgba);
+        return rgba;
+    }
+
+private:
+    SDL_Window *window_;
+    std::unique_ptr<anypsp::android::VkPresenter> presenter_;
+    std::unique_ptr<pspweb::GeVk> renderer_;
 };
+#endif
+
+std::unique_ptr<Screen> make_screen(const Options &o, psprecomp::GuestMemory &memory, const std::string &title, const fs::path &files) {
+#ifdef ANYPSP_VULKAN
+    if (o.renderer != "gl") {
+        try {
+            return std::make_unique<VkScreen>(memory, o.scale, title, files / "cache" / "vulkan-pipelines.bin");
+        } catch (const std::exception &e) {
+            if (o.renderer == "vulkan") throw;
+            std::cout << "[anypsp] no Vulkan (" << e.what() << "); drawing with OpenGL ES 3\n";
+        }
+    }
+#else
+    if (o.renderer == "vulkan") throw psprecomp::Error("this build has no Vulkan renderer");
+#endif
+    return std::make_unique<GlScreen>(memory, o.scale, title);
+}
 
 int run(const Options &o) {
     const fs::path files = o.files;
@@ -329,21 +425,8 @@ int run(const Options &o) {
                                "). Start the app again and choose the same copy of the game.");
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     const auto title = props.count("title") ? props.at("title") : std::string("AnyPSP");
-    GlWindow gl;
-    gl.window = SDL_CreateWindow(title.c_str(), 0, 0, SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if (gl.window == nullptr) throw psprecomp::Error(std::string("cannot create the window: ") + SDL_GetError());
-    gl.context = SDL_GL_CreateContext(gl.window);
-    if (gl.context == nullptr) throw psprecomp::Error(std::string("cannot create an OpenGL ES 3 context: ") + SDL_GetError());
-    SDL_GL_MakeCurrent(gl.window, gl.context);
-    SDL_Window *window = gl.window;
-    SDL_GL_SetSwapInterval(1);
-    std::cout << "[anypsp] GL: " << reinterpret_cast<const char *>(glGetString(GL_RENDERER)) << ", "
-              << reinterpret_cast<const char *>(glGetString(GL_VERSION)) << "\n";
+    fs::create_directories(files / "cache");
 
     auto runtime = std::make_unique<psprecomp::Runtime>();
     auto &rt = *runtime;
@@ -364,10 +447,13 @@ int run(const Options &o) {
     psprecomp::register_dynamic_code();
     psprecomp::set_runtime_missing_code_handler(&psprecomp::run_dynamic_code);
 
-    Screen screen(rt.memory(), o.scale);  // before the kernel, so it outlives the GE pointing at it
+    // Before the kernel, so it outlives the GE pointing at it.
+    const std::unique_ptr<Screen> screen_owner = make_screen(o, rt.memory(), title, files);
+    Screen &screen = *screen_owner;
+    std::cout << "[anypsp] " << screen.device() << ", scale " << screen.renderer().render_scale() << "\n";
     auto kernel = std::make_unique<pspweb::Kernel>(rt);
     kernel->set_interactive_dialogs(false);
-    screen.renderer().set_coherence(pspweb::GeGl::Coherence::Lazy);
+    screen.renderer().set_coherence(pspweb::GeSurfaces::Coherence::Lazy);
     kernel->track_gpu_vram();
     kernel->ge().set_gl(&screen.renderer());
     kernel->set_test_output([](std::string_view text) { std::cout.write(text.data(), static_cast<std::streamsize>(text.size())); });
@@ -444,8 +530,7 @@ int run(const Options &o) {
             }
         }
         screen.render(kernel->display());
-        screen.show(window);
-        SDL_GL_SwapWindow(window);
+        screen.show();
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     std::cout << "[anypsp] ran " << frame << " frames in " << static_cast<long>(seconds) << " s; "

@@ -12,6 +12,16 @@ if(ANYPSP_BUILD_DRIVER AND NOT ANDROID)
     add_subdirectory(tools/anypsp)
 endif()
 
+# The Vulkan GE backend (runtime/gpu/vulkan/vulkan.cmake) and the swapchain presenter in a GLES host.
+function(anypsp_add_vulkan_host target)
+    if(DEFINED ANYPSP_VK_SOURCES AND TARGET Vulkan::Vulkan)
+        target_sources(${target} PRIVATE ${ANYPSP_VK_SOURCES} ${PROJECT_SOURCE_DIR}/platform/android/src/vk_present.cpp)
+        target_include_directories(${target} PRIVATE ${ANYPSP_VK_DIR})
+        target_compile_definitions(${target} PRIVATE ANYPSP_VULKAN)
+        target_link_libraries(${target} PRIVATE Vulkan::Vulkan)
+    endif()
+endfunction()
+
 if(ANYPSP_BUILD_HOST AND NOT ANYPSP_RUNNER_NAME STREQUAL "" AND TARGET anypsp_generated_${ANYPSP_RUNNER_NAME})
     if(ANYPSP_GAME_SHA256 STREQUAL "")
         set(game_hash "unknown")
@@ -27,7 +37,7 @@ if(ANYPSP_BUILD_HOST AND NOT ANYPSP_RUNNER_NAME STREQUAL "" AND TARGET anypsp_ge
     endif()
 
     if(ANDROID)
-        add_subdirectory(platform/android)
+        include(${PROJECT_SOURCE_DIR}/platform/android/android.cmake)
     elseif(TARGET anypsp_gpu)
         if(UNIX AND NOT APPLE)
             # The Android host on Mesa's OpenGL ES 3: GLES-only ARM handhelds, and the Android path on a desktop.
@@ -40,6 +50,7 @@ if(ANYPSP_BUILD_HOST AND NOT ANYPSP_RUNNER_NAME STREQUAL "" AND TARGET anypsp_ge
                 target_compile_definitions(anypsp-game-gles PRIVATE ANYPSP_GAME_SHA256="${game_hash}")
                 target_link_libraries(anypsp-game-gles PRIVATE anypsp_generated_${ANYPSP_RUNNER_NAME} anypsp_host anypsp_loader
                     SDL3::SDL3-static ${ANYPSP_GLESV2})
+                anypsp_add_vulkan_host(anypsp-game-gles)
             endif()
         endif()
         # The launcher is its own object library: main_gpu.cpp's main() is renamed for anypsp-game only.

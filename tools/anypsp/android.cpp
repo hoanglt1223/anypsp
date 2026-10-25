@@ -181,7 +181,7 @@ struct Native {
 };
 
 // One libmain.so per ABI: the generated code, the runtime and the Android host
-// (platform/android/CMakeLists.txt) in the shared library SDLActivity loads.
+// (platform/android/android.cmake) in the shared library SDLActivity loads.
 Native build_native(const Game& game, const Paths& paths, const Options& o) {
     const Toolchain t = find_toolchain(o);
     const fs::path ndk = find_ndk(o, t.sdk);
