@@ -67,43 +67,6 @@ std::uint32_t Kernel::count_waiters(WaitType wait, std::int32_t uid) const {
 // ---------------------------------------------------------------------------
 // Refer*Status: the guest sets the size field; the rest of the structure is written here.
 
-void Kernel::sceKernelReferSemaStatus(Ctx &ctx) {
-    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    const auto it = semaphores_.find(uid);
-    if (it == semaphores_.end()) {
-        finish(ctx, kErrorUnknownSema);
-        return;
-    }
-    auto &m = rt_.memory();
-    const std::uint32_t info = ctx.gpr[5];
-    if (!begin_refer(ctx, info, 0x38u)) return;
-    write_object_name(info, it->second.name);
-    m.store32(info + 0x24u, it->second.attr);
-    m.store32(info + 0x28u, static_cast<std::uint32_t>(it->second.init));
-    m.store32(info + 0x2Cu, static_cast<std::uint32_t>(it->second.count));
-    m.store32(info + 0x30u, static_cast<std::uint32_t>(it->second.max));
-    m.store32(info + 0x34u, count_waiters(WaitType::Sema, uid));
-    finish(ctx, 0u);
-}
-
-void Kernel::sceKernelReferMbxStatus(Ctx &ctx) {
-    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    const auto it = mailboxes_.find(uid);
-    if (it == mailboxes_.end()) {
-        finish(ctx, kErrorUnknownMbx);
-        return;
-    }
-    auto &m = rt_.memory();
-    const std::uint32_t info = ctx.gpr[5];
-    if (!begin_refer(ctx, info, 0x34u)) return;
-    write_object_name(info, it->second.name);
-    m.store32(info + 0x24u, it->second.attr);
-    m.store32(info + 0x28u, count_waiters(WaitType::Mbx, uid));
-    m.store32(info + 0x2Cu, static_cast<std::uint32_t>(it->second.messages.size()));
-    m.store32(info + 0x30u, it->second.messages.empty() ? 0u : it->second.messages.front());
-    finish(ctx, 0u);
-}
-
 void Kernel::sceKernelReferFplStatus(Ctx &ctx) {
     const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
     const auto it = fpls_.find(uid);
@@ -121,25 +84,6 @@ void Kernel::sceKernelReferFplStatus(Ctx &ctx) {
     m.store32(info + 0x2Cu, static_cast<std::uint32_t>(pool.used.size()));
     m.store32(info + 0x30u, static_cast<std::uint32_t>(std::count(pool.used.begin(), pool.used.end(), false)));
     m.store32(info + 0x34u, count_waiters(WaitType::Fpl, uid));
-    finish(ctx, 0u);
-}
-
-void Kernel::sceKernelReferMutexStatus(Ctx &ctx) {
-    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    const auto it = mutexes_.find(uid);
-    if (it == mutexes_.end()) {
-        finish(ctx, kErrorUnknownMutex);
-        return;
-    }
-    auto &m = rt_.memory();
-    const std::uint32_t info = ctx.gpr[5];
-    if (!begin_refer(ctx, info, 0x38u)) return;
-    write_object_name(info, it->second.name);
-    m.store32(info + 0x24u, it->second.attr);
-    m.store32(info + 0x28u, static_cast<std::uint32_t>(it->second.init));
-    m.store32(info + 0x2Cu, static_cast<std::uint32_t>(it->second.count));
-    m.store32(info + 0x30u, it->second.count > 0 ? static_cast<std::uint32_t>(it->second.owner) : 0xFFFFFFFFu);
-    m.store32(info + 0x34u, count_waiters(WaitType::Mutex, uid));
     finish(ctx, 0u);
 }
 
@@ -282,10 +226,7 @@ void Kernel::sceKernelReferVplStatus(Ctx &ctx) {
 
 void Kernel::install_kernel_objects() {
     const char *tm = "ThreadManForUser";
-    hle(tm, 0xBC6FEBC5u, "sceKernelReferSemaStatus", &Kernel::sceKernelReferSemaStatus);
-    hle(tm, 0xA8E8C846u, "sceKernelReferMbxStatus", &Kernel::sceKernelReferMbxStatus);
     hle(tm, 0xD8199E4Cu, "sceKernelReferFplStatus", &Kernel::sceKernelReferFplStatus);
-    hle(tm, 0xA9C2CB9Au, "sceKernelReferMutexStatus", &Kernel::sceKernelReferMutexStatus);
     hle(tm, 0x56C039B5u, "sceKernelCreateVpl", &Kernel::sceKernelCreateVpl);
     hle(tm, 0x89B3D48Cu, "sceKernelDeleteVpl", &Kernel::sceKernelDeleteVpl);
     hle(tm, 0xBED27435u, "sceKernelAllocateVpl", &Kernel::sceKernelAllocateVpl);

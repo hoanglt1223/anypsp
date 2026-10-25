@@ -124,7 +124,6 @@ void Kernel::install_devices() {
     hle(tm, 0xD979E9BFu, "sceKernelAllocateFpl", &Kernel::sceKernelAllocateFpl);
     hle(tm, 0xF6414A71u, "sceKernelFreeFpl", &Kernel::sceKernelFreeFpl);
     hle(tm, 0x623AE665u, "sceKernelTryAllocateFpl", &Kernel::sceKernelTryAllocateFpl);
-    hle(tm, 0xA66B0120u, "sceKernelReferEventFlagStatus", &Kernel::sceKernelReferEventFlagStatus);
 
     const char *suspend = "sceSuspendForUser";
     hle(suspend, 0x3E0271D3u, "sceKernelVolatileMemLock", &Kernel::sceKernelVolatileMemLock);
@@ -770,26 +769,5 @@ void Kernel::sceKernelFreeFpl(Ctx &ctx) {
 
 // ---------------------------------------------------------------------------
 // Status queries
-
-void Kernel::sceKernelReferEventFlagStatus(Ctx &ctx) {
-    const auto it = event_flags_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == event_flags_.end()) {
-        finish(ctx, kErrorUnknownEventFlag);
-        return;
-    }
-    const std::uint32_t info = ctx.gpr[5];
-    if (!begin_refer(ctx, info, 0x34u)) return;
-    write_object_name(info, it->second.name);
-    rt_.memory().store32(info + 0x24u, it->second.attr);
-    rt_.memory().store32(info + 0x28u, it->second.init);
-    rt_.memory().store32(info + 0x2Cu, it->second.pattern);
-    std::uint32_t waiting = 0u;
-    for (const auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::EventFlag && t.wait_uid == it->first) ++waiting;
-    }
-    rt_.memory().store32(info + 0x30u, waiting);
-    finish(ctx, 0u);
-}
 
 } // namespace pspweb

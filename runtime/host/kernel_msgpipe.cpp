@@ -246,7 +246,8 @@ void Kernel::msgpipe_transfer(Ctx &ctx, bool send, bool poll) {
         if (woke) maybe_preempt(ctx);
         return;
     }
-    // Up to 2us the timeout is over before the wait begins.
+    // The byte count starts at 0 for a wait, even one that times out at once (up to 2us).
+    if (result_address != 0u && (result_address & 3u) == 0u && m.contains(result_address, 4u)) m.store32(result_address, 0u);
     if (timeout != 0u && timeout_at_once(timeout, 210, 55)) {
         finish(ctx, err::kWaitTimeout);
         if (woke) maybe_preempt(ctx);

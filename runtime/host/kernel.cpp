@@ -271,19 +271,6 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(tm, 0x369ED59Du, "sceKernelGetSystemTimeLow", &Kernel::sceKernelGetSystemTimeLow);
     hle(tm, 0x82BC5777u, "sceKernelGetSystemTimeWide", &Kernel::sceKernelGetSystemTimeWide);
     hle(tm, 0xDB738F35u, "sceKernelGetSystemTime", &Kernel::sceKernelGetSystemTime);
-    hle(tm, 0xD6DA4BA1u, "sceKernelCreateSema", &Kernel::sceKernelCreateSema);
-    hle(tm, 0xB7D098C6u, "sceKernelCreateMutex", &Kernel::sceKernelCreateMutex);
-    hle(tm, 0xF8170FBEu, "sceKernelDeleteMutex", &Kernel::sceKernelDeleteMutex);
-    hle(tm, 0xB011B11Fu, "sceKernelLockMutex", &Kernel::sceKernelLockMutex);
-    hle_cb(tm, 0x5BF4DD27u, "sceKernelLockMutexCB", &Kernel::sceKernelLockMutex);
-    hle(tm, 0x0DDCD2C9u, "sceKernelTryLockMutex", &Kernel::sceKernelTryLockMutex);
-    hle(tm, 0x6B30100Fu, "sceKernelUnlockMutex", &Kernel::sceKernelUnlockMutex);
-    hle(tm, 0x8125221Du, "sceKernelCreateMbx", &Kernel::sceKernelCreateMbx);
-    hle(tm, 0x86255ADAu, "sceKernelDeleteMbx", &Kernel::sceKernelDeleteMbx);
-    hle(tm, 0xE9B3061Eu, "sceKernelSendMbx", &Kernel::sceKernelSendMbx);
-    hle(tm, 0x18260574u, "sceKernelReceiveMbx", &Kernel::sceKernelReceiveMbx);
-    hle_cb(tm, 0xF3986382u, "sceKernelReceiveMbxCB", &Kernel::sceKernelReceiveMbx);
-    hle(tm, 0x0D81716Au, "sceKernelPollMbx", &Kernel::sceKernelPollMbx);
     const char *im = "InterruptManager";
     hle(im, 0xCA04A2B9u, "sceKernelRegisterSubIntrHandler", &Kernel::sceKernelRegisterSubIntrHandler);
     hle(im, 0xD61E6961u, "sceKernelReleaseSubIntrHandler", &Kernel::sceKernelReleaseSubIntrHandler);
@@ -292,18 +279,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(tm, 0x6652B8CAu, "sceKernelSetAlarm", &Kernel::sceKernelSetAlarm);
     hle(tm, 0xB2C25152u, "sceKernelSetSysClockAlarm", &Kernel::sceKernelSetSysClockAlarm);
     hle(tm, 0x7E65B999u, "sceKernelCancelAlarm", &Kernel::sceKernelCancelAlarm);
-    hle(tm, 0x28B6489Cu, "sceKernelDeleteSema", &Kernel::sceKernelDeleteSema);
-    hle(tm, 0x3F53E640u, "sceKernelSignalSema", &Kernel::sceKernelSignalSema);
-    hle(tm, 0x4E3A1105u, "sceKernelWaitSema", &Kernel::sceKernelWaitSema);
-    hle_cb(tm, 0x6D212BACu, "sceKernelWaitSemaCB", &Kernel::sceKernelWaitSema);
-    hle(tm, 0x58B1F937u, "sceKernelPollSema", &Kernel::sceKernelPollSema);
-    hle(tm, 0x55C20A00u, "sceKernelCreateEventFlag", &Kernel::sceKernelCreateEventFlag);
-    hle(tm, 0xEF9E4C70u, "sceKernelDeleteEventFlag", &Kernel::sceKernelDeleteEventFlag);
-    hle(tm, 0x1FB15A32u, "sceKernelSetEventFlag", &Kernel::sceKernelSetEventFlag);
-    hle(tm, 0x812346E4u, "sceKernelClearEventFlag", &Kernel::sceKernelClearEventFlag);
-    hle(tm, 0x402FCF22u, "sceKernelWaitEventFlag", &Kernel::sceKernelWaitEventFlag);
-    hle_cb(tm, 0x328C546Au, "sceKernelWaitEventFlagCB", &Kernel::sceKernelWaitEventFlag);
-    hle(tm, 0x30FD48F0u, "sceKernelPollEventFlag", &Kernel::sceKernelPollEventFlag);
+    hle(tm, 0xDAA3F564u, "sceKernelReferAlarmStatus", &Kernel::sceKernelReferAlarmStatus);
 
     const char *sm = "SysMemUserForUser";
     hle(sm, 0xA291F107u, "sceKernelMaxFreeMemSize", &Kernel::sceKernelMaxFreeMemSize);
@@ -442,6 +418,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
 
     install_devices();
     install_callbacks();
+    install_sync();
     install_msgpipe();
     install_tlspl();
     install_vtimer();
@@ -594,6 +571,8 @@ void Kernel::poll_waits() {
             wake(t, 0u);
         } else {
             // Every other wait with a deadline is an object wait with a timeout.
+            if (t.wait == WaitType::EventFlag && event_flags_.contains(t.wait_uid) && valid_word(t.wait_out_address))
+                rt_.memory().store32(t.wait_out_address, event_flags_.at(t.wait_uid).pattern);
             wake(t, kErrorWaitTimeout);
         }
     }
@@ -870,298 +849,12 @@ void Kernel::sceKernelGetSystemTime(Ctx &ctx) {
     finish(ctx, 0u);
 }
 
-void Kernel::sceKernelCreateSema(Ctx &ctx) {
-    const std::int32_t uid = new_uid();
-    semaphores_[uid] = Semaphore{read_string(ctx.gpr[4], 32), static_cast<std::int32_t>(ctx.gpr[6]),
-                                 static_cast<std::int32_t>(ctx.gpr[7]), ctx.gpr[5], static_cast<std::int32_t>(ctx.gpr[6])};
-    finish(ctx, static_cast<std::uint32_t>(uid));
-}
-
-void Kernel::sceKernelDeleteSema(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (semaphores_.erase(uid) == 0u) {
-        finish(ctx, kErrorUnknownSema);
-        return;
-    }
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::Sema && t.wait_uid == uid)
-            wake(t, kErrorWaitDelete);
-    }
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-bool Kernel::try_satisfy_sema(Thread &t) {
-    auto it = semaphores_.find(t.wait_uid);
-    if (it == semaphores_.end() || it->second.count < static_cast<std::int32_t>(t.wait_count)) return false;
-    it->second.count -= static_cast<std::int32_t>(t.wait_count);
-    return true;
-}
-
-void Kernel::sceKernelSignalSema(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = semaphores_.find(uid);
-    if (it == semaphores_.end()) {
-        finish(ctx, kErrorUnknownSema);
-        return;
-    }
-    const std::int32_t signal = static_cast<std::int32_t>(ctx.gpr[5]);
-    if (it->second.max > 0 && it->second.count + signal > it->second.max) {
-        finish(ctx, kErrorSemaOverflow);
-        return;
-    }
-    it->second.count += signal;
-    // Wake waiters in priority order while the count satisfies them.
-    std::vector<Thread *> waiters;
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::Sema && t.wait_uid == uid) waiters.push_back(&t);
-    }
-    std::sort(waiters.begin(), waiters.end(), [](const Thread *a, const Thread *b) { return a->priority < b->priority; });
-    for (Thread *t : waiters)
-        if (try_satisfy_sema(*t)) wake(*t, 0u);
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-void Kernel::sceKernelWaitSema(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = semaphores_.find(uid);
-    if (it == semaphores_.end()) {
-        finish(ctx, kErrorUnknownSema);
-        return;
-    }
-    const std::int32_t need = static_cast<std::int32_t>(ctx.gpr[5]);
-    if (it->second.count >= need) {
-        it->second.count -= need;
-        finish(ctx, 0u);
-        return;
-    }
-    Thread *self = current();
-    if (self != nullptr) {
-        self->wait_uid = uid;
-        self->wait_count = static_cast<std::uint32_t>(need);
-        begin_timeout(*self, ctx.gpr[6]);
-    }
-    block(ctx, WaitType::Sema, 0u);
-}
-
-void Kernel::sceKernelPollSema(Ctx &ctx) {
-    auto it = semaphores_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == semaphores_.end()) {
-        finish(ctx, kErrorUnknownSema);
-        return;
-    }
-    const std::int32_t need = static_cast<std::int32_t>(ctx.gpr[5]);
-    if (it->second.count >= need) {
-        it->second.count -= need;
-        finish(ctx, 0u);
-    } else {
-        finish(ctx, kErrorSemaZero);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Mutexes: owned by one thread at a time, optionally recursive (attr 0x200).
 
-void Kernel::sceKernelCreateMutex(Ctx &ctx) {
-    const std::int32_t uid = new_uid();
-    Mutex mutex{read_string(ctx.gpr[4], 32), ctx.gpr[5], static_cast<std::int32_t>(ctx.gpr[6]), 0};
-    mutex.init = mutex.count;
-    if (mutex.count > 0) mutex.owner = current_uid_;
-    mutexes_[uid] = std::move(mutex);
-    finish(ctx, static_cast<std::uint32_t>(uid));
-}
-
-void Kernel::sceKernelDeleteMutex(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (mutexes_.erase(uid) == 0u) {
-        finish(ctx, kErrorUnknownMutex);
-        return;
-    }
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::Mutex && t.wait_uid == uid) wake(t, kErrorWaitDelete);
-    }
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-// Shared by Lock and TryLock: 0 if the lock was taken, an error, or 1 if the caller has to wait.
-static std::uint32_t take_mutex(Mutex &mutex, std::int32_t self, std::int32_t count) {
-    if (count <= 0) return kErrorIllegalCount;
-    if (mutex.count == 0) {
-        mutex.owner = self;
-        mutex.count = count;
-        return 0u;
-    }
-    if (mutex.owner == self) {
-        if ((mutex.attr & 0x200u) == 0u) return kErrorMutexRecursive;
-        mutex.count += count;
-        return 0u;
-    }
-    return 1u;
-}
-
-void Kernel::sceKernelLockMutex(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = mutexes_.find(uid);
-    if (it == mutexes_.end()) {
-        finish(ctx, kErrorUnknownMutex);
-        return;
-    }
-    const std::int32_t count = static_cast<std::int32_t>(ctx.gpr[5]);
-    const std::uint32_t result = take_mutex(it->second, current_uid_, count);
-    if (result != 1u) {
-        finish(ctx, result);
-        return;
-    }
-    Thread *self = current();
-    if (self != nullptr) {
-        self->wait_uid = uid;
-        self->wait_count = static_cast<std::uint32_t>(count);
-        begin_timeout(*self, ctx.gpr[6]);
-    }
-    block(ctx, WaitType::Mutex, 0u);
-}
-
-void Kernel::sceKernelTryLockMutex(Ctx &ctx) {
-    auto it = mutexes_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == mutexes_.end()) {
-        finish(ctx, kErrorUnknownMutex);
-        return;
-    }
-    const std::uint32_t result = take_mutex(it->second, current_uid_, static_cast<std::int32_t>(ctx.gpr[5]));
-    finish(ctx, result == 1u ? kErrorMutexLocked : result);
-}
-
-void Kernel::sceKernelUnlockMutex(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = mutexes_.find(uid);
-    if (it == mutexes_.end()) {
-        finish(ctx, kErrorUnknownMutex);
-        return;
-    }
-    Mutex &mutex = it->second;
-    const std::int32_t count = static_cast<std::int32_t>(ctx.gpr[5]);
-    if (count <= 0) {
-        finish(ctx, kErrorIllegalCount);
-        return;
-    }
-    if (mutex.count == 0 || mutex.owner != current_uid_ || count > mutex.count) {
-        finish(ctx, kErrorMutexUnlockUnderflow);
-        return;
-    }
-    mutex.count -= count;
-    if (mutex.count == 0) {
-        mutex.owner = 0;
-        // Hand the mutex to the waiter that comes first (by priority if attr 0x100, else in order).
-        Thread *next = nullptr;
-        for (auto &[tid, t] : threads_) {
-            (void)tid;
-            if (t.state != ThreadState::Waiting || t.wait != WaitType::Mutex || t.wait_uid != uid) continue;
-            if (next == nullptr || ((mutex.attr & 0x100u) != 0u && t.priority < next->priority)) next = &t;
-        }
-        if (next != nullptr) {
-            mutex.owner = next->uid;
-            mutex.count = static_cast<std::int32_t>(next->wait_count);
-            wake(*next, 0u);
-        }
-    }
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
 
 // ---------------------------------------------------------------------------
 // Message boxes
-
-void Kernel::sceKernelCreateMbx(Ctx &ctx) {
-    const std::int32_t uid = new_uid();
-    mailboxes_[uid] = Mailbox{read_string(ctx.gpr[4], 32), ctx.gpr[5], {}};
-    finish(ctx, static_cast<std::uint32_t>(uid));
-}
-
-void Kernel::sceKernelDeleteMbx(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (mailboxes_.erase(uid) == 0u) {
-        finish(ctx, kErrorUnknownMbx);
-        return;
-    }
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::Mbx && t.wait_uid == uid) wake(t, kErrorWaitDelete);
-    }
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-void Kernel::sceKernelSendMbx(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = mailboxes_.find(uid);
-    if (it == mailboxes_.end()) {
-        finish(ctx, kErrorUnknownMbx);
-        return;
-    }
-    const std::uint32_t message = ctx.gpr[5];
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state != ThreadState::Waiting || t.wait != WaitType::Mbx || t.wait_uid != uid) continue;
-        if (t.wait_out_address != 0u) rt_.memory().store32(t.wait_out_address, message);
-        wake(t, 0u);
-        finish(ctx, 0u);
-        maybe_preempt(ctx);
-        return;
-    }
-    auto &queue = it->second.messages;
-    if ((it->second.attr & 0x400u) != 0u) {
-        // Priority-ordered box: the packet's priority byte follows its next pointer.
-        const std::uint8_t priority = rt_.memory().load8(message + 4u);
-        auto pos = std::find_if(queue.begin(), queue.end(),
-                                [&](std::uint32_t m) { return rt_.memory().load8(m + 4u) > priority; });
-        queue.insert(pos, message);
-    } else {
-        queue.push_back(message);
-    }
-    finish(ctx, 0u);
-}
-
-void Kernel::sceKernelReceiveMbx(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = mailboxes_.find(uid);
-    if (it == mailboxes_.end()) {
-        finish(ctx, kErrorUnknownMbx);
-        return;
-    }
-    if (!it->second.messages.empty()) {
-        if (ctx.gpr[5] != 0u) rt_.memory().store32(ctx.gpr[5], it->second.messages.front());
-        it->second.messages.pop_front();
-        finish(ctx, 0u);
-        return;
-    }
-    Thread *self = current();
-    if (self != nullptr) {
-        self->wait_uid = uid;
-        self->wait_out_address = ctx.gpr[5];
-        begin_timeout(*self, ctx.gpr[6]);
-    }
-    block(ctx, WaitType::Mbx, 0u);
-}
-
-void Kernel::sceKernelPollMbx(Ctx &ctx) {
-    auto it = mailboxes_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == mailboxes_.end()) {
-        finish(ctx, kErrorUnknownMbx);
-        return;
-    }
-    if (it->second.messages.empty()) {
-        finish(ctx, kErrorMbxNoMessage);
-        return;
-    }
-    if (ctx.gpr[5] != 0u) rt_.memory().store32(ctx.gpr[5], it->second.messages.front());
-    it->second.messages.pop_front();
-    finish(ctx, 0u);
-}
 
 // ---------------------------------------------------------------------------
 // Sub-interrupt handlers.  Vblank handlers run once per frame, each on a
@@ -1222,9 +915,14 @@ std::int32_t Kernel::start_handler(std::uint32_t entry, std::uint32_t gp, std::u
     return uid;
 }
 
+// Alarms follow PPSSPP (Core/HLE/sceKernelAlarm.cpp): the handler runs no sooner than 215us
+// after the call; a positive result reschedules it that much after its last schedule.
 void Kernel::set_alarm(Ctx &ctx, std::uint64_t delay_us) {
+    if (!rt_.memory().contains(ctx.gpr[5], 4u)) return finish(ctx, 0x800200D3u);
     const std::int32_t uid = new_uid();
-    alarms_[uid] = Alarm{now_us() + delay_us, ctx.gpr[5], ctx.gpr[6], ctx.gpr[28], 0};
+    const std::uint64_t now = now_us();
+    alarms_[uid] = Alarm{now + std::clamp<std::uint64_t>(delay_us, 215u, 1ull << 52u), now + delay_us, ctx.gpr[5],
+                         ctx.gpr[6], ctx.gpr[28], 0};
     finish(ctx, static_cast<std::uint32_t>(uid));
 }
 
@@ -1232,11 +930,30 @@ void Kernel::sceKernelSetAlarm(Ctx &ctx) { set_alarm(ctx, ctx.gpr[4]); }
 
 void Kernel::sceKernelSetSysClockAlarm(Ctx &ctx) {
     auto &m = rt_.memory();
+    if ((ctx.gpr[4] & 3u) != 0u || !m.contains(ctx.gpr[4], 8u)) return finish(ctx, 0x800200D3u);
     set_alarm(ctx, m.load32(ctx.gpr[4]) | static_cast<std::uint64_t>(m.load32(ctx.gpr[4] + 4u)) << 32u);
 }
 
 void Kernel::sceKernelCancelAlarm(Ctx &ctx) {
     finish(ctx, alarms_.erase(static_cast<std::int32_t>(ctx.gpr[4])) != 0u ? 0u : kErrorUnknownAlarm);
+}
+
+// SceKernelAlarmInfo: size, (pad), schedule (8), handler, common; written as far as size allows.
+void Kernel::sceKernelReferAlarmStatus(Ctx &ctx) {
+    const auto it = alarms_.find(static_cast<std::int32_t>(ctx.gpr[4]));
+    if (it == alarms_.end()) return finish(ctx, kErrorUnknownAlarm);
+    auto &m = rt_.memory();
+    const std::uint32_t info = ctx.gpr[5];
+    if (!m.contains(info, 20u)) return finish(ctx, 0xFFFFFFFFu);
+    const std::uint32_t size = m.load32(info);
+    if (size > 0u) m.store32(info, 20u);
+    if (size > 4u) {
+        m.store32(info + 4u, static_cast<std::uint32_t>(it->second.schedule));
+        m.store32(info + 8u, static_cast<std::uint32_t>(it->second.schedule >> 32u));
+    }
+    if (size > 12u) m.store32(info + 12u, it->second.handler);
+    if (size > 16u) m.store32(info + 16u, it->second.common);
+    finish(ctx, 0u);
 }
 
 void Kernel::run_alarms() {
@@ -1248,125 +965,19 @@ void Kernel::run_alarms() {
         alarm.running = start_handler(alarm.handler, alarm.gp, alarm.common, 0u, [this, id](std::uint32_t next) {
             const auto it = alarms_.find(id);
             if (it == alarms_.end()) return 0u;
-            if (next == 0u) {
+            if (static_cast<std::int32_t>(next) <= 0) {
                 alarms_.erase(it);
             } else {
-                it->second.at = now_us() + next;
-                it->second.running = 0;
+                const std::uint64_t at = now_us();
+                Alarm &a = it->second;
+                a.schedule = a.schedule + next > at ? a.schedule + next : at + next;
+                a.at = a.schedule;
+                a.running = 0;
             }
             return 0u;
         });
         if (alarm.running == 0) return;
     }
-}
-
-void Kernel::sceKernelCreateEventFlag(Ctx &ctx) {
-    if (ctx.gpr[4] == 0u) {
-        finish(ctx, 0x80020001u); // SCE_KERNEL_ERROR_ERROR: no name
-        return;
-    }
-    const std::int32_t uid = new_uid();
-    event_flags_[uid] = EventFlag{read_string(ctx.gpr[4], 32), ctx.gpr[5], ctx.gpr[6], ctx.gpr[6]};
-    finish(ctx, static_cast<std::uint32_t>(uid));
-}
-
-void Kernel::sceKernelDeleteEventFlag(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (event_flags_.erase(uid) == 0u) {
-        finish(ctx, kErrorUnknownEventFlag);
-        return;
-    }
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::EventFlag && t.wait_uid == uid)
-            wake(t, kErrorWaitDelete);
-    }
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-bool Kernel::try_satisfy_event(Thread &t) {
-    auto it = event_flags_.find(t.wait_uid);
-    if (it == event_flags_.end()) return false;
-    std::uint32_t &pattern = it->second.pattern;
-    const std::uint32_t bits = t.wait_count;
-    const bool match = (t.wait_mode & kEventWaitOr) != 0u ? (pattern & bits) != 0u : (pattern & bits) == bits;
-    if (!match) return false;
-    if (t.wait_out_address != 0u) rt_.memory().store32(t.wait_out_address, pattern);
-    if ((t.wait_mode & kEventWaitClearAll) != 0u) pattern = 0u;
-    else if ((t.wait_mode & kEventWaitClear) != 0u) pattern &= ~bits;
-    return true;
-}
-
-void Kernel::sceKernelSetEventFlag(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = event_flags_.find(uid);
-    if (it == event_flags_.end()) {
-        finish(ctx, kErrorUnknownEventFlag);
-        return;
-    }
-    it->second.pattern |= ctx.gpr[5];
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::EventFlag && t.wait_uid == uid &&
-            try_satisfy_event(t))
-            wake(t, 0u);
-    }
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-void Kernel::sceKernelClearEventFlag(Ctx &ctx) {
-    auto it = event_flags_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == event_flags_.end()) {
-        finish(ctx, kErrorUnknownEventFlag);
-        return;
-    }
-    it->second.pattern &= ctx.gpr[5];
-    finish(ctx, 0u);
-}
-
-void Kernel::sceKernelWaitEventFlag(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (!event_flags_.contains(uid)) {
-        finish(ctx, kErrorUnknownEventFlag);
-        return;
-    }
-    Thread *self = current();
-    if (self == nullptr) {
-        finish(ctx, 0u);
-        return;
-    }
-    self->wait_uid = uid;
-    self->wait_count = ctx.gpr[5];
-    self->wait_mode = ctx.gpr[6];
-    self->wait_out_address = ctx.gpr[7];
-    if (try_satisfy_event(*self)) {
-        finish(ctx, 0u);
-        return;
-    }
-    begin_timeout(*self, ctx.gpr[8]);
-    block(ctx, WaitType::EventFlag, 0u);
-}
-
-void Kernel::sceKernelPollEventFlag(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    auto it = event_flags_.find(uid);
-    if (it == event_flags_.end()) {
-        finish(ctx, kErrorUnknownEventFlag);
-        return;
-    }
-    Thread probe;
-    probe.wait_uid = uid;
-    probe.wait_count = ctx.gpr[5];
-    probe.wait_mode = ctx.gpr[6];
-    probe.wait_out_address = ctx.gpr[7];
-    if (try_satisfy_event(probe)) {
-        finish(ctx, 0u);
-        return;
-    }
-    if (ctx.gpr[7] != 0u) rt_.memory().store32(ctx.gpr[7], it->second.pattern);
-    finish(ctx, kErrorEventFlagCondition);
 }
 
 // ---------------------------------------------------------------------------

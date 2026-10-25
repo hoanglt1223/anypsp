@@ -181,10 +181,9 @@ bool Kernel::try_complete_wait(Thread &t, std::uint32_t &result) {
     case WaitType::Sema: return try_satisfy_sema(t);
     case WaitType::EventFlag: return try_satisfy_event(t);
     case WaitType::Mbx: {
-        auto &queue = mailboxes_.at(t.wait_uid).messages;
-        if (queue.empty()) return false;
-        if (t.wait_out_address != 0u) m.store32(t.wait_out_address, queue.front());
-        queue.pop_front();
+        Mailbox &box = mailboxes_.at(t.wait_uid);
+        if (box.count == 0) return false;
+        result = mbx_receive(box, t.wait_out_address);
         return true;
     }
     case WaitType::Mutex: {

@@ -33,7 +33,7 @@ target_include_directories(pspweb_at3 PRIVATE "${PSPWEB_DIR}/third_party/at3_shi
 target_include_directories(pspweb_at3 PUBLIC "${PSPWEB_AT3_DIR}")
 target_compile_options(pspweb_at3 PRIVATE -O2 -w)
 
-add_executable(pspweb host/main.cpp host/kernel.cpp host/kernel_callbacks.cpp host/kernel_lwmutex.cpp host/kernel_msgpipe.cpp host/kernel_objects.cpp host/kernel_threads.cpp host/kernel_tls.cpp host/kernel_vtimer.cpp host/devices.cpp host/io.cpp host/modules.cpp host/mpeg.cpp host/net.cpp host/sas.cpp host/atrac.cpp host/font.cpp host/savedata.cpp host/ge.cpp host/ge_interp.cpp host/ge_gl.cpp host/ge_surfaces.cpp host/ge_worker.cpp host/webfs.cpp)
+add_executable(pspweb host/main.cpp host/kernel.cpp host/kernel_callbacks.cpp host/kernel_lwmutex.cpp host/kernel_msgpipe.cpp host/kernel_objects.cpp host/kernel_sync.cpp host/kernel_threads.cpp host/kernel_tls.cpp host/kernel_vtimer.cpp host/devices.cpp host/io.cpp host/modules.cpp host/mpeg.cpp host/net.cpp host/sas.cpp host/atrac.cpp host/font.cpp host/savedata.cpp host/ge.cpp host/ge_interp.cpp host/ge_gl.cpp host/ge_surfaces.cpp host/ge_worker.cpp host/webfs.cpp)
 # The table of translated run-time modules, or an empty one.
 if(NOT EXISTS "${PSPWEB_GENERATED_DIR}/modules_table.cpp")
     target_sources(pspweb PRIVATE host/no_modules.cpp)

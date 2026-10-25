@@ -241,7 +241,8 @@ struct Mutex {
 struct Mailbox {
     std::string name;
     std::uint32_t attr{};
-    std::deque<std::uint32_t> messages;
+    std::uint32_t head{};       // first packet; each packet's first word points at the next
+    std::int32_t count{};
 };
 
 struct SubInterrupt {
@@ -267,7 +268,8 @@ struct GeEvent {
 };
 
 struct Alarm {
-    std::uint64_t at{};
+    std::uint64_t at{};        // when the handler runs
+    std::uint64_t schedule{};  // the time asked for, which reschedules count from
     std::uint32_t handler{};
     std::uint32_t common{};
     std::uint32_t gp{};
@@ -530,6 +532,19 @@ private:
     void sceKernelGetThreadmanIdType(Ctx &ctx);
     void sceKernelGetThreadmanIdList(Ctx &ctx);
     bool dispatch_enabled_{true};
+    // kernel_sync.cpp
+    void install_sync();
+    [[nodiscard]] bool valid_word(std::uint32_t address) const;
+    bool sema_wake(std::int32_t uid);
+    bool event_flag_release(std::int32_t uid, std::uint32_t result);
+    [[nodiscard]] std::uint32_t mutex_lock_check(const Mutex &mutex, std::int32_t count) const;
+    bool mutex_hand_over(std::int32_t uid);
+    void mutex_thread_end(std::int32_t thread_uid);
+    std::uint32_t mbx_receive(Mailbox &box, std::uint32_t out);
+    void sceKernelCancelSema(Ctx &ctx);
+    void sceKernelCancelEventFlag(Ctx &ctx);
+    void sceKernelCancelMutex(Ctx &ctx);
+    void sceKernelCancelReceiveMbx(Ctx &ctx);
     // Memory partitions: 2 and 6 are the user partition, 5 the volatile one.
     [[nodiscard]] std::uint32_t partition_error(std::int32_t partition) const;
     std::int32_t allocate_in(std::int32_t partition, std::string name, std::uint32_t type, std::uint32_t size,
@@ -648,6 +663,7 @@ private:
     void sceKernelSetAlarm(Ctx &ctx);
     void sceKernelSetSysClockAlarm(Ctx &ctx);
     void sceKernelCancelAlarm(Ctx &ctx);
+    void sceKernelReferAlarmStatus(Ctx &ctx);
     void set_alarm(Ctx &ctx, std::uint64_t delay_us);
     void run_alarms();
     void sceKernelDeleteSema(Ctx &ctx);
