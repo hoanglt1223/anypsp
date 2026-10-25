@@ -12,7 +12,7 @@ Text output is compared too, like tests/conformance.py but without the [r]/[x] m
 that starts each line (it records whether the kernel rescheduled, not GE behaviour).
 --against dir also compares each picture with the same test's picture of an earlier run in that
 --out folder (for example Vulkan against GL) and reports the MSE between the two.
-Exit code 1 when any selected test fails, 77 when the corpus is missing.
+Exit code 1 when any selected test fails, 77 when the corpus (or, for --renderer vulkan, a Vulkan device) is missing.
 """
 
 import argparse
@@ -186,6 +186,9 @@ def main():
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda p: run_one(args.runner, args.renderer, p, args.frames, args.timeout, args.out,
                                                   args.max_mse, args.coherent, args.msaa, args.against), programs))
+    if all("fatal: Vulkan" in r["outcome"] for r in results):
+        print(f"no usable Vulkan device: {results[0]['outcome']}")
+        return 77
     for r in results:
         mse_text = "no screenshot" if r["mse"] is None else f"mse {r['mse']:.4f}"
         if "against" in r:

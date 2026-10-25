@@ -112,3 +112,28 @@ if(TARGET anypsp_generated_${ANYPSP_RUNNER_NAME})
         target_link_options(${ANYPSP_GPU_RUNNER} PRIVATE /STACK:67108864)
     endif()
 endif()
+
+# The pspautotests GE screenshot tests that match PPSSPP's reference pictures exactly, as a regression
+# gate (skipped until python tests/fetch-corpus.py has run). vulkan.cmake adds the same for Vulkan.
+set(ANYPSP_GE_EXACT_TESTS commands/ complex/ vertices/ texmtx/uvs primitives/continue primitives/indices
+    primitives/invalidprim primitives/lines primitives/linestrip primitives/points primitives/rectangles
+    primitives/trianglefan primitives/triangles primitives/trianglestrip)
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME ge_screenshots_gl
+             COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/ge-screenshots.py
+                     --runner $<TARGET_FILE:anypsp-interp-gpu> --renderer gl
+                     --out ${CMAKE_CURRENT_BINARY_DIR}/ge-screenshots-gl ${ANYPSP_GE_EXACT_TESTS})
+    set_tests_properties(ge_screenshots_gl PROPERTIES SKIP_RETURN_CODE 77)
+    if(UNIX AND NOT APPLE)
+        # No display on build machines: Mesa's offscreen GL.
+        set_tests_properties(ge_screenshots_gl PROPERTIES ENVIRONMENT SDL_VIDEO_DRIVER=offscreen)
+    endif()
+    if(TARGET Vulkan::Vulkan)
+        add_test(NAME ge_screenshots_vulkan
+                 COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tests/ge-screenshots.py
+                         --runner $<TARGET_FILE:anypsp-interp-gpu> --renderer vulkan
+                         --out ${CMAKE_CURRENT_BINARY_DIR}/ge-screenshots-vulkan ${ANYPSP_GE_EXACT_TESTS})
+        set_tests_properties(ge_screenshots_vulkan PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+endif()
