@@ -162,6 +162,7 @@ void Kernel::start_thread(Thread &t, std::uint32_t arglen, const std::vector<std
 }
 
 void Kernel::stop_thread(Thread &t, std::int32_t status) {
+    tlspl_thread_end(t.uid);
     t.state = ThreadState::Dormant;
     t.suspended = false;
     t.exit_status = status;

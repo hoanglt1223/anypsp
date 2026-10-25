@@ -41,6 +41,8 @@ inline constexpr std::uint32_t kThreadReturnAddress = 0x08800100u;
 inline constexpr std::uint32_t kCallbackReturnAddress = 0x08800108u;
 inline constexpr std::uint32_t kUserPartitionStart = 0x08800000u;
 inline constexpr std::uint32_t kUserPartitionEnd = 0x0A000000u;
+inline constexpr std::uint32_t kVolatilePartitionStart = 0x08400000u;
+inline constexpr std::uint32_t kVolatilePartitionEnd = 0x08800000u;
 inline constexpr std::uint32_t kVramAddress = 0x04000000u;
 inline constexpr std::uint32_t kVramSize = 0x00200000u;
 
@@ -57,7 +59,7 @@ struct CallFrame {
     bool reschedule_after{};
     WaitType wait{WaitType::None};
     std::int32_t wait_uid{};
-    std::uint32_t wait_count{}, wait_mode{}, wait_out_address{}, wait_extra{}, timeout_address{};
+    std::uint32_t wait_count{}, wait_mode{}, wait_out_address{}, wait_extra{}, wait_result_address{}, timeout_address{};
     std::uint64_t wake_time_us{};
     std::uint64_t wait_sequence{};
 };
@@ -86,6 +88,7 @@ struct Thread {
     std::uint32_t wait_mode{};
     std::uint32_t wait_out_address{};
     std::uint32_t wait_extra{};       // a fourth wait argument (message pipes: the buffer size)
+    std::uint32_t wait_result_address{}; // a fifth (message pipes: where the byte count goes)
     std::uint32_t timeout_address{};
     std::uint64_t wake_time_us{};
     std::uint32_t wakeup_count{};
@@ -120,6 +123,7 @@ struct VTimer {
     std::uint64_t base{};         // system time when it last started
     std::uint64_t current{};      // accumulated time while stopped
     std::uint64_t schedule{};     // timer time the handler runs at
+    std::uint64_t fire_at{};      // system time the handler runs at, 0 when not scheduled
     std::uint32_t handler{};
     std::uint32_t common{};
     std::uint32_t gp{};
@@ -132,7 +136,7 @@ struct Tlspl {
     std::uint32_t attr{};
     std::uint32_t index{};
     std::uint32_t block_size{};
-    std::uint32_t unaligned_size{};
+    std::size_t next{};           // where the search for a free block starts
     std::uint32_t alignment{};
     std::uint32_t base{};
     std::int32_t memory_block{-1};
@@ -457,6 +461,8 @@ private:
 
     // Memory.
     std::int32_t allocate(std::string name, std::uint32_t type, std::uint32_t size, std::uint32_t address);
+    std::int32_t allocate_range(std::uint32_t low, std::uint32_t high, std::string name, std::uint32_t type,
+                                std::uint32_t size, std::uint32_t address);
     [[nodiscard]] std::uint32_t largest_free() const;
     [[nodiscard]] std::uint32_t total_free() const;
 
@@ -524,6 +530,70 @@ private:
     void sceKernelGetThreadmanIdType(Ctx &ctx);
     void sceKernelGetThreadmanIdList(Ctx &ctx);
     bool dispatch_enabled_{true};
+    // Memory partitions: 2 and 6 are the user partition, 5 the volatile one.
+    [[nodiscard]] std::uint32_t partition_error(std::int32_t partition) const;
+    std::int32_t allocate_in(std::int32_t partition, std::string name, std::uint32_t type, std::uint32_t size,
+                             std::uint32_t address);
+    void guest_copy(std::uint32_t dst, std::uint32_t src, std::uint32_t length);
+    void store64(std::uint32_t address, std::uint64_t value);
+    // True on an interrupt handler's thread (vblank, alarm, vtimer, GE callbacks).
+    [[nodiscard]] bool in_interrupt() const;
+    // kernel_msgpipe.cpp
+    void install_msgpipe();
+    void msgpipe_waiter_transfer(Thread &t, std::uint32_t address, std::uint32_t length, bool from_waiter);
+    std::vector<Thread *> msgpipe_waiters(std::int32_t uid, bool send);
+    bool msgpipe_check_send(std::int32_t uid);
+    bool msgpipe_check_receive(std::int32_t uid);
+    std::uint32_t msgpipe_send(std::int32_t uid, std::uint32_t address, std::uint32_t size, std::uint32_t mode,
+                               std::uint32_t result_address, bool poll, bool &woke, bool &wait, std::uint32_t &sent);
+    std::uint32_t msgpipe_receive(std::int32_t uid, std::uint32_t address, std::uint32_t size, std::uint32_t mode,
+                                  std::uint32_t result_address, bool poll, bool &woke, bool &wait, std::uint32_t &received);
+    void msgpipe_transfer(Ctx &ctx, bool send, bool poll);
+    bool msgpipe_resume(Thread &t, std::uint32_t &result);
+    void sceKernelCreateMsgPipe(Ctx &ctx);
+    void sceKernelDeleteMsgPipe(Ctx &ctx);
+    void sceKernelSendMsgPipe(Ctx &ctx);
+    void sceKernelTrySendMsgPipe(Ctx &ctx);
+    void sceKernelReceiveMsgPipe(Ctx &ctx);
+    void sceKernelTryReceiveMsgPipe(Ctx &ctx);
+    void sceKernelCancelMsgPipe(Ctx &ctx);
+    void sceKernelReferMsgPipeStatus(Ctx &ctx);
+    // kernel_tls.cpp
+    void install_tlspl();
+    [[nodiscard]] std::uint32_t tlspl_block_address(const Tlspl &pool, std::size_t block) const;
+    std::uint32_t tlspl_allocate(Tlspl &pool, std::int32_t thread_uid);
+    void tlspl_free(std::int32_t uid, std::int32_t thread_uid);
+    void tlspl_thread_end(std::int32_t thread_uid);
+    void sceKernelCreateTlspl(Ctx &ctx);
+    void sceKernelDeleteTlspl(Ctx &ctx);
+    void sceKernelFreeTlspl(Ctx &ctx);
+    void sceKernelGetTlsAddr(Ctx &ctx);
+    void sceKernelAllocateTlspl(Ctx &ctx);
+    void sceKernelReferTlsplStatus(Ctx &ctx);
+    // kernel_vtimer.cpp
+    void install_vtimer();
+    [[nodiscard]] std::uint64_t vtimer_time(const VTimer &timer) const;
+    void vtimer_schedule(VTimer &timer, std::uint64_t schedule);
+    std::uint64_t vtimer_set(VTimer &timer, std::uint64_t time);
+    void run_vtimers();
+    [[nodiscard]] std::uint64_t earliest_vtimer() const;
+    VTimer *find_vtimer(std::int32_t uid);
+    void set_vtimer_handler(Ctx &ctx, std::uint64_t schedule, std::uint32_t handler, std::uint32_t common);
+    void sceKernelCreateVTimer(Ctx &ctx);
+    void sceKernelDeleteVTimer(Ctx &ctx);
+    void sceKernelGetVTimerBase(Ctx &ctx);
+    void sceKernelGetVTimerBaseWide(Ctx &ctx);
+    void sceKernelGetVTimerTime(Ctx &ctx);
+    void sceKernelGetVTimerTimeWide(Ctx &ctx);
+    void sceKernelSetVTimerTime(Ctx &ctx);
+    void sceKernelSetVTimerTimeWide(Ctx &ctx);
+    void sceKernelStartVTimer(Ctx &ctx);
+    void sceKernelStopVTimer(Ctx &ctx);
+    void sceKernelSetVTimerHandler(Ctx &ctx);
+    void sceKernelSetVTimerHandlerWide(Ctx &ctx);
+    void sceKernelCancelVTimerHandler(Ctx &ctx);
+    void sceKernelReferVTimerStatus(Ctx &ctx);
+    std::int32_t running_vtimer_{};
     std::uint32_t sdk_version_{};
     int chance_accumulator_{};
     void sceKernelSleepThread(Ctx &ctx);
@@ -668,6 +738,10 @@ private:
     void sceKernelLibcTime(Ctx &ctx);
     void sceKernelLibcGettimeofday(Ctx &ctx);
     void sceKernelCpuSuspendIntr(Ctx &ctx);
+    void sceKernelCpuResumeIntr(Ctx &ctx);
+    void sceKernelIsCpuIntrEnable(Ctx &ctx);
+    void sceKernelIsCpuIntrSuspended(Ctx &ctx);
+    bool interrupts_enabled_{true};
     void sceKernelMemcpy(Ctx &ctx);
     void sceKernelMemset(Ctx &ctx);
     void return_zero(Ctx &ctx);

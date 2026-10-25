@@ -82,6 +82,7 @@ bool Kernel::start_pending_callback(Thread &t, Ctx &ctx, bool waiting, bool resc
     frame.wait_mode = t.wait_mode;
     frame.wait_out_address = t.wait_out_address;
     frame.wait_extra = t.wait_extra;
+    frame.wait_result_address = t.wait_result_address;
     frame.timeout_address = t.timeout_address;
     frame.wake_time_us = t.wake_time_us;
     frame.wait_sequence = t.wait_sequence;
@@ -125,6 +126,7 @@ void Kernel::callback_returned(Ctx &ctx) {
     t->wait_mode = frame.wait_mode;
     t->wait_out_address = frame.wait_out_address;
     t->wait_extra = frame.wait_extra;
+    t->wait_result_address = frame.wait_result_address;
     t->timeout_address = frame.timeout_address;
     t->wake_time_us = frame.wake_time_us;
     t->wait_sequence = frame.wait_sequence;
@@ -155,6 +157,9 @@ bool Kernel::wait_object_exists(const Thread &t) const {
     case WaitType::Fpl: return fpls_.contains(t.wait_uid);
     case WaitType::Vpl: return vpls_.contains(t.wait_uid);
     case WaitType::ThreadEnd: return threads_.contains(t.wait_uid);
+    case WaitType::MsgPipeSend:
+    case WaitType::MsgPipeReceive: return msgpipes_.contains(t.wait_uid);
+    case WaitType::Tlspl: return tlspls_.contains(t.wait_uid);
     default: return true;
     }
 }
@@ -209,6 +214,16 @@ bool Kernel::try_complete_wait(Thread &t, std::uint32_t &result) {
         const std::uint32_t address = vpls_.at(t.wait_uid).allocate(t.wait_count);
         if (address == 0u) return false;
         if (t.wait_out_address != 0u) m.store32(t.wait_out_address, address);
+        return true;
+    }
+    case WaitType::MsgPipeSend:
+    case WaitType::MsgPipeReceive:
+        return msgpipe_resume(t, result);
+    case WaitType::Tlspl: {
+        const std::uint32_t address = tlspl_allocate(tlspls_.at(t.wait_uid), t.uid);
+        if (address == 0u) return false;
+        if (t.wait_out_address != 0u) m.store32(t.wait_out_address, address);
+        else result = address;
         return true;
     }
     case WaitType::Vblank:

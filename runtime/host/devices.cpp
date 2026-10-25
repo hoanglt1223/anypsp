@@ -108,7 +108,7 @@ void Kernel::install_devices() {
     hle("sceRtc", 0xC41C2853u, "sceRtcGetTickResolution", &Kernel::sceRtcGetTickResolution);
     hle("sceRtc", 0xF2A4AFE5u, "sceRtcTickAddSeconds", &Kernel::sceRtcTickAddSeconds);
     hle("UtilsForUser", 0x91E4F6A7u, "sceKernelLibcClock", &Kernel::sceKernelLibcClock);
-    hle("Kernel_Library", 0xB55249D2u, "sceKernelIsCpuIntrEnable", &Kernel::return_one);
+    hle("Kernel_Library", 0xB55249D2u, "sceKernelIsCpuIntrEnable", &Kernel::sceKernelIsCpuIntrEnable);
 
     const char *util = "sceUtility";
     hle(util, 0xA5DA2406u, "sceUtilityGetSystemParamInt", &Kernel::sceUtilityGetSystemParamInt);

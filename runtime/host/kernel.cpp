@@ -434,13 +434,17 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(ut, 0x6AD345D7u, "sceKernelSetGPO", &Kernel::return_zero);
 
     hle("Kernel_Library", 0x092968F4u, "sceKernelCpuSuspendIntr", &Kernel::sceKernelCpuSuspendIntr);
-    hle("Kernel_Library", 0x5F10D406u, "sceKernelCpuResumeIntr", &Kernel::return_zero);
-    hle("Kernel_Library", 0x3B84732Du, "sceKernelCpuResumeIntrWithSync", &Kernel::return_zero);
+    hle("Kernel_Library", 0x5F10D406u, "sceKernelCpuResumeIntr", &Kernel::sceKernelCpuResumeIntr);
+    hle("Kernel_Library", 0x3B84732Du, "sceKernelCpuResumeIntrWithSync", &Kernel::sceKernelCpuResumeIntr);
+    hle("Kernel_Library", 0x47A0B729u, "sceKernelIsCpuIntrSuspended", &Kernel::sceKernelIsCpuIntrSuspended);
     hle("Kernel_Library", 0x1839852Au, "sceKernelMemcpy", &Kernel::sceKernelMemcpy);
     hle("Kernel_Library", 0xA089ECA4u, "sceKernelMemset", &Kernel::sceKernelMemset);
 
     install_devices();
     install_callbacks();
+    install_msgpipe();
+    install_tlspl();
+    install_vtimer();
     install_lwmutex();
     install_mpeg();
     install_sas();
@@ -588,9 +592,8 @@ void Kernel::poll_waits() {
         if (t.wait == WaitType::Delay) {
             t.wake_time_us = 0u;
             wake(t, 0u);
-        } else if (t.wait == WaitType::Sema || t.wait == WaitType::EventFlag || t.wait == WaitType::ThreadEnd ||
-                   t.wait == WaitType::Fpl || t.wait == WaitType::Mutex || t.wait == WaitType::Mbx ||
-                   t.wait == WaitType::LwMutex || t.wait == WaitType::Vpl) {
+        } else {
+            // Every other wait with a deadline is an object wait with a timeout.
             wake(t, kErrorWaitTimeout);
         }
     }
@@ -616,6 +619,7 @@ std::uint64_t Kernel::earliest_timed_wake() const {
         (void)uid;
         if (alarm.running == 0 && (earliest == 0u || alarm.at < earliest)) earliest = alarm.at;
     }
+    if (const std::uint64_t vtimer = earliest_vtimer(); vtimer != 0u && (earliest == 0u || vtimer < earliest)) earliest = vtimer;
     return earliest;
 }
 
@@ -704,6 +708,7 @@ bool Kernel::frame(double budget_ms) {
         if (g_deterministic) g_virtual_ns += 1000; // scheduler passes that run no guest code still end the frame
         poll_waits();
         run_alarms();
+        run_vtimers();
         run_ge_callbacks();
         dispatch_callbacks();
         if (Thread *running = current()) {
@@ -773,6 +778,17 @@ void Kernel::reserve(std::uint32_t address, std::uint32_t size, std::string name
 }
 
 std::int32_t Kernel::allocate(std::string name, std::uint32_t type, std::uint32_t size, std::uint32_t address) {
+    return allocate_range(kUserPartitionStart, kUserPartitionEnd, std::move(name), type, size, address);
+}
+
+std::int32_t Kernel::allocate_in(std::int32_t partition, std::string name, std::uint32_t type, std::uint32_t size,
+                                 std::uint32_t address) {
+    if (partition == 5) return allocate_range(kVolatilePartitionStart, kVolatilePartitionEnd, std::move(name), type, size, address);
+    return allocate(std::move(name), type, size, address);
+}
+
+std::int32_t Kernel::allocate_range(std::uint32_t low, std::uint32_t high, std::string name, std::uint32_t type,
+                                    std::uint32_t size, std::uint32_t address) {
     size = align_up(std::max(size, 1u), 0x100u);
     std::vector<std::pair<std::uint32_t, std::uint32_t>> used;
     for (const auto &[uid, block] : blocks_) {
@@ -780,14 +796,15 @@ std::int32_t Kernel::allocate(std::string name, std::uint32_t type, std::uint32_
         used.emplace_back(block.address, block.address + block.size);
     }
     std::sort(used.begin(), used.end());
-    // Free gaps between used ranges inside the user partition.
+    // Free gaps between used ranges inside the partition.
     std::vector<std::pair<std::uint32_t, std::uint32_t>> gaps;
-    std::uint32_t cursor = kUserPartitionStart;
+    std::uint32_t cursor = low;
     for (const auto &[begin, end] : used) {
+        if (begin >= high) break;
         if (begin > cursor) gaps.emplace_back(cursor, begin);
         cursor = std::max(cursor, end);
     }
-    if (cursor < kUserPartitionEnd) gaps.emplace_back(cursor, kUserPartitionEnd);
+    if (cursor < high) gaps.emplace_back(cursor, high);
 
     std::uint32_t chosen = 0u;
     if (type == 2u) { // fixed address
@@ -805,6 +822,11 @@ std::int32_t Kernel::allocate(std::string name, std::uint32_t type, std::uint32_
     const std::int32_t uid = new_uid();
     blocks_[uid] = MemoryBlock{std::move(name), chosen, size};
     return uid;
+}
+
+bool Kernel::in_interrupt() const {
+    const auto call = guest_calls_.find(current_uid_);
+    return call != guest_calls_.end() && call->second.caller == 0;
 }
 
 std::uint32_t Kernel::largest_free() const {
@@ -1168,6 +1190,7 @@ void Kernel::sceKernelDisableSubIntr(Ctx &ctx) {
 }
 
 void Kernel::run_interrupts(std::uint32_t interrupt) {
+    if (!interrupts_enabled_) return;
     for (auto &[key, handler] : sub_interrupts_) {
         if (key.first != interrupt || !handler.enabled || handler.handler == 0u) continue;
         if (handler.running != 0 && threads_.contains(handler.running)) continue; // still busy with the last one
@@ -1217,6 +1240,7 @@ void Kernel::sceKernelCancelAlarm(Ctx &ctx) {
 }
 
 void Kernel::run_alarms() {
+    if (!interrupts_enabled_) return;
     const std::uint64_t now = now_us();
     for (auto &[uid, alarm] : alarms_) {
         if (alarm.running != 0 || now < alarm.at) continue;
@@ -1628,7 +1652,19 @@ void Kernel::sceKernelMemset(Ctx &ctx) {
     finish(ctx, dst);
 }
 
-void Kernel::sceKernelCpuSuspendIntr(Ctx &ctx) { finish(ctx, 1u); }
+// Interrupts (vblank handlers, alarms, virtual timers) stay pending while suspended.
+void Kernel::sceKernelCpuSuspendIntr(Ctx &ctx) {
+    finish(ctx, interrupts_enabled_ ? 1u : 0u);
+    interrupts_enabled_ = false;
+}
+
+void Kernel::sceKernelCpuResumeIntr(Ctx &ctx) {
+    interrupts_enabled_ = ctx.gpr[4] != 0u;
+    finish(ctx, 0u);
+}
+
+void Kernel::sceKernelIsCpuIntrEnable(Ctx &ctx) { finish(ctx, interrupts_enabled_ ? 1u : 0u); }
+void Kernel::sceKernelIsCpuIntrSuspended(Ctx &ctx) { finish(ctx, ctx.gpr[4] == 0u ? 1u : 0u); }
 void Kernel::return_zero(Ctx &ctx) { finish(ctx, 0u); }
 
 } // namespace pspweb
