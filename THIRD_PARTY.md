@@ -31,6 +31,12 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 - From AnyGBA (`runtime/src/ui/anyui/`, MIT), the same files in both projects: software rasteriser, TrueType reader, icons and the in-game menu's layout. Copyright (c) 2026 Henry Nguyen. License text: `runtime/gpu/ui/anyui/LICENSE`.
 
+## AnyGBA build front end (MIT): `tools/anypsp/zip.cpp`, `zip.h`, parts of `android.cpp` and `build.cpp`
+
+- From AnyGBA (`tools/anygba/zip.cpp`, `zip.h`, `android.cpp`, `build.cpp`, MIT): the ZIP writer for APKs, the
+  Gradle-free APK assembly (aapt2, javac, d8, zipalign, apksigner) and the process runner, adapted to AnyPSP.
+  Copyright (c) 2026 Henry Nguyen. The ZIP files keep the MIT notice in their header.
+
 ## Noto Sans (SIL Open Font License 1.1): `runtime/gpu/ui/fonts/`
 
 - Noto Sans Regular and SemiBold 2.015 from [notofonts/latin-greek-cyrillic](https://github.com/notofonts/latin-greek-cyrillic) (release `NotoSans-v2.015`, unhinted TTF), subset with fontTools `pyftsubset` to the Latin and Vietnamese letters the menu needs (no layout tables, no hinting), compiled into the desktop player. Copyright 2022 The Noto Project Authors. License text: `runtime/gpu/ui/fonts/OFL.txt`.
@@ -43,7 +49,7 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 ## SDL3 (zlib): fetched at build time, not in the repository
 
-- [libsdl-org/SDL](https://github.com/libsdl-org/SDL) release 3.4.18, pinned by SHA-256 in `runtime/gpu/gpu.cmake` and linked statically into the GPU runners (`anypsp-interp-gpu`, `anypsp-run-<name>-gpu`). It provides the hidden-window OpenGL context, the GL function lookup and PNG writing (SDL's bundled miniz, MIT). License text: `LICENSE.txt` in the fetched source.
+- [libsdl-org/SDL](https://github.com/libsdl-org/SDL) release 3.4.18, pinned by SHA-256 in `runtime/gpu/gpu.cmake` and linked statically into the GPU runners (`anypsp-interp-gpu`, `anypsp-run-<name>-gpu`), the programs `anypsp build` writes and the Android apps (with SDL's Java `SDLActivity` sources compiled into each APK). Release packages carry the fetched release as `share/anypsp/source/third_party/SDL3-src.tar.gz` so games build offline. It provides the hidden-window OpenGL context, the GL function lookup and PNG writing (SDL's bundled miniz, MIT). License text: `LICENSE.txt` in the fetched source.
 
 ## PPSSPP (GPL-2.0-or-later): behaviour reference and data source
 

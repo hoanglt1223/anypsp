@@ -209,3 +209,6 @@ endif()
 
 # Desktop GPU backend and its offscreen runners.
 include(runtime/gpu/gpu.cmake)
+
+# Hosts, the anypsp front end and packaging.
+include(cmake/hosts.cmake)
