@@ -18,7 +18,10 @@ namespace {
 
 using K = OpcodeKind;
 
-constexpr std::uint32_t kBudget = 1u << 20u;
+// Instructions per interpreted dispatch. The kernel checks for interrupts and the end of a time slice
+// every 1024 dispatches, so this bounds how long interpreted code runs without seeing them
+// (about 4M instructions, ~12 ms of PSP time).
+constexpr std::uint32_t kBudget = 1u << 12u;
 constexpr std::uint32_t kMaxBlockBytes = 4096u;
 
 struct DynamicBlock {
