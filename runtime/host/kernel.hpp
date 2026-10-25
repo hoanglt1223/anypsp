@@ -8,6 +8,7 @@
 #include "ge.hpp"
 #include "ge_worker.hpp"
 #include "generated_modules.hpp"
+#include "system_dialog.hpp"
 #include "webfs.hpp"
 
 #include "psprecomp/elf32.hpp"
@@ -209,6 +210,7 @@ struct AudioChannel {
 struct UtilityDialog {
     std::uint32_t status{};   // 0 none, 1 init, 2 visible, 3 quit, 4 finished
     std::uint32_t params{};
+    bool waiting{};           // visible until the player answers (interactive dialogs)
 };
 
 struct DisplayState {
@@ -292,6 +294,18 @@ public:
     using AudioSink = void (*)(const std::int16_t *samples, std::uint32_t frames);
     void set_audio_sink(AudioSink sink) { audio_sink_ = sink; }
     void savedata_choose(int index);
+
+    // System utility dialogs (message, savedata). Off (the default): they are answered at once
+    // as before. On: system_dialog() describes the open one until the player answers it.
+    void set_interactive_dialogs(bool on) noexcept { interactive_dialogs_ = on; }
+    [[nodiscard]] bool interactive_dialogs() const noexcept { return interactive_dialogs_; }
+    [[nodiscard]] const SystemDialog *system_dialog() const noexcept { return dialog_owner_ != DialogOwner::None ? &dialog_ : nullptr; }
+    // List: next (+) or previous (-) item; Yes/No: the other button.
+    void dialog_move(int delta);
+    // Focuses an item (list) or button (Yes/No: 0 Yes, 1 No), as a pointer does before confirming.
+    void dialog_focus(int index);
+    void dialog_confirm();
+    void dialog_back();
     [[nodiscard]] bool interrupt_pending() const noexcept { return ge_event_pending_.load(std::memory_order_relaxed); }
 
 private:
@@ -638,6 +652,20 @@ private:
     void install_atrac();    // atrac.cpp: ATRAC3/ATRAC3+ streams (music, speech)
     void install_savedata();
     std::shared_ptr<void> savedata_;
+    enum class DialogOwner : std::uint8_t { None, Message, Savedata };
+    void open_dialog(SystemDialog dialog, DialogOwner owner);
+    void close_dialog() noexcept { dialog_owner_ = DialogOwner::None; }
+    void dialog_answer(bool confirmed);
+    void msg_dialog_answer(bool confirmed);
+    void savedata_answer(bool confirmed);
+    void savedata_show(int step);  // savedata.cpp
+    // Closes a completed message whose time is up.
+    void dialog_tick();
+    bool interactive_dialogs_{};
+    SystemDialog dialog_;
+    DialogOwner dialog_owner_{DialogOwner::None};
+    std::uint64_t dialog_serial_{};
+    std::uint64_t dialog_close_at_us_{};  // guest time a completed message closes by itself, 0 none
     std::shared_ptr<void> atrac_;           // atrac.cpp state
     void install_fonts();
     std::shared_ptr<void> fonts_;

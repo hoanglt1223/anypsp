@@ -442,11 +442,17 @@ private:
     const fs::path &memstick_;
 };
 
+// Where an interactive savedata dialog is (Kernel::set_interactive_dialogs).
+enum class Stage : std::uint8_t { List, Confirm, NoData, Done, Failed };
+
 struct Savedata {
     std::uint32_t status = 0, params = 0, mode = 0;
     bool waiting = false;
     std::vector<Slot> slots;
     std::unique_ptr<Store> store;
+    Stage stage = Stage::List;
+    int chosen = 0;              // the slot being confirmed or acted on
+    std::uint32_t result = 0;    // the outcome, written when the dialog closes
 };
 
 Savedata &state(std::shared_ptr<void> &slot) {
@@ -494,6 +500,44 @@ int initial_choice(const std::vector<Slot> &slots, std::uint32_t focus, const st
     return std::clamp(choice, 0, n - 1);
 }
 
+bool list_mode(std::uint32_t mode) { return mode == kListLoad || mode == kListSave || mode == kListDelete || mode == kListAllDelete; }
+
+SystemDialog::Heading heading(std::uint32_t mode) {
+    switch (mode) {
+    case kLoad: case kListLoad: return SystemDialog::Heading::Load;
+    case kSave: case kListSave: return SystemDialog::Heading::Save;
+    default: return SystemDialog::Heading::Delete;
+    }
+}
+
+// Runs the mode on one slot (list choice or confirmed request), as the PSP does after its dialog.
+std::uint32_t perform(Savedata &sd, int index) {
+    Store &s = *sd.store;
+    const std::uint32_t p = sd.params;
+    const std::string name = sd.slots[static_cast<std::size_t>(index)].name;
+    s.put_text(p + kSaveName, 20u, name);
+    std::uint32_t result = 0u;
+    if (sd.mode == kListLoad || sd.mode == kLoad) result = s.load(p, name, false);
+    else if (sd.mode == kListSave || sd.mode == kSave) result = s.save(p, name, false);
+    else result = s.remove(p, name);
+    std::cerr << "[savedata] chose " << name << " -> 0x" << std::hex << result << std::dec << "\n";
+    if (sd.mode != kListLoad && sd.mode != kLoad && result == 0u) saves_changed();
+    return result;
+}
+
+SystemDialog::Item item(const Store &s, std::uint32_t p, const Slot &slot) {
+    SystemDialog::Item it;
+    it.name = slot.name;
+    it.exists = slot.exists;
+    it.title = slot.title;
+    it.savedata_title = slot.savedata_title;
+    it.detail = slot.detail;
+    it.time = static_cast<std::int64_t>(slot.time);
+    std::error_code ec;
+    if (const fs::path icon = s.dir(p, slot.name) / "ICON0.PNG"; slot.exists && fs::is_regular_file(icon, ec)) it.icon = icon;
+    return it;
+}
+
 } // namespace
 
 void Kernel::install_savedata() {
@@ -516,6 +560,12 @@ void Kernel::install_savedata() {
         sd = Savedata{1u, p, mode, false, {}, std::move(sd.store)};
         std::uint32_t result = 0u;
         bool changed = false;
+        if (interactive_dialogs_ && (mode == kLoad || mode == kSave || mode == kDelete)) {
+            sd.slots.push_back(s.slot(s.game(p), name));
+            sd.waiting = true;
+            savedata_show(sd.slots.front().exists || mode == kSave ? 1 : 2);
+            return 0u;
+        }
         switch (mode) {
         case kAutoLoad: case kLoad: result = s.load(p, name, false); break;
         case kReadData: case kReadDataSecure: result = s.load(p, name, true); break;
@@ -551,12 +601,20 @@ void Kernel::install_savedata() {
                 Slot slot = s.slot(s.game(p), n);
                 if (mode == kListSave || slot.exists) sd.slots.push_back(std::move(slot));
             }
-            if (sd.slots.empty()) {
+            if (sd.slots.empty() && !interactive_dialogs_) {
                 result = mode == kListLoad ? kLoadNoData : kDeleteNoData;
                 break;
             }
-            const int focus = initial_choice(sd.slots, m.load32(p + kFocus), name);
             sd.waiting = true;
+            if (interactive_dialogs_) {
+                if (sd.slots.empty()) savedata_show(2);
+                else {
+                    sd.chosen = initial_choice(sd.slots, m.load32(p + kFocus), name);
+                    savedata_show(0);
+                }
+                return 0u;
+            }
+            const int focus = initial_choice(sd.slots, m.load32(p + kFocus), name);
 #ifdef __EMSCRIPTEN__
             std::string json = std::string("{\"mode\":\"") + (mode == kListLoad ? "load" : mode == kListSave ? "save" : "delete") +
                                "\",\"focus\":" + std::to_string(focus) + ",\"root\":" + json_string(s.root().string()) + ",\"game\":" +
@@ -585,7 +643,8 @@ void Kernel::install_savedata() {
         if (changed && result == 0u) saves_changed();
         return 0u;
     });
-    add(0x8874DBE0u, "sceUtilitySavedataGetStatus", [&sd](Ctx &) {
+    add(0x8874DBE0u, "sceUtilitySavedataGetStatus", [&sd, this](Ctx &) {
+        dialog_tick();
         const std::uint32_t status = sd.status;
         if (sd.status == 1u) sd.status = 2u;
         else if (sd.status == 2u && !sd.waiting) sd.status = 3u;
@@ -593,8 +652,10 @@ void Kernel::install_savedata() {
         return status;
     });
     add(0xD4B95FFBu, "sceUtilitySavedataUpdate", [](Ctx &) { return 0u; });
-    add(0x9790B33Cu, "sceUtilitySavedataShutdownStart", [&sd](Ctx &) {
+    add(0x9790B33Cu, "sceUtilitySavedataShutdownStart", [&sd, this](Ctx &) {
         sd.status = 4u;
+        sd.waiting = false;
+        if (dialog_owner_ == DialogOwner::Savedata) close_dialog();
         return 0u;
     });
 }
@@ -603,23 +664,100 @@ void Kernel::savedata_choose(int index) {
     Savedata &sd = state(savedata_);
     if (!sd.waiting) return;
     sd.waiting = false;
-    Store &s = *sd.store;
-    const std::uint32_t p = sd.params;
     std::uint32_t result = kCanceled;
-    if (index >= 0 && static_cast<std::size_t>(index) < sd.slots.size()) {
-        const std::string name = sd.slots[static_cast<std::size_t>(index)].name;
-        s.put_text(p + kSaveName, 20u, name);
-        if (sd.mode == kListLoad) {
-            result = s.load(p, name, false);
-        } else if (sd.mode == kListSave) {
-            result = s.save(p, name, false);
-        } else {
-            result = s.remove(p, name);
-        }
-        std::cerr << "[savedata] chose " << name << " -> 0x" << std::hex << result << std::dec << "\n";
-        if (sd.mode != kListLoad && result == 0u) saves_changed();
+    if (index >= 0 && static_cast<std::size_t>(index) < sd.slots.size()) result = perform(sd, index);
+    rt_.memory().store32(sd.params + kResult, result);
+}
+
+// Shows a step of the interactive savedata dialog: 0 the list, 1 the Yes/No question about the
+// chosen slot, 2 "There is no data.", 3 the completed message, 4 the failure message.
+void Kernel::savedata_show(int step) {
+    Savedata &sd = state(savedata_);
+    const Store &s = *sd.store;
+    const std::uint32_t p = sd.params;
+    SystemDialog d;
+    d.heading = heading(sd.mode);
+    d.cross_confirms = rt_.memory().load32(p + 8u) == 1u;
+    using Text = SystemDialog::Text;
+    const bool load = d.heading == SystemDialog::Heading::Load, save = d.heading == SystemDialog::Heading::Save;
+    switch (step) {
+    case 0:
+        sd.stage = Stage::List;
+        d.kind = SystemDialog::Kind::SaveList;
+        for (const Slot &slot : sd.slots) d.items.push_back(item(s, p, slot));
+        d.focus = sd.chosen;
+        break;
+    case 1: {
+        sd.stage = Stage::Confirm;
+        const bool overwrite = save && sd.slots[static_cast<std::size_t>(sd.chosen)].exists;
+        d.text_id = load ? Text::ConfirmLoad : overwrite ? Text::ConfirmOverwrite : save ? Text::ConfirmSave : Text::ConfirmDelete;
+        d.buttons = SystemDialog::Buttons::YesNo;
+        // Overwriting and deleting start on No, as on the PSP.
+        d.focus = overwrite || (!load && !save) ? 1 : 0;
+        d.items.push_back(item(s, p, sd.slots[static_cast<std::size_t>(sd.chosen)]));
+        break;
     }
-    rt_.memory().store32(p + kResult, result);
+    case 2:
+        sd.stage = Stage::NoData;
+        d.text_id = Text::NoData;
+        break;
+    case 3:
+        sd.stage = Stage::Done;
+        d.text_id = load ? Text::LoadDone : save ? Text::SaveDone : Text::DeleteDone;
+        break;
+    default:
+        sd.stage = Stage::Failed;
+        d.text_id = load ? Text::LoadFailed : save ? Text::SaveFailed : Text::DeleteFailed;
+        d.error = sd.result;
+        break;
+    }
+    open_dialog(std::move(d), DialogOwner::Savedata);
+    // The completed message closes by itself after about a second.
+    if (step == 3) dialog_close_at_us_ = now_us() + 1'000'000u;
+}
+
+void Kernel::savedata_answer(bool confirmed) {
+    Savedata &sd = state(savedata_);
+    if (!sd.waiting) {
+        close_dialog();
+        return;
+    }
+    const auto close = [&](std::uint32_t result) {
+        std::cerr << "[savedata] dialog closed -> 0x" << std::hex << result << std::dec << "\n";
+        rt_.memory().store32(sd.params + kResult, result);
+        sd.waiting = false;
+        if (sd.status == 2u) sd.status = 3u;
+        close_dialog();
+    };
+    const auto act = [&] {
+        sd.result = perform(sd, sd.chosen);
+        savedata_show(sd.result == 0u ? 3 : 4);
+    };
+    const bool list = list_mode(sd.mode);
+    switch (sd.stage) {
+    case Stage::List:
+        if (!confirmed || sd.slots.empty()) {
+            close(kCanceled);
+            break;
+        }
+        sd.chosen = std::clamp(dialog_.focus, 0, static_cast<int>(sd.slots.size()) - 1);
+        // Loading and saving to new data start at once; overwriting and deleting ask first.
+        if (sd.mode == kListLoad || (sd.mode == kListSave && !sd.slots[static_cast<std::size_t>(sd.chosen)].exists)) act();
+        else savedata_show(1);
+        break;
+    case Stage::Confirm:
+        if (confirmed && dialog_.focus == 0) act();
+        else if (list) savedata_show(0);
+        else close(kCanceled);
+        break;
+    case Stage::NoData:
+        close(heading(sd.mode) == SystemDialog::Heading::Load ? kLoadNoData : kDeleteNoData);
+        break;
+    case Stage::Done:
+    case Stage::Failed:
+        close(sd.result);
+        break;
+    }
 }
 
 } // namespace pspweb

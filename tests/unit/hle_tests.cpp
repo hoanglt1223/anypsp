@@ -11,6 +11,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -269,4 +270,336 @@ TEST_CASE("sceCtrl sampling mode, cycle and idle threshold are validated") {
     CHECK(h.call(kCtrl, 0x687660FAu, kScratch, kScratch + 4u) == 0u);
     CHECK(m.load32(kScratch) == 40u);
     CHECK(m.load32(kScratch + 4u) == 0xFFFFFFFFu);
+}
+
+namespace {
+
+constexpr const char *kUtility = "sceUtility";
+constexpr std::uint32_t kMsgInit = 0x2AD8E239u, kMsgStatus = 0x9A1C91D7u, kMsgShutdown = 0x67AF3428u;
+constexpr std::uint32_t kSaveInit = 0x50C4CD57u, kSaveStatus = 0x8874DBE0u, kSaveShutdown = 0x9790B33Cu;
+constexpr std::uint32_t kParams = kScratch, kNames = kScratch + 0x1000u, kData = kScratch + 0x2000u;
+using Dialog = pspweb::SystemDialog;
+
+// A message dialog request of `size` bytes (572, 580 or 708) with the Western button layout.
+void message_request(Hle &h, std::uint32_t size, std::uint32_t type, std::uint32_t options, const std::string &text,
+                     std::uint32_t error = 0u) {
+    auto &m = h.rt.memory();
+    for (std::uint32_t i = 0; i < 0x300u; i += 4u) m.store32(kParams + i, 0u);
+    m.store32(kParams, size);
+    m.store32(kParams + 8u, 1u);
+    m.store32(kParams + 0x34u, type);
+    m.store32(kParams + 0x38u, error);
+    h.store_string(kParams + 0x3Cu, text);
+    m.store32(kParams + 0x23Cu, options);
+    m.store32(kParams + 0x240u, 0xFFu);
+}
+
+// A savedata request for game ULUS10001 and DATA.BIN; `names` fills saveNameList.
+void save_request(Hle &h, std::uint32_t mode, const std::string &name, const std::vector<std::string> &names = {}) {
+    auto &m = h.rt.memory();
+    for (std::uint32_t i = 0; i < 0x600u; i += 4u) m.store32(kParams + i, 0u);
+    m.store32(kParams, 0x5F8u);
+    m.store32(kParams + 8u, 1u);
+    m.store32(kParams + 0x30u, mode);
+    h.store_string(kParams + 0x3Cu, "ULUS10001");
+    h.store_string(kParams + 0x4Cu, name);
+    if (!names.empty()) {
+        for (std::size_t i = 0; i <= names.size(); ++i)
+            h.store_string(kNames + static_cast<std::uint32_t>(i) * 20u, i < names.size() ? names[i] : "");
+        m.store32(kParams + 0x60u, kNames);
+    }
+    h.store_string(kParams + 0x64u, "DATA.BIN");
+    m.store32(kParams + 0x74u, kData);
+    m.store32(kParams + 0x78u, 16u);
+    m.store32(kParams + 0x7Cu, 4u);
+    h.store_string(kParams + 0x80u, "Test Quest");
+    h.store_string(kParams + 0x100u, "Chapter 1");
+}
+
+std::filesystem::path memstick(Hle &h, const std::string &name) {
+    const auto root = std::filesystem::temp_directory_path() / ("anypsp-hle-" + name);
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    h.kernel->set_roots(root / "disc", root);
+    return root;
+}
+
+} // namespace
+
+TEST_CASE("message dialog without interactive dialogs answers Yes at once") {
+    Hle h;
+    message_request(h, 580u, 1u, 0x10u, "Save data?");
+    CHECK(h.call(kUtility, kMsgInit, kParams) == 0u);
+    CHECK(h.kernel->system_dialog() == nullptr);
+    CHECK(h.rt.memory().load32(kParams + 0x240u) == 1u);
+    CHECK(h.call(kUtility, kMsgStatus) == 1u);
+    CHECK(h.call(kUtility, kMsgStatus) == 2u);
+    CHECK(h.call(kUtility, kMsgStatus) == 3u);
+}
+
+TEST_CASE("interactive message dialog stays visible until answered and reports the button") {
+    Hle h;
+    auto &m = h.rt.memory();
+    h.kernel->set_interactive_dialogs(true);
+    // Yes/No starting on No; Yes chosen.
+    message_request(h, 580u, 1u, 0x110u, "Save data?");
+    CHECK(h.call(kUtility, kMsgInit, kParams) == 0u);
+    const Dialog *d = h.kernel->system_dialog();
+    CHECK(d != nullptr && d->kind == Dialog::Kind::Message && d->text == "Save data?");
+    CHECK(d->buttons == Dialog::Buttons::YesNo && d->focus == 1 && d->cross_confirms);
+    CHECK(h.call(kUtility, kMsgStatus) == 1u);
+    CHECK(h.call(kUtility, kMsgStatus) == 2u);
+    CHECK(h.call(kUtility, kMsgStatus) == 2u);
+    h.kernel->dialog_move(-1);
+    CHECK(h.kernel->system_dialog()->focus == 0);
+    h.kernel->dialog_move(-1);
+    CHECK(h.kernel->system_dialog()->focus == 0);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog() == nullptr);
+    CHECK(m.load32(kParams + 0x240u) == 1u);
+    CHECK(m.load32(kParams + 0x30u) == 0u && m.load32(kParams + 0x1Cu) == 0u);
+    CHECK(h.call(kUtility, kMsgStatus) == 3u);
+    CHECK(h.call(kUtility, kMsgShutdown) == 0u);
+    CHECK(h.call(kUtility, kMsgStatus) == 4u);
+    CHECK(h.call(kUtility, kMsgStatus) == 0u);
+
+    // No, then going back.
+    message_request(h, 580u, 1u, 0x10u, "Quit?");
+    h.call(kUtility, kMsgInit, kParams);
+    CHECK(h.kernel->system_dialog()->focus == 0);
+    h.kernel->dialog_focus(1);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x240u) == 2u);
+    message_request(h, 580u, 1u, 0x10u, "Quit?");
+    h.call(kUtility, kMsgInit, kParams);
+    h.kernel->dialog_back();
+    CHECK(m.load32(kParams + 0x240u) == 3u);
+
+    // An error code; a plain V2 message reports 0 however it closes, a V3 OK button 1.
+    message_request(h, 580u, 0u, 0u, "", 0x80110307u);
+    h.call(kUtility, kMsgInit, kParams);
+    d = h.kernel->system_dialog();
+    CHECK(d->text_id == Dialog::Text::Error && d->error == 0x80110307u && d->buttons == Dialog::Buttons::Ok);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x240u) == 0u);
+    message_request(h, 708u, 1u, 0x20u, "Done.");
+    h.call(kUtility, kMsgInit, kParams);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x240u) == 1u);
+    // V1 requests end before buttonPressed.
+    message_request(h, 572u, 1u, 0u, "Hello");
+    h.call(kUtility, kMsgInit, kParams);
+    h.kernel->dialog_back();
+    CHECK(m.load32(kParams + 0x240u) == 0xFFu);
+    // Shutting down closes a dialog the player has not answered.
+    message_request(h, 580u, 1u, 0u, "Hello");
+    h.call(kUtility, kMsgInit, kParams);
+    h.call(kUtility, kMsgShutdown);
+    CHECK(h.kernel->system_dialog() == nullptr);
+}
+
+TEST_CASE("savedata list load with no saves: no dialog when not interactive, else \"There is no data\"") {
+    Hle h;
+    auto &m = h.rt.memory();
+    const auto root = memstick(h, "nodata");
+    save_request(h, 4u, "");
+    CHECK(h.call(kUtility, kSaveInit, kParams) == 0u);
+    CHECK(h.kernel->system_dialog() == nullptr);
+    CHECK(m.load32(kParams + 0x1Cu) == 0x80110307u);
+    CHECK(h.call(kUtility, kSaveStatus) == 1u);
+    CHECK(h.call(kUtility, kSaveStatus) == 2u);
+    CHECK(h.call(kUtility, kSaveStatus) == 3u);
+    CHECK(h.call(kUtility, kSaveShutdown) == 0u);
+    CHECK(h.call(kUtility, kSaveStatus) == 4u);
+    CHECK(h.call(kUtility, kSaveStatus) == 0u);
+
+    h.kernel->set_interactive_dialogs(true);
+    for (const std::uint32_t mode : {4u, 6u}) {
+        save_request(h, mode, "");
+        m.store32(kParams + 0x1Cu, 0xFFu);
+        CHECK(h.call(kUtility, kSaveInit, kParams) == 0u);
+        const Dialog *d = h.kernel->system_dialog();
+        CHECK(d != nullptr && d->kind == Dialog::Kind::Message && d->text_id == Dialog::Text::NoData);
+        CHECK(d->heading == (mode == 4u ? Dialog::Heading::Load : Dialog::Heading::Delete));
+        CHECK(d->buttons == Dialog::Buttons::Ok);
+        CHECK(h.call(kUtility, kSaveStatus) == 1u);
+        CHECK(h.call(kUtility, kSaveStatus) == 2u);
+        CHECK(h.call(kUtility, kSaveStatus) == 2u);
+        CHECK(m.load32(kParams + 0x1Cu) == 0xFFu);
+        h.kernel->dialog_confirm();
+        CHECK(h.kernel->system_dialog() == nullptr);
+        CHECK(m.load32(kParams + 0x1Cu) == (mode == 4u ? 0x80110307u : 0x80110347u));
+        CHECK(h.call(kUtility, kSaveStatus) == 3u);
+        h.call(kUtility, kSaveShutdown);
+        CHECK(h.call(kUtility, kSaveStatus) == 4u);
+        CHECK(h.call(kUtility, kSaveStatus) == 0u);
+    }
+    std::filesystem::remove_all(root);
+}
+
+TEST_CASE("interactive savedata list: new data saves at once, overwriting asks, No goes back, then completed") {
+    namespace fs = std::filesystem;
+    Hle h;
+    auto &m = h.rt.memory();
+    const auto root = memstick(h, "listsave");
+    h.kernel->set_interactive_dialogs(true);
+    m.store32(kData, 0x44434241u);  // "ABCD"
+
+    save_request(h, 5u, "0000", {"0000", "0001"});
+    CHECK(h.call(kUtility, kSaveInit, kParams) == 0u);
+    const Dialog *d = h.kernel->system_dialog();
+    CHECK(d != nullptr && d->kind == Dialog::Kind::SaveList && d->heading == Dialog::Heading::Save);
+    CHECK(d->items.size() == 2u && !d->items[0].exists && !d->items[1].exists && d->focus == 0);
+    CHECK(h.call(kUtility, kSaveStatus) == 1u);
+    h.kernel->dialog_move(1);
+    h.kernel->dialog_move(1);
+    CHECK(h.kernel->system_dialog()->focus == 1);
+    h.kernel->dialog_confirm();
+    d = h.kernel->system_dialog();
+    CHECK(d != nullptr && d->text_id == Dialog::Text::SaveDone);
+    CHECK(fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010001" / "DATA.BIN"));
+    CHECK(h.call(kUtility, kSaveStatus) == 2u);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog() == nullptr);
+    CHECK(m.load32(kParams + 0x1Cu) == 0u);
+    CHECK(h.call(kUtility, kSaveStatus) == 3u);
+    h.call(kUtility, kSaveShutdown);
+    CHECK(h.call(kUtility, kSaveStatus) == 4u);
+    CHECK(h.call(kUtility, kSaveStatus) == 0u);
+
+    // Over the existing save: the question starts on No, which goes back to the list.
+    save_request(h, 5u, "0000", {"0000", "0001"});
+    h.call(kUtility, kSaveInit, kParams);
+    d = h.kernel->system_dialog();
+    CHECK(d->items[1].exists && d->items[1].title == "Test Quest" && d->items[1].savedata_title == "Chapter 1");
+    h.kernel->dialog_focus(1);
+    h.kernel->dialog_confirm();
+    d = h.kernel->system_dialog();
+    CHECK(d->kind == Dialog::Kind::Message && d->text_id == Dialog::Text::ConfirmOverwrite);
+    CHECK(d->buttons == Dialog::Buttons::YesNo && d->focus == 1 && d->items.size() == 1u);
+    h.kernel->dialog_confirm();
+    d = h.kernel->system_dialog();
+    CHECK(d->kind == Dialog::Kind::SaveList && d->focus == 1);
+    h.kernel->dialog_confirm();
+    h.kernel->dialog_move(-1);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::SaveDone);
+    h.kernel->dialog_back();
+    CHECK(m.load32(kParams + 0x1Cu) == 0u);
+    CHECK(m.load32(kParams + 0x4Cu) == 0x31303030u);  // saveName = "0001"
+
+    // Cancelling the list.
+    h.call(kUtility, kSaveShutdown);
+    h.call(kUtility, kSaveStatus);
+    save_request(h, 4u, "");
+    h.call(kUtility, kSaveInit, kParams);
+    d = h.kernel->system_dialog();
+    CHECK(d->kind == Dialog::Kind::SaveList && d->heading == Dialog::Heading::Load && d->items.size() == 1u);
+    h.kernel->dialog_back();
+    CHECK(h.kernel->system_dialog() == nullptr);
+    CHECK(m.load32(kParams + 0x1Cu) == 1u);
+
+    // Loading from the list: no question, then "Load completed." with the data in the buffer.
+    save_request(h, 4u, "");
+    m.store32(kData, 0u);
+    h.call(kUtility, kSaveInit, kParams);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::LoadDone);
+    CHECK(m.load32(kData) == 0x44434241u);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x1Cu) == 0u);
+
+    // Deleting from the list asks first, starting on No.
+    save_request(h, 6u, "");
+    h.call(kUtility, kSaveInit, kParams);
+    h.kernel->dialog_confirm();
+    d = h.kernel->system_dialog();
+    CHECK(d->text_id == Dialog::Text::ConfirmDelete && d->focus == 1);
+    h.kernel->dialog_move(-1);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::DeleteDone);
+    CHECK(!fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010001"));
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x1Cu) == 0u);
+    fs::remove_all(root);
+}
+
+TEST_CASE("interactive savedata load, save and delete of one slot confirm first") {
+    namespace fs = std::filesystem;
+    Hle h;
+    auto &m = h.rt.memory();
+    const auto root = memstick(h, "single");
+    h.kernel->set_interactive_dialogs(true);
+
+    // Loading a missing save: "There is no data."
+    save_request(h, 2u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::NoData);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x1Cu) == 0x80110307u);
+
+    // Saving: Yes first; No cancels.
+    save_request(h, 3u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    const Dialog *d = h.kernel->system_dialog();
+    CHECK(d->text_id == Dialog::Text::ConfirmSave && d->focus == 0 && d->heading == Dialog::Heading::Save);
+    h.kernel->dialog_move(1);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog() == nullptr && m.load32(kParams + 0x1Cu) == 1u);
+    CHECK(!fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010000"));
+    save_request(h, 3u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::SaveDone);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x1Cu) == 0u && fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010000" / "PARAM.SFO"));
+
+    // Saving again asks to overwrite; loading asks to load.
+    save_request(h, 3u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::ConfirmOverwrite && h.kernel->system_dialog()->focus == 1);
+    h.kernel->dialog_back();
+    CHECK(m.load32(kParams + 0x1Cu) == 1u);
+    save_request(h, 2u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::ConfirmLoad);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::LoadDone);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x1Cu) == 0u);
+
+    // Auto modes stay silent.
+    save_request(h, 0u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    CHECK(h.kernel->system_dialog() == nullptr && m.load32(kParams + 0x1Cu) == 0u);
+
+    // Deleting asks, starting on No.
+    save_request(h, 10u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::ConfirmDelete && h.kernel->system_dialog()->focus == 1);
+    h.kernel->dialog_focus(0);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::DeleteDone);
+    h.kernel->dialog_confirm();
+    CHECK(m.load32(kParams + 0x1Cu) == 0u && !fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010000"));
+    fs::remove_all(root);
+}
+
+TEST_CASE("interactive savedata completed message closes by itself after about a second") {
+    Hle h;
+    auto &m = h.rt.memory();
+    const auto root = memstick(h, "autoclose");
+    h.kernel->set_interactive_dialogs(true);
+    save_request(h, 3u, "0000");
+    h.call(kUtility, kSaveInit, kParams);
+    CHECK(h.call(kUtility, kSaveStatus) == 1u);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::SaveDone);
+    for (int vblank = 0; vblank < 30; ++vblank) h.kernel->frame(0.0);
+    CHECK(h.call(kUtility, kSaveStatus) == 2u);
+    CHECK(h.kernel->system_dialog() != nullptr);
+    for (int vblank = 0; vblank < 32; ++vblank) h.kernel->frame(0.0);
+    CHECK(h.call(kUtility, kSaveStatus) == 3u);
+    CHECK(h.kernel->system_dialog() == nullptr && m.load32(kParams + 0x1Cu) == 0u);
+    std::filesystem::remove_all(root);
 }

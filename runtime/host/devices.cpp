@@ -561,29 +561,114 @@ void Kernel::sceRtcGetCurrentClockLocalTime(Ctx &ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// sceUtility dialogs: report success without UI.
+// sceUtility dialogs: answered at once, or shown by the host when interactive.
 
 void Kernel::dialog_get_status(Ctx &ctx, UtilityDialog &dialog) {
     const std::uint32_t status = dialog.status;
     if (dialog.status == 1u) dialog.status = 2u;
-    else if (dialog.status == 2u) dialog.status = 3u;
+    else if (dialog.status == 2u && !dialog.waiting) dialog.status = 3u;
     else if (dialog.status == 4u) dialog.status = 0u;
     finish(ctx, status);
 }
 
+void Kernel::open_dialog(SystemDialog dialog, DialogOwner owner) {
+    dialog_ = std::move(dialog);
+    dialog_.serial = ++dialog_serial_;
+    dialog_owner_ = owner;
+    dialog_close_at_us_ = 0u;
+}
+
+void Kernel::dialog_move(int delta) {
+    if (dialog_owner_ == DialogOwner::None || delta == 0) return;
+    const int count = dialog_.kind == SystemDialog::Kind::SaveList ? static_cast<int>(dialog_.items.size())
+                      : dialog_.buttons == SystemDialog::Buttons::YesNo ? 2 : 1;
+    dialog_focus(std::clamp(dialog_.focus + delta, 0, count - 1));
+}
+
+void Kernel::dialog_focus(int index) {
+    if (dialog_owner_ == DialogOwner::None) return;
+    const int count = dialog_.kind == SystemDialog::Kind::SaveList ? static_cast<int>(dialog_.items.size())
+                      : dialog_.buttons == SystemDialog::Buttons::YesNo ? 2 : 1;
+    if (index >= 0 && index < count) dialog_.focus = index;
+}
+
+void Kernel::dialog_confirm() { dialog_answer(true); }
+void Kernel::dialog_back() { dialog_answer(false); }
+
+void Kernel::dialog_answer(bool confirmed) {
+    switch (dialog_owner_) {
+    case DialogOwner::Message: msg_dialog_answer(confirmed); break;
+    case DialogOwner::Savedata: savedata_answer(confirmed); break;
+    case DialogOwner::None: break;
+    }
+}
+
+void Kernel::dialog_tick() {
+    if (dialog_owner_ != DialogOwner::None && dialog_close_at_us_ != 0u && now_us() >= dialog_close_at_us_) dialog_confirm();
+}
+
+namespace {
+// pspUtilityMsgDialogParams: the common header (size at 0, buttonSwap at 8, result at 0x1C), then these.
+constexpr std::uint32_t kMsgResult = 0x30u, kMsgType = 0x34u, kMsgErrorNum = 0x38u, kMsgText = 0x3Cu, kMsgOptions = 0x23Cu,
+                        kMsgButtonPressed = 0x240u;
+constexpr std::uint32_t kMsgSizeV2 = 580u, kMsgSizeV3 = 708u;
+constexpr std::uint32_t kMsgOptionYesNo = 0x10u, kMsgOptionOk = 0x20u, kMsgOptionDefaultNo = 0x100u;
+} // namespace
+
 void Kernel::sceUtilityMsgDialogInitStart(Ctx &ctx) {
     const std::uint32_t params = ctx.gpr[4];
-    std::cerr << "[utility] message dialog: \"" << read_string(params + 0x3Cu, 512) << "\"\n";
-    rt_.memory().store32(params + 0x1Cu, 0u);   // result
-    rt_.memory().store32(params + 0x240u, 1u);  // buttonPressed = YES
-    msg_dialog_ = UtilityDialog{1u, params};
+    auto &m = rt_.memory();
+    std::cerr << "[utility] message dialog: \"" << read_string(params + kMsgText, 512) << "\"\n";
+    if (!interactive_dialogs_) {
+        m.store32(params + 0x1Cu, 0u);   // result
+        m.store32(params + kMsgButtonPressed, 1u);  // YES
+        msg_dialog_ = UtilityDialog{1u, params};
+        finish(ctx, 0u);
+        return;
+    }
+    SystemDialog d;
+    if (m.load32(params + kMsgType) == 0u) {
+        d.text_id = SystemDialog::Text::Error;
+        d.error = m.load32(params + kMsgErrorNum);
+    } else {
+        d.text = read_string(params + kMsgText, 512);
+    }
+    const std::uint32_t options = m.load32(params + kMsgOptions);
+    if ((options & kMsgOptionYesNo) != 0u) {
+        d.buttons = SystemDialog::Buttons::YesNo;
+        d.focus = (options & kMsgOptionDefaultNo) != 0u ? 1 : 0;
+    }
+    d.cross_confirms = m.load32(params + 8u) == 1u;
+    msg_dialog_ = UtilityDialog{1u, params, true};
+    open_dialog(std::move(d), DialogOwner::Message);
     finish(ctx, 0u);
+}
+
+// buttonPressed as the PSP reports it: Yes 1, No 2. Going back is 3 in the V3 request and in
+// the V2 request with Yes/No, else 0; a plain message has no confirm button on the PSP, so
+// confirming one reports what going back does, except an OK button (V3 option) reports 1.
+void Kernel::msg_dialog_answer(bool confirmed) {
+    auto &m = rt_.memory();
+    const std::uint32_t p = msg_dialog_.params, size = m.load32(p), options = m.load32(p + kMsgOptions);
+    const bool yes_no = dialog_.buttons == SystemDialog::Buttons::YesNo;
+    std::uint32_t pressed = size == kMsgSizeV3 || (size == kMsgSizeV2 && yes_no) ? 3u : 0u;
+    if (confirmed && yes_no) pressed = dialog_.focus == 0 ? 1u : 2u;
+    else if (confirmed && size == kMsgSizeV3 && (options & kMsgOptionOk) != 0u) pressed = 1u;
+    m.store32(p + 0x1Cu, 0u);
+    m.store32(p + kMsgResult, 0u);
+    if (size >= kMsgButtonPressed + 4u) m.store32(p + kMsgButtonPressed, pressed);
+    std::cerr << "[utility] message dialog answered: button " << pressed << "\n";
+    msg_dialog_.waiting = false;
+    if (msg_dialog_.status == 2u) msg_dialog_.status = 3u;
+    close_dialog();
 }
 
 void Kernel::sceUtilityMsgDialogGetStatus(Ctx &ctx) { dialog_get_status(ctx, msg_dialog_); }
 
 void Kernel::sceUtilityMsgDialogShutdownStart(Ctx &ctx) {
     msg_dialog_.status = 4u;
+    msg_dialog_.waiting = false;
+    if (dialog_owner_ == DialogOwner::Message) close_dialog();
     finish(ctx, 0u);
 }
 
