@@ -38,8 +38,11 @@ apksigner) without Gradle, as AnyGBA does. Requirements: JDK 17, the Android SDK
   next touch.
 - The game runs at the PSP's 59.94 vblanks per second whatever the display's refresh rate, with 44.1 kHz
   stereo sound (dropped rather than delayed when the device falls behind).
-- Renderer: the GE's OpenGL ES 3 backend at 2x the PSP resolution, letterboxed. The Vulkan backend is the
-  long-term target for Android; it is developed separately and not wired into the app yet.
+- Renderer: the GE's Vulkan backend at 2x the PSP resolution, presented through a FIFO swapchain and
+  letterboxed, on devices with Vulkan 1.1; otherwise the OpenGL ES 3 backend. The APK carries both (Vulkan
+  needs `glslangValidator` on the build machine, else the APK is GL ES 3 only). Tests can force one with
+  `--esa args --renderer,gl` or `--renderer,vulkan`. The same host builds on Linux as `anypsp-game-gles`
+  (GLES-only ARM handhelds; Mesa on a desktop) with the same choice.
 - Not on Android yet: the desktop's in-game menu, cheats, patches and the system dialogs' own screens
   (dialogs are answered automatically, as in headless desktop runs).
 

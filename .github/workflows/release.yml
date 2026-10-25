@@ -49,7 +49,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends ninja-build \
             libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
             libxfixes-dev libxtst-dev libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev \
-            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libdrm-dev libgbm-dev libudev-dev libdbus-1-dev
+            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libdrm-dev libgbm-dev libudev-dev libdbus-1-dev \
+            libvulkan-dev glslang-tools
 
       - name: Configure
         run: cmake -S . -B out ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release

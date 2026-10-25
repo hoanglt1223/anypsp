@@ -40,14 +40,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install SDL and Mesa build dependencies
+      # Vulkan: headers, loader, glslangValidator and Mesa's lavapipe, so the Vulkan GE backend is built and
+      # its screenshot test runs. Windows runners have no Vulkan SDK: the backend is left out there.
+      - name: Install SDL, Mesa and Vulkan build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build \
             libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
             libxfixes-dev libxtst-dev libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev \
-            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libdrm-dev libgbm-dev libudev-dev libdbus-1-dev
+            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libdrm-dev libgbm-dev libudev-dev libdbus-1-dev \
+            libvulkan-dev mesa-vulkan-drivers glslang-tools
 
       # pspautotests binaries, pinned by commit and SHA-256, never committed.
       - name: Fetch and verify the test corpus
@@ -59,7 +62,7 @@ jobs:
       - name: Build
         run: cmake --build out/ci --config Release --parallel
 
-      - name: Unit tests, corpus analysis, CPU difftest
+      - name: Unit tests, corpus analysis, CPU difftest, GE screenshots (GL, and Vulkan on Linux)
         run: ctest --test-dir out/ci --build-config Release --output-on-failure -LE slow
 
       - name: Compatibility data and coverage
@@ -117,7 +120,8 @@ jobs:
             qemu-aarch64 -L /usr/aarch64-linux-gnu "out/arm64/$t"
           done
 
-  # Android: the cubevfpu demo as a signed debug APK (artifact) and one headless run on an emulator.
+  # Android: the cubevfpu demo as a signed debug APK (artifact; Vulkan and GL ES 3 renderers, the NDK's
+  # Vulkan with the host's glslangValidator) and one run on an emulator (Vulkan through SwiftShader).
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -132,7 +136,7 @@ jobs:
       - name: Host tools and SDK packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build clang \
+          sudo apt-get install -y --no-install-recommends ninja-build clang glslang-tools \
             libx11-dev libxext-dev libwayland-dev libxkbcommon-dev wayland-protocols libegl1-mesa-dev libgl1-mesa-dev
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
