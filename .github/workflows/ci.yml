@@ -32,6 +32,8 @@ jobs:
           - name: windows-msvc
             os: windows-2022
             configure: -G "Visual Studio 17 2022" -A x64
+            # Hosted Windows runners have no OpenGL 3.3 driver (no GPU, no Mesa), so no GL screenshots.
+            ctest_extra: -E ge_screenshots_gl
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +65,7 @@ jobs:
         run: cmake --build out/ci --config Release --parallel
 
       - name: Unit tests, corpus analysis, CPU difftest, GE screenshots (GL, and Vulkan on Linux)
-        run: ctest --test-dir out/ci --build-config Release --output-on-failure -LE slow
+        run: ctest --test-dir out/ci --build-config Release --output-on-failure -LE slow ${{ matrix.ctest_extra }}
 
       - name: Compatibility data and coverage
         shell: bash
