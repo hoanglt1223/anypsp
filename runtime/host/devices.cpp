@@ -26,6 +26,8 @@ constexpr std::uint32_t kErrorInvalidSystemParam = 0x80110103u;
 constexpr std::uint32_t kErrorUnknownFpl = 0x8002019Du;
 constexpr std::uint32_t kErrorIllegalMemblock = 0x800201B6u;
 constexpr std::uint32_t kAudioRate = 44100u;
+constexpr std::uint32_t kErrorInvalidSize = 0x80000104u;
+constexpr std::uint32_t kErrorInvalidValue = 0x800001FEu;
 
 std::uint32_t align_up(std::uint32_t value, std::uint32_t alignment) {
     return (value + alignment - 1u) & ~(alignment - 1u);
@@ -34,11 +36,28 @@ std::uint32_t align_up(std::uint32_t value, std::uint32_t alignment) {
 } // namespace
 
 void Kernel::set_pad(std::uint32_t buttons, std::uint8_t lx, std::uint8_t ly) {
-    latch_make_ |= buttons & ~pad_buttons_;
-    latch_break_ |= pad_buttons_ & ~buttons;
     pad_buttons_ = buttons;
     pad_lx_ = lx;
     pad_ly_ = ly;
+}
+
+void Kernel::sample_pad() {
+    const std::uint32_t buttons = pad_buttons_;
+    const std::uint32_t changed = buttons ^ pad_sampled_buttons_;
+    latch_make_ |= buttons & changed;
+    latch_break_ |= pad_sampled_buttons_ & changed;
+    latch_press_ |= buttons;
+    latch_release_ |= ~buttons;
+    ++latch_samples_;
+    pad_sampled_buttons_ = buttons;
+
+    // Digital mode reports a centred stick.
+    const bool analog = pad_mode_ != 0u;
+    pad_ring_[pad_written_ % kPadSamples] = {static_cast<std::uint32_t>(now_us()), buttons,
+                                             analog ? pad_lx_ : std::uint8_t{128u}, analog ? pad_ly_ : std::uint8_t{128u}};
+    ++pad_written_;
+    // A full ring overwrites the oldest unread sample.
+    if (pad_written_ - pad_read_ >= kPadSamples) pad_read_ = pad_written_ - (kPadSamples - 1u);
 }
 
 void Kernel::return_one(Ctx &ctx) { finish(ctx, 1u); }
@@ -46,13 +65,17 @@ void Kernel::return_one(Ctx &ctx) { finish(ctx, 1u); }
 void Kernel::install_devices() {
     const char *ctrl = "sceCtrl";
     hle(ctrl, 0x3A622550u, "sceCtrlPeekBufferPositive", &Kernel::sceCtrlPeekBufferPositive);
+    hle(ctrl, 0xC152080Au, "sceCtrlPeekBufferNegative", &Kernel::sceCtrlPeekBufferNegative);
     hle(ctrl, 0x1F803938u, "sceCtrlReadBufferPositive", &Kernel::sceCtrlReadBufferPositive);
+    hle(ctrl, 0x60B81F86u, "sceCtrlReadBufferNegative", &Kernel::sceCtrlReadBufferNegative);
     hle(ctrl, 0x0B588501u, "sceCtrlReadLatch", &Kernel::sceCtrlReadLatch);
     hle(ctrl, 0xB1D0E5CDu, "sceCtrlPeekLatch", &Kernel::sceCtrlPeekLatch);
     hle(ctrl, 0x1F4011E6u, "sceCtrlSetSamplingMode", &Kernel::sceCtrlSetSamplingMode);
     hle(ctrl, 0xDA6B76A1u, "sceCtrlGetSamplingMode", &Kernel::sceCtrlGetSamplingMode);
-    hle(ctrl, 0x6A2774F3u, "sceCtrlSetSamplingCycle", &Kernel::return_zero);
-    hle(ctrl, 0xA7144800u, "sceCtrlSetIdleCancelThreshold", &Kernel::return_zero);
+    hle(ctrl, 0x6A2774F3u, "sceCtrlSetSamplingCycle", &Kernel::sceCtrlSetSamplingCycle);
+    hle(ctrl, 0x02BAAD91u, "sceCtrlGetSamplingCycle", &Kernel::sceCtrlGetSamplingCycle);
+    hle(ctrl, 0xA7144800u, "sceCtrlSetIdleCancelThreshold", &Kernel::sceCtrlSetIdleCancelThreshold);
+    hle(ctrl, 0x687660FAu, "sceCtrlGetIdleCancelThreshold", &Kernel::sceCtrlGetIdleCancelThreshold);
 
     const char *audio = "sceAudio";
     hle(audio, 0x5EC81C55u, "sceAudioChReserve", &Kernel::sceAudioChReserve);
@@ -180,46 +203,87 @@ void Kernel::sceIoDevctl(Ctx &ctx) {
 // ---------------------------------------------------------------------------
 // sceCtrl
 
-void Kernel::sceCtrlPeekBufferPositive(Ctx &ctx) {
+void Kernel::sceCtrlPeekBufferPositive(Ctx &ctx) { peek_pad(ctx, false); }
+void Kernel::sceCtrlPeekBufferNegative(Ctx &ctx) { peek_pad(ctx, true); }
+void Kernel::sceCtrlReadBufferPositive(Ctx &ctx) { read_pad(ctx, false); }
+void Kernel::sceCtrlReadBufferNegative(Ctx &ctx) { read_pad(ctx, true); }
+
+void Kernel::peek_pad(Ctx &ctx, bool negative) {
     const std::uint32_t count = std::max(ctx.gpr[5], 1u);
-    write_pad(ctx.gpr[4], count);
-    finish(ctx, count);
+    if (count > kPadSamples) return finish(ctx, kErrorInvalidSize);
+    finish(ctx, copy_pad(ctx.gpr[4], count, negative, true));
+}
+
+// Returns the newest unread samples, or blocks until the next vblank sample.
+void Kernel::read_pad(Ctx &ctx, bool negative) {
+    const std::uint32_t count = std::max(ctx.gpr[5], 1u);
+    if (count > kPadSamples) return finish(ctx, kErrorInvalidSize);
+    if (const std::uint32_t copied = copy_pad(ctx.gpr[4], count, negative, false); copied != 0u)
+        return finish(ctx, copied);
+    Thread *t = current();
+    t->wait_out_address = ctx.gpr[4];
+    t->wait_count = count;
+    t->wait_mode = negative ? 1u : 0u;
+    block(ctx, WaitType::CtrlRead, 0u);
+}
+
+std::uint32_t Kernel::copy_pad(std::uint32_t data, std::uint32_t count, bool negative, bool peek) {
+    const std::uint32_t copied =
+        peek ? count : static_cast<std::uint32_t>(std::min<std::uint64_t>(count, pad_written_ - pad_read_));
+    auto &m = rt_.memory();
+    for (std::uint32_t i = 0; i < copied; ++i) {
+        // Unsigned wrap keeps the index right before the ring has filled (2^64 is a multiple of 64).
+        const PadSample &s = pad_ring_[(pad_written_ - copied + i) % kPadSamples];
+        const std::uint32_t entry = data + i * 16u;
+        m.store32(entry + 0u, s.timestamp);
+        m.store32(entry + 4u, negative ? ~s.buttons : s.buttons);
+        m.store8(entry + 8u, s.lx);
+        m.store8(entry + 9u, s.ly);
+        for (std::uint32_t j = 10u; j < 16u; ++j) m.store8(entry + j, 0u);
+    }
+    if (!peek) pad_read_ = pad_written_;
+    return copied;
 }
 
 void Kernel::sceCtrlSetSamplingMode(Ctx &ctx) {
+    if (ctx.gpr[4] > 1u) return finish(ctx, kErrorInvalidValue);
     const std::uint32_t previous = pad_mode_;
-    pad_mode_ = ctx.gpr[4] & 1u;
+    pad_mode_ = ctx.gpr[4];
     finish(ctx, previous);
+}
+
+// Samples are always taken at vblank; the cycle is only validated and reported.
+void Kernel::sceCtrlSetSamplingCycle(Ctx &ctx) {
+    const std::uint32_t cycle = ctx.gpr[4];
+    if ((cycle > 0u && cycle < 5555u) || cycle > 20000u) return finish(ctx, kErrorInvalidValue);
+    const std::uint32_t previous = pad_cycle_;
+    pad_cycle_ = cycle;
+    finish(ctx, previous);
+}
+
+void Kernel::sceCtrlGetSamplingCycle(Ctx &ctx) {
+    if (ctx.gpr[4] != 0u) rt_.memory().store32(ctx.gpr[4], pad_cycle_);
+    finish(ctx, 0u);
+}
+
+void Kernel::sceCtrlSetIdleCancelThreshold(Ctx &ctx) {
+    const auto reset = static_cast<std::int32_t>(ctx.gpr[4]);
+    const auto back = static_cast<std::int32_t>(ctx.gpr[5]);
+    if (reset < -1 || reset > 128 || back < -1 || back > 128) return finish(ctx, kErrorInvalidValue);
+    idle_reset_ = reset;
+    idle_back_ = back;
+    finish(ctx, 0u);
+}
+
+void Kernel::sceCtrlGetIdleCancelThreshold(Ctx &ctx) {
+    if (ctx.gpr[4] != 0u) rt_.memory().store32(ctx.gpr[4], static_cast<std::uint32_t>(idle_reset_));
+    if (ctx.gpr[5] != 0u) rt_.memory().store32(ctx.gpr[5], static_cast<std::uint32_t>(idle_back_));
+    finish(ctx, 0u);
 }
 
 void Kernel::sceCtrlGetSamplingMode(Ctx &ctx) {
     if (ctx.gpr[4] != 0u) rt_.memory().store32(ctx.gpr[4], pad_mode_);
     finish(ctx, 0u);
-}
-
-void Kernel::sceCtrlReadBufferPositive(Ctx &ctx) {
-    const std::uint32_t count = std::max(ctx.gpr[5], 1u);
-    if (pad_read_vcount_ != display_.vcount) {
-        pad_read_vcount_ = display_.vcount;
-        write_pad(ctx.gpr[4], count);
-        finish(ctx, count);
-        return;
-    }
-    Thread *t = current();
-    t->wait_out_address = ctx.gpr[4];
-    t->wait_count = count;
-    block(ctx, WaitType::CtrlRead, 0u);
-}
-
-void Kernel::write_pad(std::uint32_t data, std::uint32_t count) {
-    for (std::uint32_t i = 0; i < count; ++i) {
-        const std::uint32_t entry = data + i * 16u;
-        rt_.memory().store32(entry + 0u, static_cast<std::uint32_t>(now_us()));
-        rt_.memory().store32(entry + 4u, pad_buttons_);
-        rt_.memory().store8(entry + 8u, pad_lx_);
-        rt_.memory().store8(entry + 9u, pad_ly_);
-        for (std::uint32_t j = 10u; j < 16u; ++j) rt_.memory().store8(entry + j, 0u);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -432,20 +496,21 @@ void Kernel::sceRtcTickAddSeconds(Ctx &ctx) {
     finish(ctx, 0u);
 }
 
+// Both return the number of samples taken since the last sceCtrlReadLatch.
 void Kernel::sceCtrlPeekLatch(Ctx &ctx) {
     if (ctx.gpr[4] != 0u) {
         auto &m = rt_.memory();
         m.store32(ctx.gpr[4], latch_make_);
         m.store32(ctx.gpr[4] + 4u, latch_break_);
-        m.store32(ctx.gpr[4] + 8u, pad_buttons_);
-        m.store32(ctx.gpr[4] + 12u, ~pad_buttons_);
+        m.store32(ctx.gpr[4] + 8u, latch_press_);
+        m.store32(ctx.gpr[4] + 12u, latch_release_);
     }
-    finish(ctx, 1u);
+    finish(ctx, latch_samples_);
 }
 
 void Kernel::sceCtrlReadLatch(Ctx &ctx) {
     sceCtrlPeekLatch(ctx);
-    latch_make_ = latch_break_ = 0u;
+    latch_make_ = latch_break_ = latch_press_ = latch_release_ = latch_samples_ = 0u;
 }
 
 void Kernel::sceImposeGetLanguageMode(Ctx &ctx) {

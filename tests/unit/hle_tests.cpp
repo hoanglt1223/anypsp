@@ -129,3 +129,113 @@ TEST_CASE("sceIoRename moves memory stick files and refuses existing targets") {
     CHECK(h.call("IoFileMgrForUser", 0x779103A0u, kScratch, kScratch + 0x100u) == 0x80020322u);
     fs::remove_all(root);
 }
+
+namespace {
+
+constexpr const char *kCtrl = "sceCtrl";
+constexpr std::uint32_t kPeekPositive = 0x3A622550u, kPeekNegative = 0xC152080Au, kReadPositive = 0x1F803938u,
+                        kReadNegative = 0x60B81F86u, kPeekLatch = 0xB1D0E5CDu, kReadLatch = 0x0B588501u;
+
+void sample(Hle &h, std::uint32_t buttons, std::uint8_t lx = 128u, std::uint8_t ly = 128u) {
+    h.kernel->set_pad(buttons, lx, ly);
+    h.kernel->sample_pad();
+}
+
+std::uint32_t buttons_at(Hle &h, std::uint32_t index) { return h.rt.memory().load32(kScratch + index * 16u + 4u); }
+
+} // namespace
+
+TEST_CASE("sceCtrlReadBuffer returns the newest unread samples in order") {
+    Hle h;
+    using namespace pspweb::pad;
+    sample(h, kUp);
+    sample(h, kUp | kCircle);
+    sample(h, kCross);
+    CHECK(h.call(kCtrl, kReadPositive, kScratch, 2u) == 2u);
+    CHECK(buttons_at(h, 0u) == (kUp | kCircle));
+    CHECK(buttons_at(h, 1u) == kCross);
+    sample(h, kSquare);
+    CHECK(h.call(kCtrl, kReadPositive, kScratch, 8u) == 1u);
+    CHECK(buttons_at(h, 0u) == kSquare);
+}
+
+TEST_CASE("sceCtrlPeekBuffer returns the newest samples without consuming them") {
+    Hle h;
+    using namespace pspweb::pad;
+    sample(h, kUp);
+    sample(h, kCircle);
+    CHECK(h.call(kCtrl, kPeekPositive, kScratch, 2u) == 2u);
+    CHECK(buttons_at(h, 0u) == kUp);
+    CHECK(buttons_at(h, 1u) == kCircle);
+    CHECK(h.call(kCtrl, kPeekPositive, kScratch, 1u) == 1u);
+    CHECK(buttons_at(h, 0u) == kCircle);
+    CHECK(h.call(kCtrl, kReadPositive, kScratch, 4u) == 2u);
+}
+
+TEST_CASE("sceCtrl negative reads invert the buttons") {
+    Hle h;
+    using namespace pspweb::pad;
+    sample(h, kCross);
+    CHECK(h.call(kCtrl, kPeekNegative, kScratch, 1u) == 1u);
+    CHECK(buttons_at(h, 0u) == ~kCross);
+    CHECK(h.call(kCtrl, kReadNegative, kScratch, 1u) == 1u);
+    CHECK(buttons_at(h, 0u) == ~kCross);
+}
+
+TEST_CASE("sceCtrl buffers reject more than 64 samples and keep at most 63 unread") {
+    Hle h;
+    CHECK(h.call(kCtrl, kPeekPositive, kScratch, 65u) == 0x80000104u);
+    CHECK(h.call(kCtrl, kReadPositive, kScratch, 65u) == 0x80000104u);
+    for (std::uint32_t i = 0; i < 100u; ++i) sample(h, i);
+    CHECK(h.call(kCtrl, kReadPositive, kScratch, 64u) == 63u);
+    CHECK(buttons_at(h, 0u) == 37u);
+    CHECK(buttons_at(h, 62u) == 99u);
+}
+
+TEST_CASE("sceCtrl latch tracks make, break, press, release and the sample count") {
+    Hle h;
+    using namespace pspweb::pad;
+    auto &m = h.rt.memory();
+    sample(h, kCross);
+    sample(h, kCross | kCircle);
+    sample(h, kCircle);
+    CHECK(h.call(kCtrl, kPeekLatch, kScratch) == 3u);
+    CHECK(m.load32(kScratch) == (kCross | kCircle));
+    CHECK(m.load32(kScratch + 4u) == kCross);
+    CHECK(m.load32(kScratch + 8u) == (kCross | kCircle));
+    CHECK(m.load32(kScratch + 12u) == ~0u);
+    CHECK(h.call(kCtrl, kReadLatch, kScratch) == 3u);
+    CHECK(h.call(kCtrl, kReadLatch, kScratch) == 0u);
+    CHECK(m.load32(kScratch) == 0u);
+    sample(h, kCircle);
+    CHECK(h.call(kCtrl, kReadLatch, kScratch) == 1u);
+    CHECK(m.load32(kScratch) == 0u);
+    CHECK(m.load32(kScratch + 8u) == kCircle);
+    CHECK(m.load32(kScratch + 12u) == ~kCircle);
+}
+
+TEST_CASE("sceCtrl sampling mode, cycle and idle threshold are validated") {
+    Hle h;
+    auto &m = h.rt.memory();
+    sample(h, 0u, 10u, 250u);
+    CHECK(h.call(kCtrl, kPeekPositive, kScratch, 1u) == 1u);
+    CHECK(m.load8(kScratch + 8u) == 128u);
+    CHECK(h.call(kCtrl, 0x1F4011E6u, 1u) == 0u);
+    CHECK(h.call(kCtrl, 0x1F4011E6u, 2u) == 0x800001FEu);
+    sample(h, 0u, 10u, 250u);
+    CHECK(h.call(kCtrl, kPeekPositive, kScratch, 1u) == 1u);
+    CHECK(m.load8(kScratch + 8u) == 10u);
+    CHECK(m.load8(kScratch + 9u) == 250u);
+
+    CHECK(h.call(kCtrl, 0x6A2774F3u, 100u) == 0x800001FEu);
+    CHECK(h.call(kCtrl, 0x6A2774F3u, 16666u) == 0u);
+    CHECK(h.call(kCtrl, 0x6A2774F3u, 0u) == 16666u);
+    CHECK(h.call(kCtrl, 0x02BAAD91u, kScratch) == 0u);
+    CHECK(m.load32(kScratch) == 0u);
+
+    CHECK(h.call(kCtrl, 0xA7144800u, 129u, 0u) == 0x800001FEu);
+    CHECK(h.call(kCtrl, 0xA7144800u, 40u, 0xFFFFFFFFu) == 0u);
+    CHECK(h.call(kCtrl, 0x687660FAu, kScratch, kScratch + 4u) == 0u);
+    CHECK(m.load32(kScratch) == 40u);
+    CHECK(m.load32(kScratch + 4u) == 0xFFFFFFFFu);
+}
