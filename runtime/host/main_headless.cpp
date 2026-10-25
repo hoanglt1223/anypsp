@@ -34,13 +34,14 @@ const char *const kUsage =
     "usage: anypsp-run-<game> <EBOOT.BIN|module.prx> [--disc dir] [--ms dir] [--frames n]\n"
     "                         [--feedback file] [--dump frame.ppm] [--guest-path path]\n"
     "                         [--output file] [--input frame:buttons,...] [--dump-at frame,...]\n"
-    "                         [--hle-stubs file]\n"
+    "                         [--hle-stubs file] [--deterministic]\n"
     "Runs headless: no window, no audio. --feedback appends the code addresses that had no\n"
     "translated code (input for anypsp-analyze --feedback). --output writes what the program\n"
     "sends to the emulator: device (test output; default: standard output). --input holds\n"
     "the given sceCtrl button mask (hex) from that frame on; --dump-at writes frame<N>.ppm.\n"
     "Calling an imported function with no HLE implementation stops the run unless the\n"
-    "--hle-stubs file lists it: one 'Library::name = value' (or Library::0xNID) per line.\n";
+    "--hle-stubs file lists it: one 'Library::name = value' (or Library::0xNID) per line.\n"
+    "--deterministic drives guest time from executed code instead of the host clock.\n";
 
 // Import stubs without a translated wrapper (always, in the interpreter-only
 // runner) are bound here, by address.
@@ -117,8 +118,14 @@ int main(int argc, char **argv) {
     }
     std::string disc = ".", memstick = ".", feedback, dump, output, input, dump_at, hle_stubs, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     long frames = 600;
+    bool deterministic = false;
     for (int i = 2; i < argc; i += 2) {
         const std::string flag = argv[i];
+        if (flag == "--deterministic") {
+            deterministic = true;
+            --i;
+            continue;
+        }
         if (i + 1 >= argc) {
             std::cerr << flag << " needs a value\n" << kUsage;
             return 2;
@@ -174,6 +181,7 @@ int main(int argc, char **argv) {
 
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
         if (!hle_stubs.empty()) kernel->set_hle_stubs(read_hle_stubs(hle_stubs));
+        if (deterministic) kernel->set_deterministic(true);
         std::ofstream output_file;
         if (!output.empty()) {
             output_file.open(output, std::ios::binary);
