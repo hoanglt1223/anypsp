@@ -313,12 +313,18 @@ void Kernel::sceKernelDeleteCallback(Ctx &ctx) {
 }
 
 void Kernel::sceKernelNotifyCallback(Ctx &ctx) {
-    const auto it = callbacks_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == callbacks_.end()) return finish(ctx, kErrorUnknownCallback);
+    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+    if (!callbacks_.contains(uid)) return finish(ctx, kErrorUnknownCallback);
+    finish(ctx, 0u);
+    notify_callback(ctx, uid, static_cast<std::int32_t>(ctx.gpr[5]));
+}
+
+void Kernel::notify_callback(Ctx &ctx, std::int32_t uid, std::int32_t arg) {
+    const auto it = callbacks_.find(uid);
+    if (it == callbacks_.end()) return;
     Callback &cb = it->second;
     ++cb.notify_count;
-    cb.notify_arg = static_cast<std::int32_t>(ctx.gpr[5]);
-    finish(ctx, 0u);
+    cb.notify_arg = arg;
     // A thread in a CB wait leaves the wait at once; its callbacks run once it would get to run.
     Thread *t = thread(cb.thread);
     if (t == nullptr || t->uid == current_uid_ || t->state != ThreadState::Waiting || !t->cb_wait) return;

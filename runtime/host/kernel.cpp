@@ -233,6 +233,12 @@ void Kernel::hle(const char *library, std::uint32_t nid, const char *name,
     registered_.insert(std::string(library) + ":" + hex(nid));
 }
 
+void Kernel::hle_value(const char *library, std::uint32_t nid, const char *name, std::uint32_t result) {
+    rt_.register_hle(library, nid, [result](psprecomp::Runtime &, Ctx &ctx) { finish(ctx, result); });
+    rt_.nids().add(library, nid, name);
+    registered_.insert(std::string(library) + ":" + hex(nid));
+}
+
 void Kernel::install_fallback(const psprecomp::PspImport &import) {
     const std::string key = import.library + ":" + hex(import.nid);
     if (registered_.contains(key)) return;
@@ -419,6 +425,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     install_devices();
     install_callbacks();
     install_sync();
+    install_power();
     install_msgpipe();
     install_tlspl();
     install_vtimer();

@@ -398,6 +398,26 @@ private:
     void hle_cb(const char *library, std::uint32_t nid, const char *name,
                 void (Kernel::*handler)(Ctx &));
     void install_fallback(const psprecomp::PspImport &import);
+    // A function that only returns `result`.
+    void hle_value(const char *library, std::uint32_t nid, const char *name, std::uint32_t result);
+    void notify_callback(Ctx &ctx, std::int32_t uid, std::int32_t arg);
+    static void finish_float(Ctx &ctx, float value);
+    // power.cpp
+    void install_power();
+    void scePowerRegisterCallback(Ctx &ctx);
+    void scePowerUnregisterCallback(Ctx &ctx);
+    void scePowerLock(Ctx &ctx);
+    void scePowerSetClockFrequency(Ctx &ctx);
+    void scePowerSetCpuClockFrequency(Ctx &ctx);
+    void scePowerSetBusClockFrequency(Ctx &ctx);
+    void scePowerGetCpuClockFrequencyInt(Ctx &ctx);
+    void scePowerGetBusClockFrequencyInt(Ctx &ctx);
+    void scePowerGetPllClockFrequencyInt(Ctx &ctx);
+    void scePowerGetCpuClockFrequencyFloat(Ctx &ctx);
+    void scePowerGetBusClockFrequencyFloat(Ctx &ctx);
+    void scePowerGetPllClockFrequencyFloat(Ctx &ctx);
+    std::array<std::int32_t, 16> power_callbacks_{};
+    std::uint32_t pll_hz_{222000000u}, cpu_hz_{222000000u}, bus_hz_{111000000u};
 
     // Callbacks (kernel_callbacks.cpp).
     void install_callbacks();
