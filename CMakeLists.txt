@@ -110,6 +110,18 @@ if(ANYPSP_BUILD_HOST)
         target_link_options(anypsp-interp PRIVATE /STACK:67108864)
     endif()
 
+    # Per-library count of the HLE functions implemented, written after every build of the host.
+    add_executable(anypsp-hle-coverage runtime/host/hle_coverage.cpp runtime/host/no_generated.cpp
+        runtime/host/no_modules.cpp runtime/host/no_dynamic_code.cpp)
+    target_link_libraries(anypsp-hle-coverage PRIVATE anypsp_host anypsp_loader)
+    if(MSVC)
+        target_compile_options(anypsp-hle-coverage PRIVATE /EHsc /permissive- /W3)
+    endif()
+    add_custom_command(TARGET anypsp-hle-coverage POST_BUILD
+        COMMAND anypsp-hle-coverage --json "${CMAKE_BINARY_DIR}/hle-coverage.json" --markdown "${CMAKE_BINARY_DIR}/hle-coverage.md"
+        COMMENT "Counting HLE functions per library (hle-coverage.json, hle-coverage.md)"
+        VERBATIM)
+
     add_executable(anypsp_hle_tests tests/unit/main.cpp tests/unit/hle_tests.cpp tests/unit/hle_tests_kernel.cpp tests/unit/ge_texture_tests.cpp tests/unit/ge_interp_tests.cpp runtime/host/no_generated.cpp
         runtime/host/no_modules.cpp runtime/host/no_dynamic_code.cpp)
     target_include_directories(anypsp_hle_tests PRIVATE tests/unit)

@@ -334,6 +334,8 @@ public:
     void set_hle_stubs(std::map<std::string, std::uint32_t> stubs) { hle_stubs_ = std::move(stubs); }
     // Imports bound so far with no HLE implementation ("Library::name"), stubbed or not.
     [[nodiscard]] const std::vector<std::string> &unimplemented_imports() const noexcept { return unimplemented_imports_; }
+    // Every function with an HLE implementation, as "Library:0xNID" (after install()).
+    [[nodiscard]] const std::set<std::string> &hle_functions() const noexcept { return registered_; }
     [[nodiscard]] std::uint64_t now_us() const;
     // Deterministic timing: guest time and time slices follow executed guest
     // code instead of the host clock, and the wall clock starts at a fixed date,
