@@ -1,0 +1,51 @@
+name: pages
+
+# Publishes the compatibility page (compat/*.toml) with the coverage badges (HLE NIDs, VFPU
+# instructions translated natively, GE commands) measured from this commit.
+on:
+  push:
+    branches: [main]
+    paths: [compat/**, tools/compat-site/**, tools/anypsp/coverage.cpp, runtime/**, recomp/**, data/**, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Coverage
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build clang
+          cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DANYPSP_BUILD_GPU=OFF
+          cmake --build out --target anypsp-coverage
+          out/anypsp-coverage > coverage.json
+      - name: Site
+        run: python tools/compat-site/generate.py --coverage coverage.json --out _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  # Needs GitHub Pages enabled for the repository and the repository variable PAGES_ENABLED=true.
+  deploy:
+    needs: build
+    if: vars.PAGES_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

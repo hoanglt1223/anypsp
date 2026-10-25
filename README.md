@@ -23,9 +23,11 @@ Early. Phases 01 (base) and 02 (loader and analysis) are done; 03 (code generati
 - **Headless host.** It builds with MSVC: the HLE kernel and the software GE, with no window and no audio. A runner per translated program runs homebrew and writes feedback. Many pspautotests programs still stop at Allegrex instructions the code generator does not lower yet (phase 03).
 - **Desktop play.** `anypsp-play <game.iso|disc folder>` opens a window with sound, keyboard and gamepad input, and keeps saves in the per-user data folder; translated runners take `--window`. See [docs/user/desktop.md](docs/user/desktop.md).
 - **GE.** OpenGL 3.3 and Vulkan backends share one surface manager (`runtime/host/ge_surfaces.cpp`) and the same shaders; Vulkan runs headless with optional MSAA and an on-disk pipeline cache (`--renderer vulkan`). 18 of the 28 pspautotests GE screenshot tests match PPSSPP's reference pictures exactly on both.
+- **`anypsp build`.** One command from a game (ISO, disc folder, EBOOT or module) to a packaged native program: analysis, translation, a CMake build against the runtime, and a folder with the program and the game files (`.app` on macOS). Verified end to end on Linux x64 with UNH 1; Windows builds the same way with MSVC. `--target android` writes an APK (OpenGL ES 3 renderer, touch, gamepad and keyboard controls, the disc picked through the storage access framework). Linux arm64 cross-compiles with `cmake/toolchains/aarch64-linux-gnu.cmake`. See [docs/user/build.md](docs/user/build.md) and [docs/user/android.md](docs/user/android.md).
+- **Compatibility and coverage.** `compat/*.toml` per title and `tools/compat-site/generate.py` render the progress page and badges for HLE functions by NID, VFPU instructions translated natively and GE commands (`anypsp-coverage`); see [compat/schema.md](compat/schema.md) and [CONTRIBUTING.md](CONTRIBUTING.md). CI (Linux, Windows, Linux arm64 cross build, Android APK) and tagged releases are in `.github/workflows/`.
 - **Not yet:**
-  - a Vulkan window or swapchain (the Android host presents the Vulkan output image);
-  - Android and ARM handheld hosts, desktop builds in CI (phase 06);
+  - a Vulkan window or swapchain on the desktop, and the Vulkan renderer in the Android app;
+  - tests on a real ARM handheld and an Android phone (phase 06);
   - message pipes, thread-local pools, virtual timers and callback notification (phase 04);
   - a check of the web/EGL build after the renderer seam.
 - Prior art and evaluation: [docs/dev/prior-art.md](docs/dev/prior-art.md).
@@ -33,11 +35,13 @@ Early. Phases 01 (base) and 02 (loader and analysis) are done; 03 (code generati
 Build and test:
 
 ```
-cmake -S . -B out/msvc -G "Visual Studio 17 2022" -A x64
+cmake -S . -B out/msvc -G "Visual Studio 17 2022" -A x64      # Linux: -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build out/msvc --config Release
 python tests/fetch-corpus.py      # pinned pspautotests binaries into tests/corpus/ (git-ignored)
-ctest --test-dir out/msvc -C Release
+ctest --test-dir out/msvc -C Release -LE slow
 python tests/feedback-pass.py tests/corpus/pspautotests/demos/threadstatus.elf   # analyze, translate, run headless, feed back
+out/msvc/Release/anypsp.exe build Game.iso -o games            # the whole pipeline to a packaged program
+cmake --install out/msvc --config Release --prefix <dir>       # the release package layout (cmake/install.cmake)
 ```
 
 Roadmap: [anyport plans](https://github.com/hoanglt1223/anyport/tree/main/plans/261023-1558-anypsp-static-recompiler).

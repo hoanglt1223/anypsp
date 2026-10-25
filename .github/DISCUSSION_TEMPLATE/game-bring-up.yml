@@ -1,0 +1,59 @@
+title: "[bring-up] <game title> (<disc ID>)"
+labels: ["bring-up"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One discussion per game. Never attach or link game files, ISO images, decrypted executables,
+        firmware or keys; describe what you ran and what you saw. Logs and screenshots of your own runs are fine.
+        Stages: compat/schema.md. Legal policy: CONTRIBUTING.md.
+  - type: input
+    id: disc_id
+    attributes:
+      label: Disc ID
+      description: From PARAM.SFO (DISC_ID), e.g. ULUS-10299.
+      placeholder: ULUS-10299
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Stage reached
+      options: [fails, boots, menus, in-game, playable, perfect]
+    validations:
+      required: true
+  - type: dropdown
+    id: runner
+    attributes:
+      label: Runner
+      options: ["translated (anypsp build)", "interpreter (anypsp-play)"]
+    validations:
+      required: true
+  - type: checkboxes
+    id: hosts
+    attributes:
+      label: Hosts tested
+      options:
+        - label: windows-x64
+        - label: linux-x64
+        - label: linux-arm64
+        - label: macos-arm64
+        - label: android-arm64
+  - type: input
+    id: commit
+    attributes:
+      label: AnyPSP commit or release
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: What you ran and what you saw
+      description: Command lines, how far the game got, the [anypsp] summary line, unimplemented HLE functions listed at start.
+    validations:
+      required: true
+  - type: textarea
+    id: blockers
+    attributes:
+      label: Blockers
+      description: The first error or wrong behaviour that keeps it from the next stage, one per line.

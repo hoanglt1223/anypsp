@@ -1,0 +1,168 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Headless GL through Mesa (llvmpipe) for the renderer and desktop tests; no window, no audio.
+  SDL_VIDEO_DRIVER: offscreen
+  SDL_AUDIO_DRIVER: dummy
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-clang
+            os: ubuntu-24.04
+            configure: -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+          - name: windows-msvc
+            os: windows-2022
+            configure: -G "Visual Studio 17 2022" -A x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SDL and Mesa build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build \
+            libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev \
+            libxfixes-dev libxtst-dev libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri libdrm-dev libgbm-dev libudev-dev libdbus-1-dev
+
+      # pspautotests binaries, pinned by commit and SHA-256, never committed.
+      - name: Fetch and verify the test corpus
+        run: python tests/fetch-corpus.py
+
+      - name: Configure
+        run: cmake -S . -B out/ci ${{ matrix.configure }} -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build out/ci --config Release --parallel
+
+      - name: Unit tests, corpus analysis, CPU difftest
+        run: ctest --test-dir out/ci --build-config Release --output-on-failure -LE slow
+
+      - name: Compatibility data and coverage
+        shell: bash
+        run: |
+          coverage=out/ci/anypsp-coverage
+          [ -f "$coverage" ] || coverage=out/ci/Release/anypsp-coverage.exe
+          "$coverage" > out/coverage.json
+          python tools/compat-site/generate.py --coverage out/coverage.json --out out/compat-site
+
+      # A homebrew demo through the whole pipeline: analysis, translation, game build, package, headless run.
+      - name: anypsp build (pspautotests cubevfpu)
+        shell: bash
+        run: |
+          anypsp=out/ci/anypsp
+          [ -f "$anypsp" ] || anypsp=out/ci/Release/anypsp.exe
+          "$anypsp" build tests/corpus/pspautotests/demos/cubevfpu.prx -o out/dist --name cubevfpu --opt d
+          program=out/dist/cubevfpu/cubevfpu
+          [ -f "$program" ] || program=out/dist/cubevfpu/cubevfpu.exe
+          "$program" --headless --frames 120 --dump out/dist/cubevfpu-120.png | tee out/dist/run.log
+          grep -q "frame limit reached" out/dist/run.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.name }}-site-and-demo
+          path: |
+            out/compat-site
+            out/dist/*.png
+          if-no-files-found: ignore
+
+  # Linux arm64: the runtime, recompiler, tools and desktop host cross-compiled with clang and the
+  # GNU sysroot, and the unit tests run under qemu-user. (The CPU difftest generates its cases with
+  # a program built for the target, so it is left out.)
+  linux-arm64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cross toolchain and qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build clang g++-aarch64-linux-gnu qemu-user
+      - name: Configure
+        run: |
+          cmake -S . -B out/arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake
+      - name: Build
+        run: |
+          cmake --build out/arm64 --parallel --target anypsp anypsp-analyze psp_recomp anypsp-interp anypsp-play \
+            anypsp_tests anypsp_hle_tests anypsp_driver_tests
+      - name: Unit tests under qemu-aarch64
+        run: |
+          file out/arm64/anypsp-play | grep -q "ARM aarch64"
+          for t in anypsp_tests anypsp_hle_tests tools/anypsp/anypsp_driver_tests; do
+            qemu-aarch64 -L /usr/aarch64-linux-gnu "out/arm64/$t"
+          done
+
+  # Android: the cubevfpu demo as a signed debug APK (artifact) and one headless run on an emulator.
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Host tools and SDK packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build clang \
+            libx11-dev libxext-dev libwayland-dev libxkbcommon-dev wayland-protocols libegl1-mesa-dev libgl1-mesa-dev
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+      - name: Fetch and verify the test corpus
+        run: python tests/fetch-corpus.py
+      - name: Host build of the pipeline tools
+        run: |
+          cmake -S . -B out/host -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+          cmake --build out/host --target anypsp anypsp-analyze psp_recomp
+      - name: APK (arm64-v8a and x86_64)
+        run: |
+          out/host/anypsp build tests/corpus/pspautotests/demos/cubevfpu.prx --target android --abi arm64-v8a,x86_64 \
+            -o out/apk --name cubevfpu --opt d
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: out/apk/*.apk
+          if-no-files-found: error
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Emulator smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          script: sh platform/android/emulator-smoke.sh out/apk/cubevfpu.apk 300
