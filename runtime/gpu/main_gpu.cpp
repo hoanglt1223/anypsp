@@ -385,6 +385,7 @@ int main(int argc, char **argv) {
         kernel->reserve(module.base, module.end - module.base, "module:" + module.info->name);
         kernel->set_roots(o.disc, o.memstick);
         kernel->set_flash_root(std::filesystem::path(o.disc) / "flash0");
+        kernel->set_user_font_dir(user_dir / "flash0" / "font");
         kernel->add_main_module(*module.info, module.base, module.end - module.base);
         kernel->install(imports);
         std::vector<anypsp::patches::Patch> game_patches;

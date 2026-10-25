@@ -14,10 +14,13 @@ anypsp-play "Game.iso" --scale 3 --fullscreen
   `~/.local/share/anyport/anypsp/discs/` on Linux). `--cache DIR` puts it elsewhere. Delete the folder to
   reclaim the space; it is extracted again on the next run.
 - Games that draw text with the PSP's system fonts (sceLibFont; UNH 1's profile name, for example) use the
-  real fonts when you copy them from your PSP's `flash0:/font` (`jpn0.pgf`, `ltn0.pgf`-`ltn15.pgf`, `kr0.pgf`)
-  into the game's `flash0/font` folder inside that extracted folder. Any font missing there is replaced by
-  AnyPSP's bundled fallback, drawn from Noto at the PSP's sizes (Japanese covers kana and the common JIS
-  level 1 kanji; other characters show the game's alternate character).
+  real fonts when you copy them from your PSP's `flash0:/font` (`jpn0.pgf`, `ltn0.pgf`-`ltn15.pgf`, `kr0.pgf`).
+  AnyPSP looks for each font in the game's `flash0/font` folder inside its extracted disc folder, then in
+  `flash0/font` in the per-user data folder (`%APPDATA%\anyport\anypsp\flash0\font\`,
+  `~/.local/share/anyport/anypsp/flash0/font/` on Linux; fonts copied there once serve every game). Any font
+  found in neither is replaced by AnyPSP's bundled fallback, drawn from Noto at the PSP's sizes (Japanese
+  covers kana and all JIS X 0208 kanji, Korean the 2350 common hangul; other characters show the game's
+  alternate character).
 - Saves go to the memory stick folder `memstick/PSP/SAVEDATA/` in the per-user data folder, so they
   persist between runs. `--ms DIR` uses another memory stick folder.
 - The game runs at the PSP's 59.94 vblanks per second. The window title shows the rates reached

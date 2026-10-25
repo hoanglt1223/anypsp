@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -329,28 +330,39 @@ void Kernel::install_fonts() {
     auto load = [this, state] {
         if (state->loaded) return;
         state->loaded = true;
+        // A real font in the game's flash0/font wins, then one in the per-user folder, then the bundled one.
+        std::vector<std::filesystem::path> dirs{flash_root_ / "font"};
+        if (!user_font_dir_.empty()) dirs.push_back(user_font_dir_);
         std::size_t bundled = 0u;
         for (const Registry &entry : kRegistry) {
-            Font font;
-            font.registry = entry;
-            if (std::ifstream file(flash_root_ / "font" / entry.file, std::ios::binary); file) {
+            bool found = false;
+            for (const auto &dir : dirs) {
+                std::ifstream file(dir / entry.file, std::ios::binary);
+                if (!file) continue;
+                Font font;
+                font.registry = entry;
                 font.data.assign(std::istreambuf_iterator<char>(file), {});
                 if (parse(font)) {
                     state->fonts.push_back(std::move(font));
-                    continue;
+                    found = true;
+                    break;
                 }
-                std::fprintf(stderr, "[font] cannot read %s, using the bundled font\n", entry.file);
-                font = Font{};
-                font.registry = entry;
+                std::fprintf(stderr, "[font] cannot read %s\n", (dir / entry.file).string().c_str());
             }
+            if (found) continue;
+            Font font;
+            font.registry = entry;
             font.data.assign(entry.fallback.data, entry.fallback.data + entry.fallback.size);
             if (!parse(font)) throw std::runtime_error(std::string("[font] bundled replacement for ") + entry.file + " is corrupt");
             state->fonts.push_back(std::move(font));
             ++bundled;
         }
-        if (bundled != 0u)
-            std::fprintf(stderr, "[font] %zu of %zu system fonts not usable in %s: using AnyPSP's bundled Noto replacements\n", bundled,
-                         std::size(kRegistry), (flash_root_ / "font").string().c_str());
+        if (bundled != 0u) {
+            std::string where = dirs[0].string();
+            if (dirs.size() > 1u) where += " or " + dirs[1].string();
+            std::fprintf(stderr, "[font] %zu of %zu system fonts not usable in %s: using AnyPSP's bundled Noto replacements\n",
+                         bundled, std::size(kRegistry), where.c_str());
+        }
     };
     auto opened = [state](std::uint32_t handle) -> Font * {
         const auto it = state->open.find(handle);

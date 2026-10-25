@@ -669,8 +669,8 @@ TEST_CASE("interactive savedata list delete goes back to the list while saves re
     fs::remove_all(root);
 }
 
-extern const unsigned char anypsp_font_sans_jp[];
-extern const std::size_t anypsp_font_sans_jp_size;
+extern const unsigned char anypsp_font_sans_jp[], anypsp_font_sans_kr[];
+extern const std::size_t anypsp_font_sans_jp_size, anypsp_font_sans_kr_size;
 
 namespace {
 
@@ -682,8 +682,9 @@ struct FontLib {
     Hle h;
     std::uint32_t lib{};
 
-    explicit FontLib(const std::filesystem::path &flash) {
+    explicit FontLib(const std::filesystem::path &flash, const std::filesystem::path &user = {}) {
         h.kernel->set_flash_root(flash);
+        h.kernel->set_user_font_dir(user);
         lib = h.call(kLib, 0x67F17ED7u, kScratch, kError);
         CHECK(lib != 0u);
     }
@@ -825,27 +826,41 @@ TEST_CASE("sceLibFont serves the bundled fonts when flash0/font is empty") {
     CHECK_EQ(f.h.call(FontLib::kLib, 0x574B6FBCu, f.lib), 0u);
 }
 
-TEST_CASE("sceLibFont's bundled Japanese and Korean fonts cover kana, common kanji and hangul") {
+TEST_CASE("sceLibFont's bundled Japanese and Korean fonts cover kana, JIS X 0208 kanji and hangul") {
     FontLib f(empty_flash("anypsp-hle-font-cjk"));
     const std::uint32_t jp = f.open(f.find(0u, 0u, 1u));
     const std::uint32_t kr = f.open(f.find(0u, 0u, 3u));
-    for (const std::uint32_t code : {0x3042u, 0x30CAu, 0x706Bu, 0x5F71u, 0x41u}) // あ ナ 火 影
+    for (const std::uint32_t code : {0x3042u, 0x30CAu, 0x706Bu, 0x5F71u, 0x5F0Cu, 0x41u}) // あ ナ 火 影 弌 (level 2)
         CHECK(f.char_info(jp, code, 0u) > 4 && f.char_info(jp, code, 0u) != f.char_info(jp, '_', 0u));
     for (const std::uint32_t code : {0xB098u, 0xD55Cu, 0x41u}) // 나 한
         CHECK(f.char_info(kr, code, 0u) > 4 && f.char_info(kr, code, 0u) != f.char_info(kr, '_', 0u));
 }
 
-TEST_CASE("sceLibFont prefers a PGF file in flash0/font over the bundled font") {
+TEST_CASE("sceLibFont looks in flash0/font, then the per-user font folder, then uses the bundled font") {
     const auto flash = empty_flash("anypsp-hle-font-file");
-    // Any valid PGF works as the stand-in: the bundled Japanese font, saved as ltn0.pgf.
-    std::ofstream(flash / "font" / "ltn0.pgf", std::ios::binary)
-        .write(reinterpret_cast<const char *>(anypsp_font_sans_jp), static_cast<std::streamsize>(anypsp_font_sans_jp_size));
+    const auto user = flash / "user";
+    std::filesystem::create_directories(user);
+    // Any valid PGF works as a stand-in for a real font: the bundled Japanese and Korean ones under Latin names.
+    auto save = [](const std::filesystem::path &path, const unsigned char *data, std::size_t size) {
+        std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char *>(data), static_cast<std::streamsize>(size));
+    };
+    save(flash / "font" / "ltn0.pgf", anypsp_font_sans_jp, anypsp_font_sans_jp_size);
+    save(user / "ltn0.pgf", anypsp_font_sans_kr, anypsp_font_sans_kr_size);
+    save(user / "ltn4.pgf", anypsp_font_sans_kr, anypsp_font_sans_kr_size);
     std::ofstream(flash / "font" / "ltn1.pgf", std::ios::binary) << "not a font";
-    FontLib f(flash);
-    const std::uint32_t from_file = f.open(f.find(1u, 1u, 2u));
-    const std::uint32_t bundled = f.open(f.find(1u, 5u, 2u));
-    CHECK(f.char_info(from_file, 0x3042u, 0u) != f.char_info(from_file, '_', 0u));
-    CHECK_EQ(f.char_info(bundled, 0x3042u, 0u), f.char_info(bundled, '_', 0u));
-    // An unreadable file falls back to the bundled font too.
-    CHECK(f.char_info(f.open(f.find(2u, 1u, 2u)), 'A', 0u) > 0);
+    save(user / "ltn1.pgf", anypsp_font_sans_kr, anypsp_font_sans_kr_size);
+    std::ofstream(flash / "font" / "ltn2.pgf", std::ios::binary) << "not a font";
+
+    FontLib f(flash, user);
+    auto has = [&](std::uint32_t font, std::uint32_t code) { return f.draw(font, code, 2u) != f.draw(font, '_', 2u); };
+    const std::uint32_t game = f.open(f.find(1u, 1u, 2u));      // ltn0: in both folders, the game's wins
+    const std::uint32_t per_user = f.open(f.find(1u, 5u, 2u));  // ltn4: only in the per-user folder
+    const std::uint32_t skipped = f.open(f.find(2u, 1u, 2u));   // ltn1: unreadable in the game's, read from the user's
+    const std::uint32_t bundled = f.open(f.find(2u, 5u, 2u));   // ltn5: in neither
+    const std::uint32_t broken = f.open(f.find(1u, 2u, 2u));    // ltn2: unreadable and absent: bundled
+    CHECK(has(game, 0x3042u) && !has(game, 0xD55Cu));
+    CHECK(has(per_user, 0xD55Cu) && !has(per_user, 0x3042u));
+    CHECK(has(skipped, 0xD55Cu));
+    CHECK(!has(bundled, 0x3042u) && !has(bundled, 0xD55Cu) && has(bundled, 0xE9u));
+    CHECK(has(broken, 'A') && !has(broken, 0xD55Cu));
 }

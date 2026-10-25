@@ -60,10 +60,9 @@ def encoded(codec, first, last):
 
 
 def japanese():
-    # Shift JIS up to the end of JIS X 0208 level 1 (0x9872): symbols, kana, Greek, Cyrillic and the 2965
-    # common kanji. Level 2 kanji would double the file; they fall back to the alternate character.
-    sjis = encoded("shift_jis", 0x20, 0xFFFF)
-    return sorted(set(latin()) | {c for c, e in sjis.items() if len(e) == 1 or int.from_bytes(e, "big") <= 0x9872})
+    # Everything Shift JIS encodes (JIS X 0208: symbols, kana, Greek, Cyrillic, level 1 and 2 kanji), plus
+    # Latin: the PSP's jpn0 character range.
+    return sorted(set(latin()) | set(encoded("shift_jis", 0x20, 0xFFFF)))
 
 
 def korean():
