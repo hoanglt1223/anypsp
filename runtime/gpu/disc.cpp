@@ -168,7 +168,8 @@ fs::path cached_extraction(const fs::path &iso, const fs::path &cache_root) {
     std::error_code ec;
     const auto size = fs::file_size(iso, ec);
     if (ec) throw psprecomp::Error("Cannot read " + iso.string() + ": " + ec.message());
-    const auto stamp = fs::last_write_time(iso, ec).time_since_epoch().count();
+    // libc++ (Android) counts file times in __int128, which std::to_string does not take.
+    const auto stamp = static_cast<long long>(fs::last_write_time(iso, ec).time_since_epoch().count());
     const std::string identity = fs::absolute(iso).string() + "\n" + std::to_string(size) + "\n" + std::to_string(stamp) + "\n";
 
     std::string folder = iso.stem().string();
