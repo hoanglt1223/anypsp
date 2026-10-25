@@ -119,11 +119,6 @@ void Kernel::install_devices() {
     hle(util, 0x67AF3428u, "sceUtilityMsgDialogShutdownStart", &Kernel::sceUtilityMsgDialogShutdownStart);
 
     const char *tm = "ThreadManForUser";
-    hle(tm, 0xC07BB470u, "sceKernelCreateFpl", &Kernel::sceKernelCreateFpl);
-    hle(tm, 0xED1410E0u, "sceKernelDeleteFpl", &Kernel::sceKernelDeleteFpl);
-    hle(tm, 0xD979E9BFu, "sceKernelAllocateFpl", &Kernel::sceKernelAllocateFpl);
-    hle(tm, 0xF6414A71u, "sceKernelFreeFpl", &Kernel::sceKernelFreeFpl);
-    hle(tm, 0x623AE665u, "sceKernelTryAllocateFpl", &Kernel::sceKernelTryAllocateFpl);
 
     const char *suspend = "sceSuspendForUser";
     hle(suspend, 0x3E0271D3u, "sceKernelVolatileMemLock", &Kernel::sceKernelVolatileMemLock);
@@ -669,103 +664,6 @@ void Kernel::sceUtilityMsgDialogShutdownStart(Ctx &ctx) {
 
 // ---------------------------------------------------------------------------
 // Fixed-size memory pools
-
-void Kernel::sceKernelCreateFpl(Ctx &ctx) {
-    const std::uint32_t block_size = align_up(std::max(ctx.gpr[7], 1u), 4u);
-    const std::uint32_t count = ctx.gpr[8];
-    FixedPool pool;
-    pool.name = read_string(ctx.gpr[4], 32);
-    pool.block_size = block_size;
-    pool.memory_block = allocate("fpl:" + pool.name, (ctx.gpr[6] & 0x4000u) != 0u ? 1u : 0u, block_size * count, 0u);
-    if (pool.memory_block < 0) {
-        finish(ctx, kErrorNoMemory);
-        return;
-    }
-    pool.base = blocks_.at(pool.memory_block).address;
-    pool.used.assign(count, false);
-    pool.attr = ctx.gpr[6];
-    const std::int32_t uid = new_uid();
-    fpls_[uid] = std::move(pool);
-    finish(ctx, static_cast<std::uint32_t>(uid));
-}
-
-void Kernel::sceKernelDeleteFpl(Ctx &ctx) {
-    const auto it = fpls_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownFpl);
-        return;
-    }
-    blocks_.erase(it->second.memory_block);
-    fpls_.erase(it);
-    finish(ctx, 0u);
-}
-
-void Kernel::sceKernelAllocateFpl(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    const auto it = fpls_.find(uid);
-    if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownFpl);
-        return;
-    }
-    auto &pool = it->second;
-    for (std::size_t i = 0; i < pool.used.size(); ++i) {
-        if (pool.used[i]) continue;
-        pool.used[i] = true;
-        rt_.memory().store32(ctx.gpr[5], pool.base + static_cast<std::uint32_t>(i) * pool.block_size);
-        finish(ctx, 0u);
-        return;
-    }
-    Thread *self = current();
-    if (self != nullptr) {
-        self->wait_uid = uid;
-        self->wait_out_address = ctx.gpr[5];
-        begin_timeout(*self, ctx.gpr[6]);
-    }
-    block(ctx, WaitType::Fpl, 0u);
-}
-
-void Kernel::sceKernelTryAllocateFpl(Ctx &ctx) {
-    const auto it = fpls_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownFpl);
-        return;
-    }
-    auto &pool = it->second;
-    for (std::size_t i = 0; i < pool.used.size(); ++i) {
-        if (pool.used[i]) continue;
-        pool.used[i] = true;
-        rt_.memory().store32(ctx.gpr[5], pool.base + static_cast<std::uint32_t>(i) * pool.block_size);
-        finish(ctx, 0u);
-        return;
-    }
-    finish(ctx, kErrorNoMemory);
-}
-
-void Kernel::sceKernelFreeFpl(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    const auto it = fpls_.find(uid);
-    if (it == fpls_.end()) {
-        finish(ctx, kErrorUnknownFpl);
-        return;
-    }
-    auto &pool = it->second;
-    const std::uint32_t index = (ctx.gpr[5] - pool.base) / pool.block_size;
-    if (ctx.gpr[5] < pool.base || index >= pool.used.size() || !pool.used[index]) {
-        finish(ctx, kErrorIllegalMemblock);
-        return;
-    }
-    pool.used[index] = false;
-    for (auto &[tid, t] : threads_) {
-        (void)tid;
-        if (t.state != ThreadState::Waiting || t.wait != WaitType::Fpl || t.wait_uid != uid) continue;
-        pool.used[index] = true;
-        rt_.memory().store32(t.wait_out_address, ctx.gpr[5]);
-        wake(t, 0u);
-        break;
-    }
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
 
 // ---------------------------------------------------------------------------
 // Status queries

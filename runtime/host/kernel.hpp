@@ -200,7 +200,9 @@ struct OpenDirectory {
 
 struct FixedPool {
     std::string name;
-    std::uint32_t block_size{};
+    std::uint32_t block_size{};      // as asked for
+    std::uint32_t aligned_size{};    // what each block takes
+    std::size_t next{};              // where the search for a free block starts
     std::uint32_t base{};
     std::int32_t memory_block{-1};
     std::vector<bool> used;
@@ -210,15 +212,9 @@ struct FixedPool {
 struct VariablePool {
     std::string name;
     std::uint32_t attr{};
-    std::uint32_t base{};      // first usable byte, after the pool header
+    std::uint32_t header{};    // the pool's memory block, which starts with its bookkeeping
     std::uint32_t pool_size{};
     std::int32_t memory_block{-1};
-    std::map<std::uint32_t, std::uint32_t> chunks; // chunk address -> size, header included
-
-    [[nodiscard]] std::uint32_t free_size() const;
-    // Returns the guest address of the allocation, or 0 when no free range is large enough.
-    std::uint32_t allocate(std::uint32_t size);
-    bool free(std::uint32_t address);
 };
 
 struct LoadedModule {
@@ -856,6 +852,15 @@ private:
     void install_mpeg();
     void install_network();
     void install_kernel_objects();
+    std::uint32_t fpl_allocate(FixedPool &pool);
+    void allocate_fpl(Ctx &ctx, bool wait);
+    void sceKernelCancelFpl(Ctx &ctx);
+    void vpl_init(std::uint32_t header, std::uint32_t size);
+    std::uint32_t vpl_allocate(const VariablePool &pool, std::uint32_t size);
+    bool vpl_free(const VariablePool &pool, std::uint32_t address);
+    [[nodiscard]] std::uint32_t vpl_free_size(const VariablePool &pool) const;
+    bool vpl_wake(std::int32_t uid);
+    void sceKernelCancelVpl(Ctx &ctx);
     void write_object_name(std::uint32_t info, const std::string &name);
     // Validates a Refer*Status buffer and writes its size field; false when the call is finished.
     bool begin_refer(Ctx &ctx, std::uint32_t info, std::uint32_t size);

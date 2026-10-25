@@ -201,18 +201,15 @@ bool Kernel::try_complete_wait(Thread &t, std::uint32_t &result) {
         return true;
     }
     case WaitType::Fpl: {
-        FixedPool &pool = fpls_.at(t.wait_uid);
-        const auto free = std::find(pool.used.begin(), pool.used.end(), false);
-        if (free == pool.used.end()) return false;
-        *free = true;
-        const auto index = static_cast<std::uint32_t>(free - pool.used.begin());
-        if (t.wait_out_address != 0u) m.store32(t.wait_out_address, pool.base + index * pool.block_size);
+        const std::uint32_t address = fpl_allocate(fpls_.at(t.wait_uid));
+        if (address == 0u) return false;
+        if (m.contains(t.wait_out_address, 4u)) m.store32(t.wait_out_address, address);
         return true;
     }
     case WaitType::Vpl: {
-        const std::uint32_t address = vpls_.at(t.wait_uid).allocate(t.wait_count);
+        const std::uint32_t address = vpl_allocate(vpls_.at(t.wait_uid), t.wait_count);
         if (address == 0u) return false;
-        if (t.wait_out_address != 0u) m.store32(t.wait_out_address, address);
+        if (m.contains(t.wait_out_address, 4u)) m.store32(t.wait_out_address, address);
         return true;
     }
     case WaitType::MsgPipeSend:

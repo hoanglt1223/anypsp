@@ -193,22 +193,22 @@ void Kernel::refer_lwmutex(Ctx &ctx, std::int32_t uid, std::uint32_t info) {
         (void)tid;
         if (t.state == ThreadState::Waiting && t.wait == WaitType::LwMutex && t.wait_uid == uid) ++waiting;
     }
-    std::uint8_t record[68]{};
+    // SceKernelLwMutexInfo is 64 bytes and written whole whatever size the caller set.
+    std::uint8_t record[64]{};
     const auto put32 = [&record](std::size_t at, std::uint32_t value) {
         for (std::size_t i = 0; i < 4u; ++i) record[at + i] = static_cast<std::uint8_t>(value >> (8u * i));
     };
-    put32(0, 68u);
+    put32(0, 64u);
     for (std::size_t i = 0; i < 31u && i < m.name.size(); ++i) record[4 + i] = static_cast<std::uint8_t>(m.name[i]);
     put32(36, m.attr);
     put32(40, static_cast<std::uint32_t>(uid));
     put32(44, m.workarea);
     put32(48, static_cast<std::uint32_t>(m.initial_count));
     put32(52, memory.load32(m.workarea + kLockLevel));
-    put32(56, memory.load32(m.workarea + kLockThread));
+    const std::uint32_t owner = memory.load32(m.workarea + kLockThread);
+    put32(56, owner == 0u ? 0xFFFFFFFFu : owner);
     put32(60, waiting);
-    memory.store32(m.workarea + kNumWaitThreads, waiting);
-    const std::uint32_t length = size < 68u ? size : 68u;
-    memory.copy_in(info, std::span<const std::uint8_t>(record, length));
+    memory.copy_in(info, std::span<const std::uint8_t>(record, sizeof record));
     finish(ctx, 0u);
 }
 
