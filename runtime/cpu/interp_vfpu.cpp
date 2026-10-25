@@ -213,6 +213,27 @@ void EatPrefixes(MIPSState *mips)
 	mips->vfpuCtrl[VFPU_CTRL_DPREFIX] = 0;
 }
 
+// One lane of vf2i (also used by generated code): s * 2^scale, rounded by mode (16..19: n, z, u, d)
+// and saturated; NaN gives 0x7FFFFFFF.
+s32 vfpu_f2i(float s, int scale, int mode) {
+	if (my_isnan(s))
+		return 0x7FFFFFFF;
+	const float mult = (float)(1UL << scale);
+	double sv = s * mult; // (float)0x7fffffff == (float)0x80000000
+	// Cap/floor it to 0x7fffffff / 0x80000000
+	if (sv > (double)0x7fffffff)
+		return 0x7fffffff;
+	if (sv <= (double)(int)0x80000000)
+		return (s32)0x80000000;
+	switch (mode) {
+	case 16: return (int)round_ieee_754(sv); //n
+	case 17: return s >= 0 ? (int)floor(sv) : (int)ceil(sv); //z
+	case 18: return (int)ceil(sv); //u
+	case 19: return (int)floor(sv); //d
+	default: return 0x7FFFFFFF;
+	}
+}
+
 namespace MIPSInt
 {
 	void Int_VPFX(MIPSState *mips, MIPSOpcode op)
@@ -805,32 +826,12 @@ namespace MIPSInt
 		int vd = _VD;
 		int vs = _VS;
 		int imm = (op >> 16) & 0x1f;
-		float mult = (float)(1UL << imm);
 		VectorSize sz = GetVecSize(op);
 		ReadVector(mips, s, sz, vs);
 		// Negate, abs, and constants apply as you'd expect to the bits.
 		ApplySwizzleS(mips, s, sz);
 		for (int i = 0; i < GetNumVectorElements(sz); i++) {
-			if (my_isnan(s[i])) {
-				d[i] = 0x7FFFFFFF;
-				continue;
-			}
-			double sv = s[i] * mult; // (float)0x7fffffff == (float)0x80000000
-			// Cap/floor it to 0x7fffffff / 0x80000000
-			if (sv > (double)0x7fffffff) {
-				d[i] = 0x7fffffff;
-			} else if (sv <= (double)(int)0x80000000) {
-				d[i] = 0x80000000;
-			} else {
-				switch ((op >> 21) & 0x1f)
-				{
-				case 16: d[i] = (int)round_vfpu_n(sv); break; //(floor(sv + 0.5f)); break; //n
-				case 17: d[i] = s[i]>=0 ? (int)floor(sv) : (int)ceil(sv); break; //z
-				case 18: d[i] = (int)ceil(sv); break; //u
-				case 19: d[i] = (int)floor(sv); break; //d
-				default: d[i] = 0x7FFFFFFF; break;
-				}
-			}
+			d[i] = vfpu_f2i(s[i], imm, (op >> 21) & 0x1f);
 		}
 		// Does not apply sat, but does apply mask.
 		ApplyPrefixD(mips, reinterpret_cast<float *>(d), sz, true);

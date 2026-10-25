@@ -9,7 +9,7 @@
 
 #include "difftest_cases.hpp"
 
-#include "cpu/interp.h"
+#include "cpu/generated_ops.h"
 #include "psprecomp/common.hpp"
 
 #include <bit>
@@ -56,7 +56,9 @@ std::uint32_t access_alignment(const std::string &m) {
     if (m == "lb" || m == "lbu" || m == "sb" || m == "lwl" || m == "lwr" || m == "swl" || m == "swr" || m == "cache")
         return 1u;
     if (m == "lh" || m == "lhu" || m == "sh") return 2u;
-    if (m == "lw" || m == "sw" || m == "lwc1" || m == "swc1" || m == "lv.s" || m == "sv.s") return 4u;
+    if (m == "lw" || m == "sw" || m == "lwc1" || m == "swc1" || m == "lv.s" || m == "sv.s" || m == "ll" || m == "sc" ||
+        m == "lv" || m == "sv")
+        return 4u;
     if (m == "lv.q" || m == "sv.q") return 16u;
     return 0u;
 }
@@ -134,22 +136,29 @@ int main(int argc, char **argv) {
                 for (auto &byte : initial) byte = static_cast<std::uint8_t>(rng());
 
             const bool interrupts = (rng() & 1u) != 0u;
+            const std::uint32_t link = rng() & 1u;
             psprecomp::AllegrexContext a = start, b = start;
             if (alignment != 0u) memory.copy_in(kWindow, initial);
             rt.set_interrupts_enabled(interrupts);
+            anypsp::cpu::g_llBit = link;
             test.run(rt, a);
+            const std::uint32_t generated_link = anypsp::cpu::g_llBit;
             anypsp::cpu::leave_guest();  // ctc1 switches the host rounding mode
             if (alignment != 0u) memory.copy_out(kWindow, generated);
             const bool generated_interrupts = rt.interrupts_enabled();
 
             if (alignment != 0u) memory.copy_in(kWindow, initial);
             rt.set_interrupts_enabled(interrupts);
+            anypsp::cpu::g_llBit = link;
             (void)anypsp::cpu::execute(rt, b, 0x08804000u, test.word);
+            const std::uint32_t reference_link = anypsp::cpu::g_llBit;
             anypsp::cpu::leave_guest();
             if (alignment != 0u) memory.copy_out(kWindow, reference);
             ++runs;
 
             std::string difference = describe_difference(a, b);
+            if (difference.empty() && generated_link != reference_link)
+                difference = "ll link " + std::to_string(generated_link) + " vs " + std::to_string(reference_link);
             if (difference.empty() && generated_interrupts != rt.interrupts_enabled())
                 difference = std::string("interrupt enable ") + (generated_interrupts ? "1" : "0") + " vs " +
                              (rt.interrupts_enabled() ? "1" : "0");

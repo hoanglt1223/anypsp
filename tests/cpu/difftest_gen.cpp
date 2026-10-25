@@ -8,6 +8,7 @@
 //   anypsp-difftest-gen <output.cpp> [samples per kind]
 
 #include "codegen/emit_cpp.hpp"
+#include "cpu/interp.h"
 
 #include "psprecomp/common.hpp"
 #include "psprecomp/decoder.hpp"
@@ -37,7 +38,8 @@ std::vector<Pattern> patterns() {
     for (std::uint32_t op : {0x08u, 0x09u, 0x0Au, 0x0Bu, 0x0Cu, 0x0Du, 0x0Eu, 0x0Fu,      // immediates
                              0x20u, 0x21u, 0x22u, 0x23u, 0x24u, 0x25u, 0x26u,             // loads
                              0x28u, 0x29u, 0x2Au, 0x2Bu, 0x2Eu, 0x2Fu,                    // stores, cache
-                             0x31u, 0x39u, 0x32u, 0x3Au, 0x36u, 0x3Eu})                   // lwc1/swc1, lv/sv
+                             0x31u, 0x39u, 0x32u, 0x3Au, 0x36u, 0x3Eu,                    // lwc1/swc1, lv/sv
+                             0x30u, 0x38u, 0x35u, 0x3Du})                                 // ll/sc, lvl/lvr, svl/svr
         list.push_back({op << 26u, fields});
     for (std::uint32_t fn = 0u; fn < 64u; ++fn) list.push_back({fn, fields & ~0x3Fu});    // SPECIAL
     list.push_back({0x1Fu << 26u, fields & ~0x3Fu});                                      // ext
@@ -103,7 +105,7 @@ int main(int argc, char **argv) {
     index = 0;
     for (const auto &[word, code] : cases) {
         const auto decoded = psprecomp::decode_allegrex(word);
-        out << "    {" << psprecomp::hex32(word) << "u, \"" << decoded.mnemonic << "\", &psprecomp::case_" << index++
+        out << "    {" << psprecomp::hex32(word) << "u, \"" << anypsp::cpu::instruction_info(word).name << "\", &psprecomp::case_" << index++
             << "},\n";
     }
     out << "};\nconst std::size_t kDiffCaseCount = " << cases.size() << ";\n";

@@ -41,6 +41,10 @@ float vfpu_log2(float);
 float vfpu_rcp(float);
 float vfpu_h2f_float(std::uint16_t);
 extern const float cst_constants[32];
+// One lane of vf2i: s * 2^scale converted with the rounding mode (16..19 = n, z, u, d), saturated.
+std::int32_t vfpu_f2i(float s, int scale, int mode);
+// The ll/sc link (interp.cpp).
+extern std::uint32_t g_llBit;
 
 namespace gen {
 
@@ -514,6 +518,61 @@ ANYPSP_GEN_INLINE bool vsgn(Runtime &rt, Ctx &ctx, u32 pc) {
     return true;
 }
 
+// vdet: s.x * t.y - s.y * t.x, through the VFPU dot product.
+template <u32 Op>
+ANYPSP_GEN_INLINE bool vdet(Runtime &rt, Ctx &ctx, u32 pc) {
+    ANYPSP_GEN_PLAIN_OR_INTERPRET(rt, ctx, pc, Op);
+    constexpr u32 n = vec_size(Op);
+    float s[4]{}, t[4]{};
+    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    read_vector<(Op >> 16) & 0x7Fu, n>(ctx, t);
+    const float swapped[4] = {t[1], t[0], t[2], t[3]};
+    s[1] = -s[1];
+    const float d = vfpu_dot(s, swapped);
+    write_vector<Op & 0x7Fu, 1u>(ctx, &d);
+    return true;
+}
+
+// vf2in, vf2iz, vf2iu, vf2id.
+template <u32 Op>
+ANYPSP_GEN_INLINE bool vf2i(Runtime &rt, Ctx &ctx, u32 pc) {
+    ANYPSP_GEN_PLAIN_OR_INTERPRET(rt, ctx, pc, Op);
+    constexpr u32 n = vec_size(Op);
+    float s[4], d[4];
+    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    for (u32 i = 0; i < n; ++i)
+        d[i] = from_bits(static_cast<u32>(vfpu_f2i(s[i], static_cast<int>((Op >> 16) & 31u), static_cast<int>((Op >> 21) & 31u))));
+    write_vector<Op & 0x7Fu, n>(ctx, d);
+    return true;
+}
+
+// lvl.q, lvr.q, svl.q, svr.q: the part of a quad on one side of an unaligned address. They take
+// no prefixes; a bad address runs the interpreter, which reports it.
+template <u32 Op>
+ANYPSP_GEN_INLINE bool vquad_partial(Runtime &rt, Ctx &ctx, u32 pc) {
+    constexpr u32 vt = ((Op >> 16) & 0x1Fu) | ((Op & 1u) << 5);
+    const u32 addr = ctx.gpr[(Op >> 21) & 31u] + static_cast<u32>(static_cast<std::int32_t>(static_cast<std::int16_t>(Op & 0xFFFCu)));
+    auto &memory = rt.memory();
+    if ((addr & 3u) != 0u || !memory.contains(addr, 4u)) [[unlikely]]
+        return ::anypsp::cpu::execute(rt, ctx, pc, Op);
+    const u32 offset = (addr >> 2) & 3u;
+    float q[4];
+    read_vector<vt, 4u>(ctx, q);
+    if constexpr ((Op >> 26) == 53u) {
+        if constexpr ((Op & 2u) == 0u)
+            for (u32 i = 0; i < offset + 1u; ++i) q[3u - i] = from_bits(memory.aot_load32(addr - 4u * i));
+        else
+            for (u32 i = 0; i < 4u - offset; ++i) q[i] = from_bits(memory.aot_load32(addr + 4u * i));
+        write_vector<vt, 4u>(ctx, q);
+    } else {
+        if constexpr ((Op & 2u) == 0u)
+            for (u32 i = 0; i < offset + 1u; ++i) memory.aot_store32(addr - 4u * i, bits(q[3u - i]));
+        else
+            for (u32 i = 0; i < 4u - offset; ++i) memory.aot_store32(addr + 4u * i, bits(q[i]));
+    }
+    return true;
+}
+
 // viim.s, vfim.s: an integer or half-float immediate to one lane.
 template <u32 Op>
 ANYPSP_GEN_INLINE bool viim(Runtime &rt, Ctx &ctx, u32 pc) {
@@ -526,6 +585,31 @@ ANYPSP_GEN_INLINE bool viim(Runtime &rt, Ctx &ctx, u32 pc) {
 }
 
 #undef ANYPSP_GEN_PLAIN_OR_INTERPRET
+
+// ll and sc. The link is the interpreter's, which leaving the guest (syscalls, interrupts) clears.
+template <u32 Op>
+ANYPSP_GEN_INLINE void load_linked(Runtime &rt, Ctx &ctx, u32 pc) {
+    constexpr u32 rs = (Op >> 21) & 31u, rt_reg = (Op >> 16) & 31u;
+    const u32 addr = ctx.gpr[rs] + static_cast<u32>(static_cast<std::int32_t>(static_cast<std::int16_t>(Op & 0xFFFFu)));
+    auto &memory = rt.memory();
+    const bool valid = (addr & 3u) == 0u && memory.contains(addr, 4u);
+    if constexpr ((Op >> 26) == 48u) {  // ll
+        if (!valid) [[unlikely]] {
+            (void)::anypsp::cpu::execute(rt, ctx, pc, Op);  // reports the bad address and does the rest
+            return;
+        }
+        if constexpr (rt_reg != 0u) ctx.gpr[rt_reg] = memory.aot_load32(addr);
+        g_llBit = 1u;
+    } else {  // sc
+        if (!valid) [[unlikely]] {
+            (void)::anypsp::cpu::execute(rt, ctx, pc, Op);
+            return;
+        }
+        const u32 linked = g_llBit;
+        if (linked != 0u) memory.aot_store32(addr, ctx.gpr[rt_reg]);
+        if constexpr (rt_reg != 0u) ctx.gpr[rt_reg] = linked != 0u ? 1u : 0u;
+    }
+}
 
 // madd, maddu, msub, msubu: HI:LO plus or minus the product.
 template <u32 Op>

@@ -1098,7 +1098,9 @@ const char *generated_op_template(std::string_view name) {
         {"v(h)tfm2", "vtfm"}, {"v(h)tfm3", "vtfm"}, {"v(h)tfm4", "vtfm"},
         {"vrot", "vrot"},
         {"viim.s", "viim"}, {"vfim.s", "viim"},
-        {"vcrsp.t/vqmul.q", "cross_quat"}, {"vocp", "vocp"}, {"vsgn", "vsgn"},
+        {"vcrsp.t/vqmul.q", "cross_quat"}, {"vocp", "vocp"}, {"vsgn", "vsgn"}, {"vdet", "vdet"},
+        {"vf2in", "vf2i"}, {"vf2iz", "vf2i"}, {"vf2iu", "vf2i"}, {"vf2id", "vf2i"},
+        {"lv", "vquad_partial"}, {"sv", "vquad_partial"},
     };
     const auto found = table.find(name);
     return found == table.end() ? nullptr : found->second;
@@ -1118,6 +1120,9 @@ std::optional<std::string> emit_generated_op(std::uint32_t word, std::uint32_t p
     if (name == "vzero" || name == "vone")
         return "    if (!anypsp::cpu::gen::vector_init<" + w + ", " + (name == "vone" ? "true" : "false") +
                ">(rt, ctx, " + psprecomp::hex32(pc) + "u)) return; // " + std::string(name) + "\n";
+    if (name == "ll" || name == "sc")
+        return "    anypsp::cpu::gen::load_linked<" + w + ">(rt, ctx, " + psprecomp::hex32(pc) + "u); // " +
+               std::string(name) + "\n";
     if (name == "madd" || name == "maddu" || name == "msub" || name == "msubu")
         return "    anypsp::cpu::gen::multiply_accumulate<" + w + ">(ctx); // " + std::string(name) + "\n";
     if (name == "vflush") {
