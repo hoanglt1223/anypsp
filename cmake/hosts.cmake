@@ -29,6 +29,19 @@ if(ANYPSP_BUILD_HOST AND NOT ANYPSP_RUNNER_NAME STREQUAL "" AND TARGET anypsp_ge
     if(ANDROID)
         add_subdirectory(platform/android)
     elseif(TARGET anypsp_gpu)
+        if(UNIX AND NOT APPLE)
+            # The Android host on Mesa's OpenGL ES 3: GLES-only ARM handhelds, and the Android path on a desktop.
+            find_library(ANYPSP_GLESV2 GLESv2)
+            if(ANYPSP_GLESV2)
+                add_executable(anypsp-game-gles ${PROJECT_SOURCE_DIR}/platform/android/src/android_main.cpp
+                    ${PROJECT_SOURCE_DIR}/runtime/host/ge_gl.cpp ${PROJECT_SOURCE_DIR}/runtime/gpu/disc.cpp
+                    ${PROJECT_SOURCE_DIR}/runtime/gpu/frame_output.cpp ${game_fallbacks})
+                target_include_directories(anypsp-game-gles PRIVATE ${PROJECT_SOURCE_DIR}/runtime/gpu ${PROJECT_SOURCE_DIR}/runtime/host)
+                target_compile_definitions(anypsp-game-gles PRIVATE ANYPSP_GAME_SHA256="${game_hash}")
+                target_link_libraries(anypsp-game-gles PRIVATE anypsp_generated_${ANYPSP_RUNNER_NAME} anypsp_host anypsp_loader
+                    SDL3::SDL3-static ${ANYPSP_GLESV2})
+            endif()
+        endif()
         # The launcher is its own object library: main_gpu.cpp's main() is renamed for anypsp-game only.
         add_library(anypsp_game_launcher OBJECT ${PROJECT_SOURCE_DIR}/tools/anypsp/game_main.cpp)
         target_compile_definitions(anypsp_game_launcher PRIVATE ANYPSP_GAME_SHA256="${game_hash}")

@@ -13,6 +13,8 @@
 //   --frames N   stop after N vblanks      --dump file.png   write the last frame
 //   --hashes F   write "<frame> <hash>" lines per vblank   --input frame:mask,...   scripted pad
 //   --scale N    internal resolution (default 2)
+// The same host builds on Linux with Mesa's OpenGL ES 3 (anypsp-game-gles, cmake/hosts.cmake), for
+// GLES-only ARM handhelds and to test the Android path on a desktop; there the files folder is argv[1].
 
 #include "disc.hpp"
 #include "frame_output.hpp"
@@ -31,9 +33,11 @@
 #include <SDL3/SDL_main.h>
 
 #include <GLES3/gl3.h>
+#include <unistd.h>
+#ifdef __ANDROID__
 #include <android/log.h>
 #include <jni.h>
-#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -67,6 +71,7 @@ constexpr double kVblankSeconds = 1.0 / 59.94;
 std::atomic<std::uint32_t> g_touch_buttons{0};
 SDL_AudioStream *g_audio = nullptr;
 
+#ifdef __ANDROID__
 // stdout and stderr (the runtime's [anypsp] and [hle] lines) into logcat.
 void log_to_logcat() {
     static int fds[2];
@@ -90,6 +95,9 @@ void log_to_logcat() {
         }
     }).detach();
 }
+#else
+void log_to_logcat() {}
+#endif
 
 std::map<std::string, std::string> read_properties(const fs::path &path) {
     std::map<std::string, std::string> values;
@@ -128,7 +136,11 @@ struct Options {
 Options parse(int argc, char **argv) {
     Options o;
     if (argc >= 2) o.files = argv[1];
+#ifdef __ANDROID__
     else if (const char *path = SDL_GetAndroidInternalStoragePath()) o.files = path;
+#else
+    else throw psprecomp::Error("usage: anypsp-game-gles <files folder> [--frames N] [--dump f.png] [--hashes f] [--input s] [--scale n]");
+#endif
     for (int i = 2; i + 1 < argc; i += 2) {
         const std::string flag = argv[i], value = argv[i + 1];
         if (flag == "--frames") o.frames = std::stol(value);
@@ -451,9 +463,11 @@ int run(const Options &o) {
 
 } // namespace
 
+#ifdef __ANDROID__
 extern "C" JNIEXPORT void JNICALL Java_io_anyport_anypsp_GameActivity_nativeSetTouchButtons(JNIEnv *, jclass, jint mask) {
     g_touch_buttons.store(static_cast<std::uint32_t>(mask));
 }
+#endif
 
 int main(int argc, char **argv) {
     log_to_logcat();

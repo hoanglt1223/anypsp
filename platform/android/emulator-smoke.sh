@@ -34,5 +34,5 @@ cat smoke.log
 grep -q "frame limit reached" smoke.log || { echo "smoke: the guest stopped early"; exit 1; }
 sleep 2
 adb exec-out run-as "$pkg" cat files/smoke.png > smoke.png
-[ -s smoke.png ] || { echo "smoke: no frame written"; exit 1; }
+head -c 4 smoke.png | grep -q PNG || { head -c 200 smoke.png; echo; echo "smoke: no frame written"; exit 1; }
 echo "smoke: ok, last frame in smoke.png"
