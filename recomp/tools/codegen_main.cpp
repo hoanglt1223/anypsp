@@ -371,7 +371,8 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
                     }
                 } else {
                     const std::uint32_t link = decoded.rd == 0u ? 31u : decoded.rd;
-                    body << "    jump_target = " << reg(decoded.rs) << ";\n";
+                    // The Allegrex ignores the low two bits of a register jump target (cpu/jump/unaligned).
+                    body << "    jump_target = " << reg(decoded.rs) << " & ~3u;\n";
                     if (decoded.kind == psprecomp::OpcodeKind::Jalr) {
                         body << "    ctx.set_gpr(" << link << ", " << psprecomp::hex32(pc + 8u) << "u);\n";
                     }

@@ -202,7 +202,8 @@ namespace MIPSInt {
 
 		int rs = _RS;
 		int rd = _RD;
-		u32 addr = R(rs);
+		// The low two bits of the target are ignored, not an address error (cpu/jump/unaligned).
+		u32 addr = R(rs) & ~3u;
 		switch (op & 0x3f) {
 		case 8: //jr
 			if (!mips->inDelaySlot)
