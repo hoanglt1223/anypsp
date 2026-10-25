@@ -285,6 +285,8 @@ public:
 
     // Host input: PSP button bits and analog stick (128 = centre).
     void set_pad(std::uint32_t buttons, std::uint8_t lx = 128u, std::uint8_t ly = 128u);
+    // Takes one controller sample into the 64-entry ring and the latch, as the PSP does every vblank.
+    void sample_pad();
     // Receives interleaved stereo 16-bit PCM at 44.1 kHz as the guest outputs it.
     // Receives the mixed 44.1 kHz stereo output once per frame.
     using AudioSink = void (*)(const std::int16_t *samples, std::uint32_t frames);
@@ -522,10 +524,18 @@ private:
                       bool blocking = true);
     void dialog_get_status(Ctx &ctx, UtilityDialog &dialog);
     void sceCtrlPeekBufferPositive(Ctx &ctx);
+    void sceCtrlPeekBufferNegative(Ctx &ctx);
     void sceCtrlReadBufferPositive(Ctx &ctx);
+    void sceCtrlReadBufferNegative(Ctx &ctx);
+    void ctrl_buffer(Ctx &ctx, bool negative, bool peek);
     void sceCtrlSetSamplingMode(Ctx &ctx);
     void sceCtrlGetSamplingMode(Ctx &ctx);
-    void write_pad(std::uint32_t data, std::uint32_t count);
+    void sceCtrlSetSamplingCycle(Ctx &ctx);
+    void sceCtrlGetSamplingCycle(Ctx &ctx);
+    void sceCtrlSetIdleCancelThreshold(Ctx &ctx);
+    void sceCtrlGetIdleCancelThreshold(Ctx &ctx);
+    // Copies the newest `count` ring samples, oldest first, to guest SceCtrlData entries.
+    void write_pad(std::uint32_t data, std::uint32_t count, bool negative);
     void sceAudioChReserve(Ctx &ctx);
     void sceAudioChRelease(Ctx &ctx);
     void sceAudioOutputBlocking(Ctx &ctx);
@@ -635,12 +645,24 @@ private:
     UtilityDialog msg_dialog_{};
     UtilityDialog netconf_dialog_{};
     UtilityDialog gamesharing_dialog_{};
+    // Host pad state; the guest only sees it through the samples taken each vblank.
     std::uint32_t pad_buttons_{};
-    std::uint32_t latch_make_{}, latch_break_{}; // buttons pressed / released since the last sceCtrlReadLatch
     std::uint8_t pad_lx_{128u};
     std::uint8_t pad_ly_{128u};
-    std::uint32_t pad_read_vcount_{~0u};
+    struct PadSample {
+        std::uint32_t timestamp{};
+        std::uint32_t buttons{};
+        std::uint8_t lx{128u}, ly{128u};
+    };
+    static constexpr std::uint32_t kPadRing = 64u; // the PSP's sceCtrl buffer depth
+    std::array<PadSample, kPadRing> pad_ring_{};
+    std::uint32_t pad_head_{1u}; // next slot written; slot 0 holds the neutral boot sample
+    std::uint32_t pad_read_{0u}; // first sample not yet consumed by sceCtrlReadBuffer*
+    std::uint32_t pad_sampled_buttons_{};
+    std::uint32_t latch_make_{}, latch_break_{}, latch_press_{}, latch_release_{}, latch_samples_{};
     std::uint32_t pad_mode_{};
+    std::uint32_t pad_cycle_{};
+    std::int32_t idle_reset_{-1}, idle_back_{-1};
     std::int32_t current_uid_{-1};
     std::int32_t next_uid_{0x100};
     std::uint64_t ready_sequence_{};

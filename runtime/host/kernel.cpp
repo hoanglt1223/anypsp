@@ -753,16 +753,17 @@ bool Kernel::frame(double budget_ms) {
     poll_io();
     ++display_.vcount;
     ge_worker_->post([ge = ge_.get()] { ge->next_frame(); });
+    sample_pad();
     frame_start_guest_us_ = static_cast<std::uint64_t>(display_.vcount) * kFrameUs;
     frame_real_start_ns_ = real_now_ns();
     warp_us_ = 0u;
     for (auto &[uid, t] : threads_) {
         (void)uid;
         if (t.state == ThreadState::Waiting && t.wait == WaitType::Vblank) wake(t, 0u);
-        if (t.state == ThreadState::Waiting && t.wait == WaitType::CtrlRead) {
-            write_pad(t.wait_out_address, t.wait_count);
-            pad_read_vcount_ = display_.vcount;
-            wake(t, t.wait_count);
+        if (t.state == ThreadState::Waiting && t.wait == WaitType::CtrlRead && pad_read_ != pad_head_) {
+            write_pad(t.wait_out_address, 1u, t.wait_mode != 0u);
+            pad_read_ = pad_head_;
+            wake(t, 1u);
         }
     }
     run_interrupts(kVblankInterrupt);

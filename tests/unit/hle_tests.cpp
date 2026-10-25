@@ -129,3 +129,93 @@ TEST_CASE("sceIoRename moves memory stick files and refuses existing targets") {
     CHECK(h.call("IoFileMgrForUser", 0x779103A0u, kScratch, kScratch + 0x100u) == 0x80020322u);
     fs::remove_all(root);
 }
+
+namespace {
+
+constexpr std::uint32_t kCtrlRead = 0x1F803938u, kCtrlPeek = 0x3A622550u, kCtrlReadNegative = 0x60B81F86u;
+constexpr std::uint32_t kCross = 0x4000u, kCircle = 0x2000u, kTriangle = 0x1000u;
+
+std::uint32_t pad_buttons(Hle &h, std::uint32_t index) { return h.rt.memory().load32(kScratch + index * 16u + 4u); }
+
+void press(Hle &h, std::uint32_t buttons) {
+    h.kernel->set_pad(buttons);
+    h.kernel->sample_pad();
+}
+
+} // namespace
+
+TEST_CASE("sceCtrlReadBuffer returns every vblank sample taken since the previous read") {
+    Hle h;
+    CHECK(h.call("sceCtrl", kCtrlRead, kScratch, 1u) == 1u); // the boot sample
+    press(h, kTriangle);
+    press(h, 0u);
+    press(h, kCircle);
+    // A Triangle tap followed by Circle between two reads stays visible, oldest first.
+    CHECK(h.call("sceCtrl", kCtrlRead, kScratch, 16u) == 3u);
+    CHECK(pad_buttons(h, 0) == kTriangle);
+    CHECK(pad_buttons(h, 1) == 0u);
+    CHECK(pad_buttons(h, 2) == kCircle);
+
+    press(h, kCross);
+    press(h, kCross | kCircle);
+    CHECK(h.call("sceCtrl", kCtrlRead, kScratch, 1u) == 1u); // the newest of the unread samples
+    CHECK(pad_buttons(h, 0) == (kCross | kCircle));
+    CHECK(h.call("sceCtrl", kCtrlRead, kScratch, 65u) == 0x80000104u);
+}
+
+TEST_CASE("sceCtrlPeekBuffer returns the newest samples without consuming them") {
+    Hle h;
+    press(h, kTriangle);
+    press(h, kCircle);
+    CHECK(h.call("sceCtrl", kCtrlPeek, kScratch, 2u) == 2u);
+    CHECK(pad_buttons(h, 0) == kTriangle);
+    CHECK(pad_buttons(h, 1) == kCircle);
+    CHECK(h.call("sceCtrl", kCtrlRead, kScratch, 64u) == 3u);
+}
+
+TEST_CASE("sceCtrl ring keeps the newest 63 unread samples on overrun") {
+    Hle h;
+    for (std::uint32_t i = 0; i < 100u; ++i) press(h, i);
+    CHECK(h.call("sceCtrl", kCtrlRead, kScratch, 64u) == 63u);
+    CHECK(pad_buttons(h, 0) == 37u);
+    CHECK(pad_buttons(h, 62) == 99u);
+}
+
+TEST_CASE("sceCtrlReadBufferNegative inverts buttons and digital mode centres the stick") {
+    Hle h;
+    h.kernel->set_pad(kCross, 0u, 255u);
+    h.kernel->sample_pad();
+    CHECK(h.call("sceCtrl", kCtrlReadNegative, kScratch, 1u) == 1u);
+    CHECK(pad_buttons(h, 0) == ~kCross);
+    CHECK(h.rt.memory().load8(kScratch + 8u) == 128u);
+    CHECK(h.call("sceCtrl", 0x1F4011E6u, 1u) == 0u); // analog mode; returns the previous mode
+    h.kernel->sample_pad();
+    CHECK(h.call("sceCtrl", kCtrlRead, kScratch, 1u) == 1u);
+    CHECK(h.rt.memory().load8(kScratch + 8u) == 0u);
+    CHECK(h.rt.memory().load8(kScratch + 9u) == 255u);
+}
+
+TEST_CASE("sceCtrlReadLatch reports make, break, press and release since the last read") {
+    Hle h;
+    press(h, kTriangle);
+    press(h, kCircle);
+    auto &m = h.rt.memory();
+    CHECK(h.call("sceCtrl", 0x0B588501u, kScratch) == 2u);
+    CHECK(m.load32(kScratch) == (kTriangle | kCircle));
+    CHECK(m.load32(kScratch + 4u) == kTriangle);
+    CHECK(m.load32(kScratch + 8u) == (kTriangle | kCircle));
+    CHECK((m.load32(kScratch + 12u) & (kTriangle | kCircle)) == (kTriangle | kCircle));
+    CHECK(h.call("sceCtrl", 0xB1D0E5CDu, kScratch) == 0u);
+    CHECK(m.load32(kScratch) == 0u);
+    h.kernel->sample_pad();
+    CHECK(h.call("sceCtrl", 0xB1D0E5CDu, kScratch) == 1u);
+    CHECK(m.load32(kScratch + 8u) == kCircle);
+    CHECK(m.load32(kScratch) == 0u);
+}
+
+TEST_CASE("sceCtrlSetSamplingCycle validates the cycle and returns the previous one") {
+    Hle h;
+    CHECK(h.call("sceCtrl", 0x6A2774F3u, 100u) == 0x80000107u);
+    CHECK(h.call("sceCtrl", 0x6A2774F3u, 6000u) == 0u);
+    CHECK(h.call("sceCtrl", 0x6A2774F3u, 0u) == 6000u);
+}
