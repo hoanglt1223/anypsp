@@ -36,7 +36,8 @@ add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/patches.cpp
     ${ANYPSP_GPU_DIR}/menu.cpp
     ${ANYPSP_GPU_DIR}/speed.cpp
-    ${ANYPSP_GPU_DIR}/menu_host.cpp)
+    ${ANYPSP_GPU_DIR}/menu_host.cpp
+    ${ANYPSP_GPU_DIR}/dialog_overlay.cpp)
 target_include_directories(anypsp_gpu PUBLIC ${ANYPSP_GPU_DIR})
 # The menu's font and translations, compiled in.
 foreach(asset "regular_font;fonts/NotoSans-Regular.ttf" "bold_font;fonts/NotoSans-SemiBold.ttf" "strings;strings.tsv")

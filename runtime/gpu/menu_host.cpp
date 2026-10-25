@@ -50,32 +50,33 @@ std::string when(fs::file_time_type t) {
     return text;
 }
 
-// ICON0.PNG through SDL as anyui pixels (R, G, B, A bytes); false when it cannot be read.
-bool load_icon(const fs::path &png, SaveInfo &save) {
+bool load_icon(const fs::path &png, SaveInfo &save) { return load_icon_pixels(png, save.icon, save.icon_width, save.icon_height); }
+
+} // namespace
+
+bool load_icon_pixels(const fs::path &png, std::vector<std::uint32_t> &pixels, int &width, int &height) {
     const std::u8string name = png.u8string();
     SDL_Surface *loaded = SDL_LoadPNG(reinterpret_cast<const char *>(name.c_str()));
     if (loaded == nullptr) return false;
     SDL_Surface *rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_ABGR8888);
     SDL_DestroySurface(loaded);
     if (rgba == nullptr) return false;
-    save.icon_width = rgba->w;
-    save.icon_height = rgba->h;
-    save.icon.resize(static_cast<std::size_t>(rgba->w) * static_cast<std::size_t>(rgba->h));
+    width = rgba->w;
+    height = rgba->h;
+    pixels.resize(static_cast<std::size_t>(rgba->w) * static_cast<std::size_t>(rgba->h));
     for (int y = 0; y < rgba->h; ++y) {
         const auto *row = reinterpret_cast<const std::uint32_t *>(static_cast<const std::uint8_t *>(rgba->pixels) + y * rgba->pitch);
-        std::copy(row, row + rgba->w, save.icon.begin() + static_cast<std::ptrdiff_t>(y) * rgba->w);
+        std::copy(row, row + rgba->w, pixels.begin() + static_cast<std::ptrdiff_t>(y) * rgba->w);
     }
     SDL_DestroySurface(rgba);
     // Icons have transparent corners; the menu draws them opaque, so put them on black.
-    for (std::uint32_t &p : save.icon) {
+    for (std::uint32_t &p : pixels) {
         const std::uint32_t a = p >> 24;
         const auto ch = [&](int shift) { return (((p >> shift) & 0xFFu) * a + 127u) / 255u; };
         p = ch(0) | ch(8) << 8 | ch(16) << 16 | 0xFF000000u;
     }
     return true;
 }
-
-} // namespace
 
 std::string sfo_string(const fs::path &sfo, const std::string &key) {
     std::ifstream in(sfo, std::ios::binary);

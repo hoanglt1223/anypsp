@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The in-game menu without a window: scripted navigation, rebinding, settings in the input
 // file, the Saves tab's PARAM.SFO reader, and golden pictures of every tab at 1x (960x540)
-// and 2x (1920x1080) in the dark and light themes, drawn offscreen.
+// and 2x (1920x1080) in the dark and light themes, drawn offscreen, and the system dialogs drawn
+// over the game (dialog_overlay.hpp).
 // ANYPSP_UPDATE_GOLDENS=1 rewrites tests/golden/menu; ANYPSP_MENU_SHOTS=<dir> also writes
 // every rendered picture there.
 
 #include "test_harness.hpp"
 
 #include "desktop.hpp"
+#include "dialog_overlay.hpp"
 #include "frame_output.hpp"
 #include "gl_host.hpp"
 #include "input_map.hpp"
@@ -659,4 +661,210 @@ TEST_CASE("menu: a session in a hidden GL window opens over the game and closes 
     // The VRAM framebuffer at 0x04000000, 512 pixels per line, 8888.
     CHECK(session.run(0x04000000u, 512u, 3u) == Result::Resume);
     session.set_rates(59.9, 30.0);
+}
+
+namespace {
+
+using pspweb::SystemDialog;
+
+SystemDialog::Item save_item(std::string name, std::string detail, std::int64_t time, bool icon) {
+    SystemDialog::Item it;
+    it.name = std::move(name);
+    it.exists = true;
+    it.title = "NARUTO: Ultimate Ninja Heroes";
+    it.savedata_title = "Save Data";
+    it.detail = std::move(detail);
+    it.time = time;
+    if (icon) it.icon = "icon0.png";
+    return it;
+}
+
+// The dialogs the golden pictures show.
+SystemDialog sample_dialog(const std::string &kind) {
+    SystemDialog d;
+    if (kind == "list") {
+        d.kind = SystemDialog::Kind::SaveList;
+        d.heading = SystemDialog::Heading::Save;
+        d.items = {save_item("0000", "Play Time 000:00:47 / Rank: ACADEMY", 1, true),
+                   save_item("0001", "Play Time 012:41:05 / Rank: GENIN\nSecond line", 1, false), {}};
+        d.items[2].name = "0002";
+        d.focus = 1;
+    } else if (kind == "overwrite") {
+        d.heading = SystemDialog::Heading::Save;
+        d.text_id = SystemDialog::Text::ConfirmOverwrite;
+        d.buttons = SystemDialog::Buttons::YesNo;
+        d.focus = 1;
+        d.items = {save_item("0000", "Play Time 000:00:47 / Rank: ACADEMY", 1, true)};
+    } else if (kind == "nodata") {
+        d.heading = SystemDialog::Heading::Load;
+        d.text_id = SystemDialog::Text::NoData;
+    } else {
+        d.text = "Save data?\nYour progress in Naruto's House is kept on the Memory Stick.";
+        d.buttons = SystemDialog::Buttons::YesNo;
+    }
+    return d;
+}
+
+} // namespace
+
+TEST_CASE("dialogs: frames in both languages, error codes and wrapping") {
+    anyui::Strings &strings = anypsp::menu::strings();
+    CHECK(strings.missing("vi").empty());
+    const auto no_icon = [](const fs::path &) { return anyui::Thumb{}; };
+    strings.set_language("en");
+    SystemDialog d;
+    d.text_id = SystemDialog::Text::Error;
+    d.error = 0x80110307u;
+    anypsp::dialog::Frame f = anypsp::dialog::make_frame(d, strings, no_icon);
+    CHECK(f.message == "An error has occurred. (80110307)" && f.buttons.size() == 1u && f.buttons[0] == "OK");
+    CHECK(f.heading.empty() && !f.list && f.confirm_hint == "OK" && f.back_hint == "Back");
+    d = sample_dialog("nodata");
+    f = anypsp::dialog::make_frame(d, strings, no_icon);
+    CHECK(f.message == "There is no data." && f.heading == "Load" && f.icon == anyui::Icon::Load);
+    d = sample_dialog("overwrite");
+    f = anypsp::dialog::make_frame(d, strings, no_icon);
+    CHECK(f.message == "Do you want to overwrite?" && f.buttons.size() == 2u && f.buttons[1] == "No" && f.focus == 1);
+    CHECK(f.rows.size() == 1u && f.rows[0].title == "NARUTO: Ultimate Ninja Heroes" && f.rows[0].subtitle == "Save Data");
+    d.text_id = SystemDialog::Text::SaveFailed;
+    d.error = 0x80110385u;
+    CHECK(anypsp::dialog::make_frame(d, strings, no_icon).message == "Unable to save data. (80110385)");
+    for (const auto &[id, text] : std::vector<std::pair<SystemDialog::Text, std::string>>{
+             {SystemDialog::Text::ConfirmLoad, "Do you want to load this data?"},
+             {SystemDialog::Text::ConfirmSave, "Do you want to save this data?"},
+             {SystemDialog::Text::ConfirmDelete, "Do you want to delete this data?"},
+             {SystemDialog::Text::LoadDone, "Load completed."},
+             {SystemDialog::Text::SaveDone, "Save completed."},
+             {SystemDialog::Text::DeleteDone, "Delete completed."}}) {
+        d.text_id = id;
+        CHECK(anypsp::dialog::make_frame(d, strings, no_icon).message == text);
+    }
+    d = sample_dialog("list");
+    int asked = 0;
+    f = anypsp::dialog::make_frame(d, strings, [&](const fs::path &png) {
+        ++asked;
+        CHECK(png == "icon0.png");
+        return anyui::Thumb{};
+    });
+    CHECK(asked == 1 && f.list && f.rows.size() == 3u && f.buttons.empty() && f.confirm_hint == "Choose");
+    CHECK(f.rows[2].new_data && f.rows[2].title == "New data" && f.rows[2].date.empty() && !f.rows[0].date.empty());
+    CHECK(f.heading == "Save" && f.focus == 1);
+
+    strings.set_language("vi");
+    f = anypsp::dialog::make_frame(sample_dialog("nodata"), strings, no_icon);
+    CHECK(f.message == "Không có dữ liệu." && f.buttons[0] == "OK" && f.heading == "Tải dữ liệu");
+    f = anypsp::dialog::make_frame(sample_dialog("list"), strings, no_icon);
+    CHECK(f.rows[2].title == "Dữ liệu mới" && f.back_hint == "Quay lại");
+    strings.set_language("en");
+
+    const anyui::Font &font = anypsp::menu::regular_font();
+    const auto lines = anypsp::dialog::wrap(font, "one two three four five six seven eight\n\nnine", 16, 120);
+    CHECK(lines.size() >= 4u && lines.back() == "nine");
+    CHECK(std::find(lines.begin(), lines.end(), std::string()) != lines.end());
+    for (const std::string &l : lines) CHECK(font.measure(l, 16) <= 120.5f);
+    CHECK(anypsp::dialog::wrap(font, "", 16, 100).size() == 1u);
+    CHECK(anypsp::dialog::format_time(0).empty());
+}
+
+TEST_CASE("dialogs: the PSP buttons answer the dialog and never reach the game twice") {
+    using anypsp::dialog::Keys;
+    Keys keys;
+    SystemDialog d;
+    d.buttons = SystemDialog::Buttons::YesNo;
+    // Cross held from the game's own prompt into the dialog: no answer until pressed again.
+    CHECK(keys.update(nullptr, pad::kCross).game == pad::kCross);
+    Keys::Out out = keys.update(&d, pad::kCross);
+    CHECK(out.game == 0u && !out.confirm && !out.back && out.move == 0);
+    CHECK(!keys.update(&d, 0u).confirm);
+    CHECK(keys.update(&d, pad::kRight).move == 1);
+    CHECK(keys.update(&d, pad::kRight | pad::kLeft).move == -1);
+    out = keys.update(&d, pad::kCross);
+    CHECK(out.confirm && out.game == 0u);
+    // Closed while Cross is held: the game sees it only after a release.
+    CHECK(keys.update(nullptr, pad::kCross | pad::kUp).game == pad::kUp);
+    CHECK(keys.update(nullptr, pad::kCross).game == 0u);
+    CHECK(keys.update(nullptr, 0u).game == 0u);
+    CHECK(keys.update(nullptr, pad::kCross).game == pad::kCross);
+    keys.update(nullptr, 0u);
+    // Circle goes back; the Japanese layout swaps the two.
+    CHECK(keys.update(&d, pad::kCircle).back);
+    keys.update(&d, 0u);
+    d.cross_confirms = false;
+    CHECK(keys.update(&d, pad::kCircle).confirm);
+    keys.update(&d, 0u);
+    CHECK(keys.update(&d, pad::kCross).back);
+    // A list moves up and down only, repeating while held.
+    SystemDialog list;
+    list.kind = SystemDialog::Kind::SaveList;
+    keys.update(&list, 0u);
+    CHECK(keys.update(&list, pad::kRight).move == 0);
+    keys.update(&list, 0u);
+    CHECK(keys.update(&list, pad::kDown).move == 1);
+    int moves = 0;
+    for (int frame = 0; frame < 60; ++frame) moves += keys.update(&list, pad::kDown).move;
+    CHECK(moves >= 6 && moves <= 8);
+}
+
+TEST_CASE("dialogs: golden pictures of the list, a question, a message and Yes/No in both languages and themes") {
+    const anyui::Canvas icon = scene(144, 80);
+    anyui::Strings &strings = anypsp::menu::strings();
+    const auto icons = [&](const fs::path &) { return anyui::Thumb{icon.data(), 144, 80}; };
+    for (const std::string kind : {"list", "overwrite", "nodata", "yesno"}) {
+        for (const char *language : {"en", "vi"}) {
+            for (const bool dark : {true, false}) {
+                for (const int scale : {1, 2}) {
+                    if (scale == 2 && (kind != "list" || !dark || std::string(language) != "en")) continue;
+                    strings.set_language(language);
+                    SystemDialog d = sample_dialog(kind);
+                    anypsp::dialog::Frame f = anypsp::dialog::make_frame(d, strings, icons);
+                    // Fixed dates: the pictures must not depend on the time zone.
+                    for (anypsp::dialog::Row &r : f.rows)
+                        if (!r.new_data) r.date = "2026-10-24 21:05";
+                    anyui::ViewOptions look;
+                    look.dark = dark;
+                    look.reduce_motion = true;
+                    anyui::Canvas out = scene(960 * scale, 540 * scale);
+                    anypsp::dialog::View view(anypsp::menu::regular_font(), anypsp::menu::bold_font());
+                    view.render(out, f, look, 1.f / 60);
+                    check_golden("dialog-" + kind + "-" + language + "-" + std::to_string(scale) + "x-" + (dark ? "dark" : "light"), out);
+                    if (kind == "list") {
+                        const anyui::Rect r = view.rect_of({anypsp::dialog::Hit::Kind::Row, 2});
+                        CHECK(r.w > 0 && view.hit(r.x + r.w / 2, r.y + r.h / 2) == (anypsp::dialog::Hit{anypsp::dialog::Hit::Kind::Row, 2}));
+                    } else {
+                        const anyui::Rect r = view.rect_of({anypsp::dialog::Hit::Kind::Button, 0});
+                        CHECK(r.w > 0 && view.hit(r.x + 2, r.y + r.h / 2).kind == anypsp::dialog::Hit::Kind::Button);
+                        CHECK(view.hit(1, 1).kind == anypsp::dialog::Hit::Kind::None);
+                    }
+                }
+            }
+        }
+    }
+    strings.set_language("en");
+}
+
+TEST_CASE("dialogs: the overlay follows the menu's language and theme and loads ICON0.PNG") {
+    const fs::path dir = scratch("dialog-overlay");
+    const anyui::Canvas icon = scene(144, 80);
+    anypsp::gpu::write_png((dir / "ICON0.PNG").string(), bytes(icon), 144, 80);
+    anypsp::dialog::Icons icons;
+    const anyui::Thumb thumb = icons.get(dir / "ICON0.PNG");
+    CHECK(thumb.width == 144 && thumb.height == 80 && thumb.pixels[0] == icon.data()[0]);
+    CHECK(icons.get(dir / "missing.png").empty());
+
+    InputMap map;
+    map.player().language = "vi";
+    map.player().light_theme = true;
+    map.player().reduce_motion = true;
+    anypsp::dialog::Overlay overlay(map);
+    CHECK(!overlay.look().dark && overlay.look().reduce_motion);
+    SystemDialog d = sample_dialog("list");
+    d.items[0].icon = dir / "ICON0.PNG";
+    anyui::Canvas picture = scene(960, 540);
+    const std::vector<std::uint32_t> before = picture.pixels();
+    overlay.draw(d, picture.data(), 960, 540, 1.f / 60);
+    CHECK(picture.pixels() != before);
+    CHECK(overlay.hit(480, 270).kind == anypsp::dialog::Hit::Kind::Row);
+    CHECK(overlay.hit(2, 2).kind == anypsp::dialog::Hit::Kind::None);
+    CHECK(anypsp::menu::strings().language() == "vi");
+    anypsp::menu::strings().set_language("en");
+    fs::remove_all(dir);
 }

@@ -29,6 +29,8 @@ std::string sfo_string(const std::filesystem::path &sfo, const std::string &key)
 // The saves in <memstick>/PSP/SAVEDATA whose folder starts with `game_id` (every save when it
 // is empty), newest first, with PARAM.SFO titles and ICON0.PNG icons.
 std::vector<SaveInfo> scan_saves(const std::filesystem::path &memstick, const std::string &game_id);
+// A PNG (ICON0.PNG) as opaque anyui pixels, transparent parts on black; false when it cannot be read.
+bool load_icon_pixels(const std::filesystem::path &png, std::vector<std::uint32_t> &pixels, int &width, int &height);
 
 // The Video preview's pictures for a w x h window: the game picture (game_w x game_h) enlarged
 // to the size it takes in the window, nearest (before) and as Scaling shows it (after).

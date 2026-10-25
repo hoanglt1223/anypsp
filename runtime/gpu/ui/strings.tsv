@@ -86,3 +86,24 @@ video.sync.desc	Runs the PSP's vblanks up to 1% faster or slower to match the mo
 video.menu_fps.desc	Pictures per second while this menu is open (F4).	Số hình mỗi giây khi menu này đang mở (F4).
 video.fps_cap.desc	The most pictures shown per second (F8). Off shows as many as the monitor allows.	Số hình tối đa hiển thị mỗi giây (F8). Tắt sẽ hiển thị nhiều nhất màn hình cho phép.
 video.patches.desc	Applies the memory patches in this game's patch file (--patches).	Áp dụng các bản vá bộ nhớ trong tệp vá của trò chơi này (--patches).
+dialog.load	Load	Tải dữ liệu
+dialog.save	Save	Lưu dữ liệu
+dialog.delete	Delete	Xóa dữ liệu
+dialog.ok	OK	OK
+dialog.yes	Yes	Có
+dialog.no	No	Không
+dialog.back	Back	Quay lại
+dialog.choose	Choose	Chọn
+dialog.newdata	New data	Dữ liệu mới
+dialog.error	An error has occurred. ({0})	Đã xảy ra lỗi. ({0})
+dialog.nodata	There is no data.	Không có dữ liệu.
+dialog.confirm.load	Do you want to load this data?	Bạn có muốn tải dữ liệu này không?
+dialog.confirm.save	Do you want to save this data?	Bạn có muốn lưu dữ liệu này không?
+dialog.confirm.delete	Do you want to delete this data?	Bạn có muốn xóa dữ liệu này không?
+dialog.confirm.overwrite	Do you want to overwrite?	Bạn có muốn ghi đè không?
+dialog.done.load	Load completed.	Đã tải xong.
+dialog.done.save	Save completed.	Đã lưu xong.
+dialog.done.delete	Delete completed.	Đã xóa xong.
+dialog.failed.load	Unable to load data. ({0})	Không thể tải dữ liệu. ({0})
+dialog.failed.save	Unable to save data. ({0})	Không thể lưu dữ liệu. ({0})
+dialog.failed.delete	Unable to delete data. ({0})	Không thể xóa dữ liệu. ({0})

@@ -6,6 +6,7 @@
 // plays no audio.
 
 #include "desktop.hpp"
+#include "dialog_overlay.hpp"
 #include "display.hpp"
 #include "display_loop.hpp"
 #include "patches.hpp"
@@ -29,6 +30,7 @@
 #include <SDL3/SDL_video.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_timer.h>
 
 #include <chrono>
 #include <cstdio>
@@ -66,7 +68,7 @@ const char *const kUsage =
     "         [--input frame:buttons,...] [--hle-stubs file] [--deterministic] [--smoothing on|off]\n"
     "         [--interpolate auto|on|off]\n"
     "         [--refresh auto|hz] [--vrr on|off] [--sync-to-monitor on|off] [--pause-fps 30|60] [--fps-cap off|n]\n"
-    "         [--patches auto|file.ini]\n"
+    "         [--patches auto|file.ini] [--dialogs auto|show]\n"
     "An ISO image or extracted disc folder boots PSP_GAME/SYSDIR/BOOT.BIN or EBOOT.BIN (unencrypted only);\n"
     "ISO images are extracted once into --cache (default: the per-user data folder).\n"
     "--window plays in a resizable window at 59.94 fps with sound, keyboard and gamepad input (anypsp-play's\n"
@@ -90,6 +92,9 @@ const char *const kUsage =
 "anypsp-display.ini next to the program or in the per-user data folder.\n"
 "--patches auto applies patches/<disc ID>.ini (next to the program or in the per-user data folder), for\n"
 "example the 60 fps patch for UNH 1; --patches file.ini names a patch file.\n"
+"--dialogs show draws the PSP's system dialogs (messages, saving and loading) over the game and lets the\n"
+"player answer them (the default in a window; headless, --input answers them and --hashes/--frames-dir\n"
+"capture them); auto answers them at once, as headless runs do by default.\n"
     "--input holds the given sceCtrl button mask (hex) from that frame on. --hle-stubs lists imports\n"
     "without HLE that return a fixed value: one 'Library::name = value' (or Library::0xNID) per line.\n";
 
@@ -157,7 +162,7 @@ std::map<std::string, std::uint32_t> read_hle_stubs(const std::string &path) {
 struct Options {
     std::string module, disc = ".", memstick = ".", feedback, output, guest_path = "ms0:/PSP/GAME/ANYPSP/EBOOT.PBP";
     std::string renderer = "gl", frames_dir, hashes, screenshot, dump, hle_stubs;
-    std::string wav, keymap, write_input, cache, patches;
+    std::string wav, keymap, write_input, cache, patches, dialogs;
     std::map<long, std::uint32_t> input;
     std::vector<std::pair<std::string, std::string>> display; // --smoothing ...: display setting overrides
     long frames = 600, png_every = 1;
@@ -216,6 +221,10 @@ Options parse(int argc, char **argv) {
         else if (flag == "--smoothing") o.display.emplace_back("Smoothing", value);
         else if (flag == "--interpolate") o.display.emplace_back("Interpolate", value);
         else if (flag == "--patches") o.patches = value;
+        else if (flag == "--dialogs") {
+            if (value != "auto" && value != "show") throw std::invalid_argument("--dialogs takes auto or show");
+            o.dialogs = value;
+        }
         else if (flag == "--refresh") o.display.emplace_back("Refresh", value);
         else if (flag == "--vrr") o.display.emplace_back("VRR", value);
         else if (flag == "--sync-to-monitor") o.display.emplace_back("SyncToMonitor", value);
@@ -326,6 +335,9 @@ int main(int argc, char **argv) {
         std::unique_ptr<anypsp::gpu::GlHost> gl;
         auto kernel = std::make_unique<pspweb::Kernel>(rt);
         if (o.deterministic) kernel->set_deterministic(true);
+        // System dialogs wait for the player in a window; scripted headless runs keep auto answers.
+        const bool show_dialogs = o.dialogs.empty() ? o.window : o.dialogs == "show";
+        kernel->set_interactive_dialogs(show_dialogs);
         if (!o.hle_stubs.empty()) kernel->set_hle_stubs(read_hle_stubs(o.hle_stubs));
         if (o.renderer == "gl") {
             gl = std::make_unique<anypsp::gpu::GlHost>(rt.memory());
@@ -446,6 +458,26 @@ int main(int argc, char **argv) {
             menu->set_display(&window_loop->settings(), [&window_loop] { window_loop->settings_changed(); });
             menu->set_patches(game_patches.empty() ? nullptr : &patches_on);
         }
+        // The open system dialog over the game: drawn into the window before the frame-rate badge,
+        // and into captured frames.
+        anypsp::dialog::Overlay dialogs(controls ? controls->map() : input_map);
+        anypsp::dialog::Keys dialog_keys;
+        std::uint32_t scripted_pad = 0;
+        std::uint64_t dialog_drawn_ns = 0;
+        if (show_dialogs && controls) {
+            gl->set_overlay([&, badge = gl->overlay()](int w, int h) {
+                if (const pspweb::SystemDialog *d = kernel->system_dialog()) {
+                    const std::uint64_t now = SDL_GetTicksNS();
+                    const float dt = dialog_drawn_ns == 0 ? 0.f : std::min(0.1f, static_cast<float>(now - dialog_drawn_ns) / 1e9f);
+                    dialog_drawn_ns = now;
+                    gl->edit_window(0, 0, w, h, [&](std::vector<std::uint32_t> &pixels) { dialogs.draw(*d, pixels.data(), w, h, dt); });
+                } else {
+                    dialogs.hide();
+                    dialog_drawn_ns = 0;
+                }
+                if (badge) badge(w, h);
+            });
+        }
 
         const bool per_frame = !o.frames_dir.empty() || hashes.is_open();
         const long frame_limit = o.window && !o.frames_set ? std::numeric_limits<long>::max() : o.frames;
@@ -483,12 +515,48 @@ int main(int argc, char **argv) {
                     window_loop->set_speed(percent);
                     if (menu) menu->set_speed(percent);
                 }
-                if (o.input.empty()) {
+                if (o.input.empty() && !show_dialogs) {
                     const auto pad = controls->pad();
                     kernel->set_pad(pad.buttons, pad.lx, pad.ly);
                 }
+                if (show_dialogs) {
+                    // Mouse clicks and finger taps on the dialog's rows and buttons.
+                    for (const anypsp::desktop::Pointer &p : controls->take_ui_events().pointers) {
+                        using Kind = anypsp::desktop::Pointer::Kind;
+                        if (kernel->system_dialog() == nullptr) break;
+                        if (p.kind == Kind::Wheel) {
+                            kernel->dialog_move(p.wheel > 0 ? 1 : -1);
+                        } else if ((p.kind == Kind::Down && !p.touch) || (p.kind == Kind::Up && p.touch && p.x >= 0)) {
+                            const anypsp::dialog::Hit hit = dialogs.hit(p.x, p.y);
+                            if (hit.kind == anypsp::dialog::Hit::Kind::None) continue;
+                            kernel->dialog_focus(hit.index);
+                            kernel->dialog_confirm();
+                        }
+                    }
+                }
             }
-            if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
+            if (!show_dialogs) {
+                if (const auto press = o.input.find(frame); press != o.input.end()) kernel->set_pad(press->second);
+            } else {
+                // The player's buttons answer an open dialog; the game sees none of them meanwhile.
+                std::uint32_t held = 0;
+                std::uint8_t lx = 128u, ly = 128u;
+                if (const auto press = o.input.find(frame); press != o.input.end()) scripted_pad = press->second;
+                if (controls && o.input.empty()) {
+                    const auto pad = controls->pad();
+                    held = pad.buttons;
+                    lx = pad.lx;
+                    ly = pad.ly;
+                } else {
+                    held = scripted_pad;
+                }
+                const bool open = kernel->system_dialog() != nullptr;
+                const anypsp::dialog::Keys::Out keys = dialog_keys.update(kernel->system_dialog(), held);
+                if (keys.move != 0) kernel->dialog_move(keys.move);
+                if (keys.confirm) kernel->dialog_confirm();
+                else if (keys.back) kernel->dialog_back();
+                kernel->set_pad(keys.game, open ? 128u : lx, open ? 128u : ly);
+            }
             running = kernel->frame(50.0);
             ++frame;
             if (!game_patches.empty() && patches_on)
@@ -529,6 +597,12 @@ int main(int argc, char **argv) {
                     else
                         rgba.swap(real_rgba);
                 }
+            }
+            if (show_dialogs) {
+                if (const pspweb::SystemDialog *d = kernel->system_dialog())
+                    dialogs.draw(*d, reinterpret_cast<std::uint32_t *>(rgba.data()), width, height, 1.f / 59.94f);
+                else
+                    dialogs.hide();
             }
             if (hashes.is_open()) {
                 char line[48];

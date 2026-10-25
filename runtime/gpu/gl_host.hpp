@@ -60,6 +60,7 @@ public:
     // Runs after the game picture is drawn into the window and before the swap, with the
     // window's size in pixels (the frame-rate badge).
     void set_overlay(std::function<void(int, int)> overlay) { overlay_ = std::move(overlay); }
+    [[nodiscard]] const std::function<void(int, int)> &overlay() const noexcept { return overlay_; }
     // The window's drawable size in pixels.
     [[nodiscard]] std::pair<int, int> window_pixels() const;
     // Shows a picture of window_pixels() size (R, G, B, A bytes, top row first) and swaps.
