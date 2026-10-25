@@ -299,6 +299,10 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(sm, 0x237DBD4Fu, "sceKernelAllocPartitionMemory", &Kernel::sceKernelAllocPartitionMemory);
     hle(sm, 0xB6D61D02u, "sceKernelFreePartitionMemory", &Kernel::sceKernelFreePartitionMemory);
     hle(sm, 0x9D9A5BA1u, "sceKernelGetBlockHeadAddr", &Kernel::sceKernelGetBlockHeadAddr);
+    hle(sm, 0xFE707FDFu, "sceKernelAllocMemoryBlock", &Kernel::sceKernelAllocMemoryBlock);
+    hle(sm, 0x50F61D8Au, "sceKernelFreeMemoryBlock", &Kernel::sceKernelFreePartitionMemory);
+    hle(sm, 0xDB83A952u, "sceKernelGetMemoryBlockAddr", &Kernel::sceKernelGetMemoryBlockAddr);
+    hle_value(sm, 0xACBD88CAu, "sceKernelTotalMemSize", kUserPartitionEnd - kUserPartitionStart);
     hle(sm, 0x3FC9AE6Au, "sceKernelDevkitVersion", &Kernel::sceKernelDevkitVersion);
     hle(sm, 0x13A5ABEFu, "sceKernelPrintf", &Kernel::sceKernelPrintf);
     for (const auto &[nid, name] : std::initializer_list<std::pair<std::uint32_t, const char *>>{
@@ -676,13 +680,14 @@ void Kernel::boot(std::uint32_t entry, std::uint32_t gp, const std::string &modu
     t.uid = new_uid();
     t.name = "pspweb_loader";
     t.entry = entry;
-    t.priority = 0x20;
+    t.priority = t.init_priority = 0x20;
     t.stack_size = 0x40000u;
     t.stack_block = allocate("stack:" + t.name, 1u, t.stack_size, 0u);
     t.stack_top = blocks_.at(t.stack_block).address + t.stack_size;
     t.gp = gp;
     std::vector<std::uint8_t> args(module_path.begin(), module_path.end());
     args.push_back(0u);
+    loader_uid_ = t.uid;
     auto &stored = threads_[t.uid] = std::move(t);
     start_thread(stored, static_cast<std::uint32_t>(args.size()), args);
 }
@@ -791,6 +796,7 @@ std::int32_t Kernel::allocate_in(std::int32_t partition, std::string name, std::
 
 std::int32_t Kernel::allocate_range(std::uint32_t low, std::uint32_t high, std::string name, std::uint32_t type,
                                     std::uint32_t size, std::uint32_t address) {
+    if (size > high - low) return -1;
     size = align_up(std::max(size, 1u), 0x100u);
     std::vector<std::pair<std::uint32_t, std::uint32_t>> used;
     for (const auto &[uid, block] : blocks_) {
@@ -810,9 +816,23 @@ std::int32_t Kernel::allocate_range(std::uint32_t low, std::uint32_t high, std::
 
     std::uint32_t chosen = 0u;
     if (type == 2u) { // fixed address
-        const std::uint32_t wanted = align_up(address, 0x100u);
+        const std::uint32_t wanted = address & ~0xFFu;
         for (const auto &[begin, end] : gaps)
             if (wanted >= begin && wanted + size <= end) chosen = wanted;
+    } else if (type == 3u || type == 4u) { // low or high, aligned to `address`
+        const std::uint32_t alignment = std::max(address, 0x100u);
+        if (type == 3u) {
+            for (const auto &[begin, end] : gaps) {
+                const std::uint32_t at = align_up(begin, alignment);
+                if (chosen == 0u && at >= begin && at + size <= end) chosen = at;
+            }
+        } else {
+            for (auto it = gaps.rbegin(); it != gaps.rend() && chosen == 0u; ++it) {
+                if (it->second - it->first < size) continue;
+                const std::uint32_t at = (it->second - size) & ~(alignment - 1u);
+                if (at >= it->first) chosen = at;
+            }
+        }
     } else if (type == 1u) { // high
         for (auto it = gaps.rbegin(); it != gaps.rend() && chosen == 0u; ++it)
             if (it->second - it->first >= size) chosen = (it->second - size) & ~0xFFu;
@@ -831,30 +851,34 @@ bool Kernel::in_interrupt() const {
     return call != guest_calls_.end() && call->second.caller == 0;
 }
 
-std::uint32_t Kernel::largest_free() const {
-    std::vector<std::pair<std::uint32_t, std::uint32_t>> used;
+// Free ranges of the user partition.
+std::vector<std::pair<std::uint32_t, std::uint32_t>> Kernel::user_gaps() const {
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> used, gaps;
     for (const auto &[uid, block] : blocks_) {
         (void)uid;
-        used.emplace_back(block.address, block.address + block.size);
+        if (block.address + block.size > kUserPartitionStart && block.address < kUserPartitionEnd)
+            used.emplace_back(block.address, block.address + block.size);
     }
     std::sort(used.begin(), used.end());
-    std::uint32_t cursor = kUserPartitionStart, largest = 0u;
+    std::uint32_t cursor = kUserPartitionStart;
     for (const auto &[begin, end] : used) {
-        if (begin > cursor) largest = std::max(largest, begin - cursor);
+        if (begin > cursor) gaps.emplace_back(cursor, begin);
         cursor = std::max(cursor, end);
     }
-    if (cursor < kUserPartitionEnd) largest = std::max(largest, kUserPartitionEnd - cursor);
+    if (cursor < kUserPartitionEnd) gaps.emplace_back(cursor, kUserPartitionEnd);
+    return gaps;
+}
+
+std::uint32_t Kernel::largest_free() const {
+    std::uint32_t largest = 0u;
+    for (const auto &[begin, end] : user_gaps()) largest = std::max(largest, end - begin);
     return largest;
 }
 
 std::uint32_t Kernel::total_free() const {
-    std::uint32_t used = 0u;
-    for (const auto &[uid, block] : blocks_) {
-        (void)uid;
-        used += block.size;
-    }
-    const std::uint32_t total = kUserPartitionEnd - kUserPartitionStart;
-    return used < total ? total - used : 0u;
+    std::uint32_t total = 0u;
+    for (const auto &[begin, end] : user_gaps()) total += end - begin;
+    return total;
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,18 +1033,56 @@ void Kernel::run_alarms() {
 void Kernel::sceKernelMaxFreeMemSize(Ctx &ctx) { finish(ctx, largest_free()); }
 void Kernel::sceKernelTotalFreeMemSize(Ctx &ctx) { finish(ctx, total_free()); }
 
+// Partition memory blocks follow PPSSPP (Core/HLE/sceKernelMemory.cpp).
 void Kernel::sceKernelAllocPartitionMemory(Ctx &ctx) {
-    const std::int32_t uid = allocate(read_string(ctx.gpr[5], 32), ctx.gpr[6], ctx.gpr[7], ctx.gpr[8]);
-    finish(ctx, uid < 0 ? kErrorNoMemory : static_cast<std::uint32_t>(uid));
+    const auto partition = static_cast<std::int32_t>(ctx.gpr[4]);
+    const auto type = static_cast<std::int32_t>(ctx.gpr[6]);
+    const std::uint32_t name = ctx.gpr[5], size = ctx.gpr[7], address = ctx.gpr[8];
+    if (type < 0 || type > 4) return finish(ctx, 0x800200D8u); // ILLEGAL_MEMBLOCKTYPE
+    if ((type == 3 || type == 4) && (address == 0u || (address & (address - 1u)) != 0u)) return finish(ctx, 0x800200E4u); // alignment
+    if (partition < 1 || partition > 6) return finish(ctx, 0x800200D2u);
+    if (partition != 2 && partition != 5 && partition != 6) return finish(ctx, 0x800200D6u); // ILLEGAL_PARTITION
+    if (name == 0u) return finish(ctx, 0x80020001u);
+    if (size == 0u) return finish(ctx, 0x800200D9u);
+    const std::int32_t uid = allocate_in(partition, read_string(name, 31), static_cast<std::uint32_t>(type), size, address);
+    if (uid < 0) return finish(ctx, 0x800200D9u); // MEMBLOCK_ALLOC_FAILED
+    partition_blocks_.insert(uid);
+    finish(ctx, static_cast<std::uint32_t>(uid));
 }
 
 void Kernel::sceKernelFreePartitionMemory(Ctx &ctx) {
-    finish(ctx, blocks_.erase(static_cast<std::int32_t>(ctx.gpr[4])) != 0u ? 0u : kErrorUnknownUid);
+    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+    if (partition_blocks_.erase(uid) == 0u) return finish(ctx, kErrorUnknownUid);
+    blocks_.erase(uid);
+    finish(ctx, 0u);
 }
 
 void Kernel::sceKernelGetBlockHeadAddr(Ctx &ctx) {
-    const auto it = blocks_.find(static_cast<std::int32_t>(ctx.gpr[4]));
-    finish(ctx, it != blocks_.end() ? it->second.address : kErrorUnknownUid);
+    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+    const auto it = blocks_.find(uid);
+    finish(ctx, partition_blocks_.contains(uid) && it != blocks_.end() ? it->second.address : 0u);
+}
+
+// (name, type, size, params): a low or high block of the user partition.
+void Kernel::sceKernelAllocMemoryBlock(Ctx &ctx) {
+    const std::uint32_t name = ctx.gpr[4], type = ctx.gpr[5], size = ctx.gpr[6], params = ctx.gpr[7];
+    auto &m = rt_.memory();
+    if (params != 0u && (params & 3u) == 0u && m.contains(params, 4u) && m.load32(params) != 4u) return finish(ctx, 0x800200D2u);
+    if (type != 0u && type != 1u) return finish(ctx, 0x800200D8u);
+    if (size == 0u) return finish(ctx, 0x800200D9u);
+    if (name == 0u) return finish(ctx, 0x80020001u);
+    const std::int32_t uid = allocate(read_string(name, 31), type, size, 0u);
+    if (uid < 0) return finish(ctx, 0x800200D9u);
+    partition_blocks_.insert(uid);
+    finish(ctx, static_cast<std::uint32_t>(uid));
+}
+
+void Kernel::sceKernelGetMemoryBlockAddr(Ctx &ctx) {
+    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
+    const auto it = blocks_.find(uid);
+    if (!partition_blocks_.contains(uid) || it == blocks_.end()) return finish(ctx, 0u);
+    if (rt_.memory().contains(ctx.gpr[5], 4u)) rt_.memory().store32(ctx.gpr[5], it->second.address);
+    finish(ctx, 0u);
 }
 
 void Kernel::sceKernelDevkitVersion(Ctx &ctx) { finish(ctx, 0x05000010u); }

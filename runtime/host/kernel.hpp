@@ -601,6 +601,7 @@ private:
     void sceKernelGetThreadmanIdType(Ctx &ctx);
     void sceKernelGetThreadmanIdList(Ctx &ctx);
     bool dispatch_enabled_{true};
+    std::int32_t loader_uid_{-1}; // the thread boot() made to run module_start
     // kernel_sync.cpp
     void install_sync();
     [[nodiscard]] bool valid_word(std::uint32_t address) const;
@@ -753,6 +754,10 @@ private:
     void sceKernelAllocPartitionMemory(Ctx &ctx);
     void sceKernelFreePartitionMemory(Ctx &ctx);
     void sceKernelGetBlockHeadAddr(Ctx &ctx);
+    void sceKernelAllocMemoryBlock(Ctx &ctx);
+    void sceKernelGetMemoryBlockAddr(Ctx &ctx);
+    [[nodiscard]] std::vector<std::pair<std::uint32_t, std::uint32_t>> user_gaps() const;
+    std::set<std::int32_t> partition_blocks_; // blocks the game allocated, which it may free
     void sceKernelDevkitVersion(Ctx &ctx);
     void sceKernelSetCompiledSdkVersion(Ctx &ctx);
     void sceKernelGetCompiledSdkVersion(Ctx &ctx);

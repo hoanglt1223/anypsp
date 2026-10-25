@@ -218,7 +218,8 @@ void Kernel::exit_thread(Ctx &ctx, std::int32_t status, bool remove) {
 }
 
 void Kernel::thread_returned(Ctx &ctx) {
-    exit_thread(ctx, static_cast<std::int32_t>(ctx.gpr[2]), false);
+    // The thread that ran module_start goes away when it returns, as on the PSP, freeing its stack.
+    exit_thread(ctx, static_cast<std::int32_t>(ctx.gpr[2]), current_uid_ == loader_uid_);
 }
 
 // Hands the CPU to `next` at once, the running thread going to the front of its priority.
