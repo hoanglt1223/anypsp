@@ -73,8 +73,11 @@ void randomize(psprecomp::AllegrexContext &ctx, std::mt19937 &rng) {
                                                   0x3F800001u, 0x3F800002u, 0x3F800004u, 0x3F800008u,
                                                   0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u};
     for (std::size_t i = 0; i < 16u; ++i) ctx.vfpu_ctrl[i] = control[i];
-    if (rng() % 4u == 0u) ctx.vfpu_ctrl[0] = rng() & 0xFFFFFu;
-    if (rng() % 4u == 0u) ctx.vfpu_ctrl[2] = rng() & 0xFFFu;
+    // Mostly no pending prefixes, the case generated code handles inline.
+    if (rng() % 6u == 0u) ctx.vfpu_ctrl[0] = rng() & 0xFFFFFu;
+    if (rng() % 6u == 0u) ctx.vfpu_ctrl[1] = rng() & 0xFFFFFu;
+    if (rng() % 6u == 0u) ctx.vfpu_ctrl[2] = rng() & 0xFFFu;
+    ctx.vfpu_ctrl[3] = rng() & 0x3Fu;
 }
 
 std::string describe_difference(const psprecomp::AllegrexContext &a, const psprecomp::AllegrexContext &b) {
@@ -126,19 +129,30 @@ int main(int argc, char **argv) {
                 const std::uint32_t target = kWindow + 0x8000u + ((static_cast<std::uint32_t>(rng()) % 0x8000u) & ~(alignment - 1u));
                 start.gpr[rs] = target - static_cast<std::uint32_t>(offset);
             }
-            for (auto &byte : initial) byte = static_cast<std::uint8_t>(rng());
+            // Only memory instructions touch the window; refilling it is most of a run's cost.
+            if (alignment != 0u)
+                for (auto &byte : initial) byte = static_cast<std::uint8_t>(rng());
 
+            const bool interrupts = (rng() & 1u) != 0u;
             psprecomp::AllegrexContext a = start, b = start;
-            memory.copy_in(kWindow, initial);
+            if (alignment != 0u) memory.copy_in(kWindow, initial);
+            rt.set_interrupts_enabled(interrupts);
             test.run(rt, a);
-            memory.copy_out(kWindow, generated);
+            anypsp::cpu::leave_guest();  // ctc1 switches the host rounding mode
+            if (alignment != 0u) memory.copy_out(kWindow, generated);
+            const bool generated_interrupts = rt.interrupts_enabled();
 
-            memory.copy_in(kWindow, initial);
+            if (alignment != 0u) memory.copy_in(kWindow, initial);
+            rt.set_interrupts_enabled(interrupts);
             (void)anypsp::cpu::execute(rt, b, 0x08804000u, test.word);
-            memory.copy_out(kWindow, reference);
+            anypsp::cpu::leave_guest();
+            if (alignment != 0u) memory.copy_out(kWindow, reference);
             ++runs;
 
             std::string difference = describe_difference(a, b);
+            if (difference.empty() && generated_interrupts != rt.interrupts_enabled())
+                difference = std::string("interrupt enable ") + (generated_interrupts ? "1" : "0") + " vs " +
+                             (rt.interrupts_enabled() ? "1" : "0");
             if (difference.empty() && generated != reference) {
                 for (std::size_t i = 0; i < kWindowBytes; ++i)
                     if (generated[i] != reference[i]) {
