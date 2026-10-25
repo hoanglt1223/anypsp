@@ -73,6 +73,10 @@ The tabs:
 - **Controls**: a picture of the PSP with the selected button lit and every binding, keyboard and
   gamepad. Choose one and press the new key or gamepad button; one that belonged to another action
   swaps with it. Escape cancels; *Reset to defaults* restores the bindings.
+- **Cheats**: the game's [cheats](#cheats) with a checkbox each and their number of code lines; Cross turns
+  one on or off and saves the switch into the cheat file. A cheat AnyPSP cannot run is greyed out with the
+  reason. *Import cheat file* shows the file name and folder to copy a cheat file to; without one the tab
+  says there is no cheat file for this game.
 - **Settings**: *Language* (English, Tiếng Việt), *Theme*, *Menu size* (75-150%), *Reduce motion* (no
   animations) and *Show frame rates* (a badge in the corner: vblanks per second and game frames per
   second).
@@ -260,6 +264,50 @@ logic counts drawn frames, so intros, menus and the title's idle timer then run 
 60 fps scenes set the interval to 1 and scale their timers by it, but most code (the logo and intro
 timers among it) counts frames, so changing the interval instructions is not enough either. Use
 [frame interpolation](#frame-interpolation) for 60 fps instead.
+
+## Cheats
+
+AnyPSP reads CWCheat files, the format PPSSPP uses, so a PPSSPP cheat file works as it is:
+
+```
+_S ULUS-10299
+_G NARUTO: Ultimate Ninja Heroes
+_C1 Round timer stays at 99
+_L 0x2012ABCC 0x00000063
+_C0 Another cheat (off)
+_L 0x0012ABCD 0x00000001
+```
+
+`_S` is the disc ID (a file may hold several games; cheats under other IDs are skipped), `_G` the title,
+`_C1`/`_C0` a cheat that is on/off with its name, and each `_L` line one code: two hex numbers, with
+addresses counted from the start of user memory (0x08800000). Lines starting with `//` or `#` are
+comments.
+
+- **Where:** `--cheats auto` (the default in a window) loads `cheats/<disc ID>.ini` from the program's
+  folder, else from the per-user data folder (`%APPDATA%\anyport\anypsp\cheats\`,
+  `~/.local/share/anyport/anypsp/cheats/` on Linux). The name is PPSSPP's, the disc ID without its dash
+  (`ULUS10299.ini`); `ULUS-10299.ini` is found too. `--cheats file.ini` names a file, `--cheats off` loads
+  none. Headless runs default to off, so scripted runs do not change with the files in the data folder.
+- **When:** the cheats that are on run after every PSP vblank (PPSSPP runs them every 77 ms by default),
+  in the windowed player and in headless runs alike, for `anypsp-play` and the per-game translated
+  runners. Turning a cheat off stops its writes; values it already wrote stay until the game changes them.
+- **Saving:** the menu's [Cheats tab](#menu) writes each switch back into the file as `_C1` or `_C0`,
+  as PPSSPP does, leaving every other line untouched. When the cheat lines moved or were renamed on disk
+  since the game started, the file is left alone and the menu shows the error.
+- **Code types:** the CWCheat codes PPSSPP runs that write or test memory: 8-, 16- and 32-bit writes
+  (`0`, `1`, `2`), increment and decrement (`3`), serial writes (`4`, `8`), copy bytes (`5`), pointer
+  writes with walks and offsets (`6`), OR/AND/XOR (`7`), the code stopper (`C`), conditions on a value,
+  on two addresses or on held buttons (joker codes) (`D`), and multi-line conditions (`E`). The delay code
+  (`B`) is accepted and ignored, as in PPSSPP. A cheat with anything else (PPSSPP's own vibration and
+  post-processing codes `A`, PSP Action Replay `_M` or TempAR `_N` lines, an unknown code type, a
+  malformed line) is refused as a whole, with the reason and line shown in the menu and printed at
+  start. Lines that are not part of the format are printed as warnings and skipped.
+- **Data, not code:** cheats change data in memory. Translated runners run their translated code
+  whatever the bytes in memory say, so a cheat that rewrites the game's instructions has no effect there
+  (it does in `anypsp-play`, which interprets the code). Most cheats write values (health, money,
+  timers), which work everywhere.
+
+The run ends with the number of values the cheats changed.
 
 ## Input mapping
 

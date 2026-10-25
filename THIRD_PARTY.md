@@ -49,6 +49,7 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
   - `runtime/cpu/` (the reference Allegrex interpreter), adapted from PPSSPP at `902e5ccd8c1400b4387b73942491cded655e5f9c`: `interp_alu.cpp` from `Core/MIPS/Interpreter.cpp`, `interp_vfpu.cpp` from `Core/MIPS/InterpreterVFPU.cpp`, `vfpu_utils.cpp`/`.h` from `Core/MIPS/MIPSVFPUUtils.cpp`/`.h`, `interp_tables.cpp` from `Core/MIPS/MIPSTables.cpp`; `interp.cpp`, `interp_ops.h`, `mips_state.h` and `ppsspp_compat.h` follow `Core/MIPS/MIPS.cpp`/`MIPS.h`, `MIPSTables.h` and `Common/Math/math_util.h`. The copied files keep PPSSPP's copyright header.
   - `runtime/host/kernel.cpp`: `sceDmacMemcpy`, `sceDisplayGetAccumulatedHcount` and `sceUmdReplace*` follow `Core/HLE/sceDmac.cpp`, `sceDisplay.cpp` and `sceUmd.cpp`; the initial thread register state follows `PSPThreadContext::reset` in `Core/HLE/sceKernelThread.cpp`.
   - `tests/conformance.py` compares output the way `headless/Compare.cpp` does.
+  - `runtime/gpu/cheats.cpp`: the CWCheat file parser and code types adapted from `Core/CwCheat.cpp` (`CheatFileParser`, `CWCheatEngine::InterpretNextCwCheat` and `ExecuteOp`) at `b4386554795949491a26e51b7d74082bb9b2470f`.
   - `runtime/host/ge.cpp`: Bezier and spline evaluation (`Ge::draw_curve` and its helpers) adapted from `GPU/Common/SplineCommon.cpp` at `902e5ccd8c1400b4387b73942491cded655e5f9c`; immediate-mode vertices follow `GPU/GPUCommon.cpp` (`Execute_ImmVertexAlphaPrim`, `FlushImm`).
 
 ## PSPSDK (BSD): data source
