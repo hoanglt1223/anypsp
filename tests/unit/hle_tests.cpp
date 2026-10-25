@@ -603,3 +603,62 @@ TEST_CASE("interactive savedata completed message closes by itself after about a
     CHECK(h.kernel->system_dialog() == nullptr && m.load32(kParams + 0x1Cu) == 0u);
     std::filesystem::remove_all(root);
 }
+
+TEST_CASE("interactive savedata list delete goes back to the list while saves remain") {
+    namespace fs = std::filesystem;
+    Hle h;
+    auto &m = h.rt.memory();
+    const auto root = memstick(h, "listdelete");
+    for (const char *name : {"0000", "0001", "0002"}) {
+        save_request(h, 1u, name);  // AUTOSAVE: no UI
+        h.call(kUtility, kSaveInit, kParams);
+    }
+    h.kernel->set_interactive_dialogs(true);
+    save_request(h, 6u, "");
+    h.call(kUtility, kSaveInit, kParams);
+    CHECK(h.call(kUtility, kSaveStatus) == 1u);
+    CHECK(h.kernel->system_dialog()->items.size() == 3u);
+    h.kernel->dialog_focus(2);
+    h.kernel->dialog_confirm();
+    h.kernel->dialog_focus(0);
+    h.kernel->dialog_confirm();
+    CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::DeleteDone);
+    CHECK(!fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010002"));
+    m.store32(kParams + 0x1Cu, 0xFFu);
+    h.kernel->dialog_confirm();
+    // Back in the list with the two saves left, focus on the last one.
+    const Dialog *d = h.kernel->system_dialog();
+    CHECK(d != nullptr && d->kind == Dialog::Kind::SaveList && d->items.size() == 2u && d->focus == 1);
+    CHECK(h.call(kUtility, kSaveStatus) == 2u);
+    CHECK(m.load32(kParams + 0x1Cu) == 0xFFu);
+    // Backing out reports the delete.
+    h.kernel->dialog_back();
+    CHECK(h.kernel->system_dialog() == nullptr && m.load32(kParams + 0x1Cu) == 0u);
+    CHECK(h.call(kUtility, kSaveStatus) == 3u);
+    h.call(kUtility, kSaveShutdown);
+    h.call(kUtility, kSaveStatus);
+
+    // Deleting the last two: the dialog closes when the list is empty.
+    save_request(h, 6u, "");
+    h.call(kUtility, kSaveInit, kParams);
+    for (int left = 2; left > 0; --left) {
+        h.kernel->dialog_confirm();
+        h.kernel->dialog_move(-1);
+        h.kernel->dialog_confirm();
+        CHECK(h.kernel->system_dialog()->text_id == Dialog::Text::DeleteDone);
+        h.kernel->dialog_confirm();
+    }
+    CHECK(h.kernel->system_dialog() == nullptr && m.load32(kParams + 0x1Cu) == 0u);
+    CHECK(!fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010000") && !fs::exists(root / "PSP" / "SAVEDATA" / "ULUS100010001"));
+
+    // Backing out without deleting is a cancel.
+    for (const char *name : {"0000"}) {
+        save_request(h, 1u, name);
+        h.call(kUtility, kSaveInit, kParams);
+    }
+    save_request(h, 6u, "");
+    h.call(kUtility, kSaveInit, kParams);
+    h.kernel->dialog_back();
+    CHECK(m.load32(kParams + 0x1Cu) == 1u);
+    fs::remove_all(root);
+}

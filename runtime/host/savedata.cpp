@@ -453,6 +453,7 @@ struct Savedata {
     Stage stage = Stage::List;
     int chosen = 0;              // the slot being confirmed or acted on
     std::uint32_t result = 0;    // the outcome, written when the dialog closes
+    bool deleted = false;        // a list delete removed a save; backing out reports its result
 };
 
 Savedata &state(std::shared_ptr<void> &slot) {
@@ -737,7 +738,7 @@ void Kernel::savedata_answer(bool confirmed) {
     switch (sd.stage) {
     case Stage::List:
         if (!confirmed || sd.slots.empty()) {
-            close(kCanceled);
+            close(sd.deleted ? sd.result : kCanceled);
             break;
         }
         sd.chosen = std::clamp(dialog_.focus, 0, static_cast<int>(sd.slots.size()) - 1);
@@ -754,6 +755,18 @@ void Kernel::savedata_answer(bool confirmed) {
         close(heading(sd.mode) == SystemDialog::Heading::Load ? kLoadNoData : kDeleteNoData);
         break;
     case Stage::Done:
+        // A list delete goes back to the list while saves remain, as on the PSP.
+        if (list && heading(sd.mode) == SystemDialog::Heading::Delete) {
+            sd.slots.erase(sd.slots.begin() + sd.chosen);
+            sd.deleted = true;
+            if (!sd.slots.empty()) {
+                sd.chosen = std::min(sd.chosen, static_cast<int>(sd.slots.size()) - 1);
+                savedata_show(0);
+                break;
+            }
+        }
+        close(sd.result);
+        break;
     case Stage::Failed:
         close(sd.result);
         break;
