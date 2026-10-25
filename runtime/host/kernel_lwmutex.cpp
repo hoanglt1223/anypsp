@@ -42,7 +42,7 @@ void Kernel::install_lwmutex() {
     hle(tm, 0x60107536u, "sceKernelDeleteLwMutex", &Kernel::sceKernelDeleteLwMutex);
     hle(tm, 0x4C145944u, "sceKernelReferLwMutexStatusByID", &Kernel::sceKernelReferLwMutexStatusByID);
     hle(kl, 0xBEA46419u, "sceKernelLockLwMutex", &Kernel::sceKernelLockLwMutex);
-    hle(kl, 0x1FC64E09u, "sceKernelLockLwMutexCB", &Kernel::sceKernelLockLwMutex);
+    hle_cb(kl, 0x1FC64E09u, "sceKernelLockLwMutexCB", &Kernel::sceKernelLockLwMutex);
     hle(kl, 0xDC692EE3u, "sceKernelTryLockLwMutex", &Kernel::sceKernelTryLockLwMutex);
     hle(kl, 0x37431849u, "sceKernelTryLockLwMutex_600", &Kernel::sceKernelTryLockLwMutex600);
     hle(kl, 0x15B6446Bu, "sceKernelUnlockLwMutex", &Kernel::sceKernelUnlockLwMutex);

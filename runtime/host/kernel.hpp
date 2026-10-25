@@ -37,13 +37,30 @@ namespace pspweb {
 // Placed in the 16 KiB gap below the module load base so the runtime's direct
 // PC table does not grow to cover the kernel partition.
 inline constexpr std::uint32_t kThreadReturnAddress = 0x08800100u;
+// Where a callback the kernel runs on a thread returns to.
+inline constexpr std::uint32_t kCallbackReturnAddress = 0x08800108u;
 inline constexpr std::uint32_t kUserPartitionStart = 0x08800000u;
 inline constexpr std::uint32_t kUserPartitionEnd = 0x0A000000u;
 inline constexpr std::uint32_t kVramAddress = 0x04000000u;
 inline constexpr std::uint32_t kVramSize = 0x00200000u;
 
 enum class ThreadState { Dormant, Ready, Running, Waiting, Dead };
-enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx, CtrlRead, LwMutex, Vpl };
+enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, Mutex, Mbx, CtrlRead, LwMutex, Vpl,
+                      MsgPipeSend, MsgPipeReceive, Tlspl };
+
+// A guest function the kernel runs on a thread's own stack and registers (a callback), with what
+// the thread was doing before: restored when the function returns to kCallbackReturnAddress.
+struct CallFrame {
+    psprecomp::AllegrexContext ctx{};
+    std::int32_t callback{};     // uid of the callback being run
+    bool waiting{};              // the thread was in a callback wait, resumed afterwards
+    bool reschedule_after{};
+    WaitType wait{WaitType::None};
+    std::int32_t wait_uid{};
+    std::uint32_t wait_count{}, wait_mode{}, wait_out_address{}, wait_extra{}, timeout_address{};
+    std::uint64_t wake_time_us{};
+    std::uint64_t wait_sequence{};
+};
 
 // PSP pad button bits (SceCtrlData::Buttons).
 namespace pad {
@@ -68,13 +85,67 @@ struct Thread {
     std::uint32_t wait_count{};
     std::uint32_t wait_mode{};
     std::uint32_t wait_out_address{};
+    std::uint32_t wait_extra{};       // a fourth wait argument (message pipes: the buffer size)
     std::uint32_t timeout_address{};
     std::uint64_t wake_time_us{};
     std::uint32_t wakeup_count{};
     std::int32_t exit_status{};
-    std::uint64_t ready_sequence{};
+    std::int64_t ready_sequence{};    // order within a priority; front insertions go negative
+    std::uint64_t wait_sequence{};    // order the waiters of one object started waiting in
+    bool cb_wait{};                   // a CB wait: callbacks notified meanwhile run on this thread
+    bool wait_paused{};               // a CB wait set aside until its notified callbacks have run
     bool suspended{};
+    bool has_waited{};                // has waited since it started (a delay's first wait is slower)
+    std::uint32_t releases{};         // waits begun, for the status queries
+    std::int32_t init_priority{};
     psprecomp::AllegrexContext ctx{};
+    std::vector<CallFrame> calls;     // callbacks running on this thread, innermost last
+};
+
+// Message pipe: a byte ring buffer (or none: direct hand-over) with send and receive waiters.
+struct MsgPipe {
+    std::string name;
+    std::uint32_t attr{};
+    std::uint32_t buffer{};       // guest address of the ring, 0 without one
+    std::uint32_t size{};
+    std::uint32_t used{};         // bytes in the ring
+    std::uint32_t read{};         // ring offset of the oldest byte
+    std::int32_t memory_block{-1};
+};
+
+// Virtual timer: a stopwatch with an optional handler that runs at a scheduled time.
+struct VTimer {
+    std::string name;
+    bool active{};
+    std::uint64_t base{};         // system time when it last started
+    std::uint64_t current{};      // accumulated time while stopped
+    std::uint64_t schedule{};     // timer time the handler runs at
+    std::uint32_t handler{};
+    std::uint32_t common{};
+    std::uint32_t gp{};
+    std::int32_t running{};       // handler thread while it runs
+};
+
+// Thread-local storage pool: one block per thread that asks.
+struct Tlspl {
+    std::string name;
+    std::uint32_t attr{};
+    std::uint32_t index{};
+    std::uint32_t block_size{};
+    std::uint32_t unaligned_size{};
+    std::uint32_t alignment{};
+    std::uint32_t base{};
+    std::int32_t memory_block{-1};
+    std::vector<std::int32_t> owners; // thread uid per block, 0 when free
+};
+
+struct Callback {
+    std::string name;
+    std::uint32_t entry{};
+    std::uint32_t common{};
+    std::int32_t thread{};
+    std::int32_t notify_count{};
+    std::int32_t notify_arg{};
 };
 
 struct Semaphore {
@@ -284,6 +355,8 @@ public:
 
     // Entry point of the thread-return trampoline.
     void thread_returned(psprecomp::AllegrexContext &ctx);
+    // Entry point of the trampoline a callback run on a thread returns into.
+    void callback_returned(psprecomp::AllegrexContext &ctx);
     // Prints every thread with its state and what it waits on.
     void dump_threads() const;
 
@@ -319,7 +392,41 @@ private:
 
     void hle(const char *library, std::uint32_t nid, const char *name,
              void (Kernel::*handler)(Ctx &));
+    // A CB variant: `handler` runs with cb_call_ set, so a wait it starts processes callbacks.
+    void hle_cb(const char *library, std::uint32_t nid, const char *name,
+                void (Kernel::*handler)(Ctx &));
     void install_fallback(const psprecomp::PspImport &import);
+
+    // Callbacks (kernel_callbacks.cpp).
+    void install_callbacks();
+    // The first callback of `t` with notifications, 0 when there is none.
+    [[nodiscard]] std::int32_t pending_callback(const Thread &t) const;
+    // Runs `t`'s first pending callback on it, `ctx` being its registers (live or saved).
+    bool start_pending_callback(Thread &t, Ctx &ctx, bool waiting, bool reschedule_after);
+    // Runs the pending callbacks of threads in CB waits that would get to run now.
+    void dispatch_callbacks();
+    // After callbacks: ends the wait (result in ctx) or goes back to waiting; true if it ended.
+    bool resume_wait(Thread &t, Ctx &ctx);
+    // Completes the wait of `t` if its object allows it now, setting `result`.
+    bool try_complete_wait(Thread &t, std::uint32_t &result);
+    [[nodiscard]] bool wait_object_exists(const Thread &t) const;
+    // Threads waiting on an object (paused CB waits excluded): first to wait first, or by
+    // priority (ties in waiting order) when `by_priority`.
+    std::vector<Thread *> waiters(WaitType wait, std::int32_t uid, bool by_priority = false);
+    [[nodiscard]] static bool waits_on(const Thread &t, WaitType wait, std::int32_t uid) noexcept {
+        return t.state == ThreadState::Waiting && t.wait == wait && t.wait_uid == uid && !t.wait_paused;
+    }
+    void sceKernelDeleteCallback(Ctx &ctx);
+    void sceKernelNotifyCallback(Ctx &ctx);
+    void sceKernelCancelCallback(Ctx &ctx);
+    void sceKernelGetCallbackCount(Ctx &ctx);
+    void sceKernelReferCallbackStatus(Ctx &ctx);
+    void sceKernelRegisterExitCallback(Ctx &ctx);
+    std::map<std::int32_t, Callback> callbacks_;
+    std::int32_t exit_callback_{};
+    bool cb_call_{};
+    std::int64_t front_sequence_{};
+    std::uint64_t wait_sequence_{};
 
     // Scheduling.
     Thread *current();
@@ -387,6 +494,38 @@ private:
     void sceKernelExitDeleteThread(Ctx &ctx);
     void sceKernelDeleteThread(Ctx &ctx);
     void sceKernelTerminateDeleteThread(Ctx &ctx);
+    // kernel_threads.cpp
+    void install_threads();
+    void reset_thread(Thread &t, std::int32_t lowest_priority);
+    void stop_thread(Thread &t, std::int32_t status);
+    void delete_thread(std::int32_t uid);
+    void switch_to(Thread &next, Ctx &ctx);
+    void load_back(Thread &t, Ctx &ctx);
+    void delay_current(Ctx &ctx, std::uint64_t usec);
+    Thread *find_thread(std::int32_t uid);
+    [[nodiscard]] static std::uint32_t psp_wait_type(const Thread &t);
+    [[nodiscard]] static std::uint32_t psp_thread_status(const Thread &t);
+    [[nodiscard]] std::uint32_t threadman_type(std::int32_t uid) const;
+    // True when a wait with this timeout fails at once on hardware (the deadline passed before
+    // the timer was set): likely for 0us, never from a few us on.
+    bool timeout_at_once(std::uint32_t timeout_address, int base_percent = 85, int step_percent = 35);
+    bool chance(int percent);
+    void sceKernelTerminateThread(Ctx &ctx);
+    void sceKernelCancelWakeupThread(Ctx &ctx);
+    void sceKernelDelaySysClockThread(Ctx &ctx);
+    void sceKernelReleaseWaitThread(Ctx &ctx);
+    void sceKernelGetThreadExitStatus(Ctx &ctx);
+    void sceKernelReferThreadRunStatus(Ctx &ctx);
+    void sceKernelChangeCurrentThreadAttr(Ctx &ctx);
+    void sceKernelGetThreadStackFreeSize(Ctx &ctx);
+    void sceKernelCheckThreadStack(Ctx &ctx);
+    void sceKernelSuspendDispatchThread(Ctx &ctx);
+    void sceKernelResumeDispatchThread(Ctx &ctx);
+    void sceKernelGetThreadmanIdType(Ctx &ctx);
+    void sceKernelGetThreadmanIdList(Ctx &ctx);
+    bool dispatch_enabled_{true};
+    std::uint32_t sdk_version_{};
+    int chance_accumulator_{};
     void sceKernelSleepThread(Ctx &ctx);
     void sceKernelWakeupThread(Ctx &ctx);
     void sceKernelDelayThread(Ctx &ctx);
@@ -610,6 +749,9 @@ private:
     std::map<std::int32_t, Mailbox> mailboxes_;
     std::map<std::pair<std::uint32_t, std::uint32_t>, SubInterrupt> sub_interrupts_; // (interrupt, sub) -> handler
     std::map<std::int32_t, Alarm> alarms_;
+    std::map<std::int32_t, MsgPipe> msgpipes_;
+    std::map<std::int32_t, VTimer> vtimers_;
+    std::map<std::int32_t, Tlspl> tlspls_;
     std::map<std::int32_t, GeCallback> ge_callbacks_;
     std::mutex ge_events_mutex_;
     std::vector<GeEvent> ge_events_;

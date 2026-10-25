@@ -58,6 +58,8 @@ constexpr std::uint32_t kErrorMutexLocked = 0x800201C4u;
 constexpr std::uint32_t kErrorMutexUnlockUnderflow = 0x800201C7u;
 constexpr std::uint32_t kErrorMutexRecursive = 0x800201C8u;
 constexpr std::uint32_t kVblankInterrupt = 30u;
+constexpr std::uint64_t kTimeoutLatencyUs = 18u;
+constexpr std::uint64_t kTimeoutDeadlineUs = 12u;
 
 constexpr std::uint32_t kEventWaitOr = 0x01u;
 constexpr std::uint32_t kEventWaitClearAll = 0x10u;
@@ -264,26 +266,8 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     rt_.register_function(kThreadReturnAddress, &thread_return_trampoline, "pspweb_thread_return");
     psprecomp::set_runtime_heartbeat_hook(&slice_heartbeat, kHeartbeatInterval);
 
+    install_threads();
     const char *tm = "ThreadManForUser";
-    hle(tm, 0x446D8DE6u, "sceKernelCreateThread", &Kernel::sceKernelCreateThread);
-    hle(tm, 0xF475845Du, "sceKernelStartThread", &Kernel::sceKernelStartThread);
-    hle(tm, 0xAA73C935u, "sceKernelExitThread", &Kernel::sceKernelExitThread);
-    hle(tm, 0x809CE29Bu, "sceKernelExitDeleteThread", &Kernel::sceKernelExitDeleteThread);
-    hle(tm, 0x9FA03CD3u, "sceKernelDeleteThread", &Kernel::sceKernelDeleteThread);
-    hle(tm, 0x383F7BCCu, "sceKernelTerminateDeleteThread", &Kernel::sceKernelTerminateDeleteThread);
-    hle(tm, 0x616403BAu, "sceKernelTerminateThread", &Kernel::sceKernelTerminateDeleteThread);
-    hle(tm, 0x9ACE131Eu, "sceKernelSleepThread", &Kernel::sceKernelSleepThread);
-    hle(tm, 0x82826F70u, "sceKernelSleepThreadCB", &Kernel::sceKernelSleepThread);
-    hle(tm, 0xD59EAD2Fu, "sceKernelWakeupThread", &Kernel::sceKernelWakeupThread);
-    hle(tm, 0xCEADEB47u, "sceKernelDelayThread", &Kernel::sceKernelDelayThread);
-    hle(tm, 0x68DA9E36u, "sceKernelDelayThreadCB", &Kernel::sceKernelDelayThread);
-    hle(tm, 0x293B45B8u, "sceKernelGetThreadId", &Kernel::sceKernelGetThreadId);
-    hle(tm, 0x94AA61EEu, "sceKernelGetThreadCurrentPriority", &Kernel::sceKernelGetThreadCurrentPriority);
-    hle(tm, 0x71BC9871u, "sceKernelChangeThreadPriority", &Kernel::sceKernelChangeThreadPriority);
-    hle(tm, 0x278C0DF5u, "sceKernelWaitThreadEnd", &Kernel::sceKernelWaitThreadEnd);
-    hle(tm, 0x840E8133u, "sceKernelWaitThreadEndCB", &Kernel::sceKernelWaitThreadEnd);
-    hle(tm, 0xE81CAF8Fu, "sceKernelCreateCallback", &Kernel::sceKernelCreateCallback);
-    hle(tm, 0x349D6D6Cu, "sceKernelCheckCallback", &Kernel::sceKernelCheckCallback);
     hle(tm, 0x369ED59Du, "sceKernelGetSystemTimeLow", &Kernel::sceKernelGetSystemTimeLow);
     hle(tm, 0x82BC5777u, "sceKernelGetSystemTimeWide", &Kernel::sceKernelGetSystemTimeWide);
     hle(tm, 0xDB738F35u, "sceKernelGetSystemTime", &Kernel::sceKernelGetSystemTime);
@@ -291,16 +275,15 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(tm, 0xB7D098C6u, "sceKernelCreateMutex", &Kernel::sceKernelCreateMutex);
     hle(tm, 0xF8170FBEu, "sceKernelDeleteMutex", &Kernel::sceKernelDeleteMutex);
     hle(tm, 0xB011B11Fu, "sceKernelLockMutex", &Kernel::sceKernelLockMutex);
-    hle(tm, 0x5BF4DD27u, "sceKernelLockMutexCB", &Kernel::sceKernelLockMutex);
+    hle_cb(tm, 0x5BF4DD27u, "sceKernelLockMutexCB", &Kernel::sceKernelLockMutex);
     hle(tm, 0x0DDCD2C9u, "sceKernelTryLockMutex", &Kernel::sceKernelTryLockMutex);
     hle(tm, 0x6B30100Fu, "sceKernelUnlockMutex", &Kernel::sceKernelUnlockMutex);
     hle(tm, 0x8125221Du, "sceKernelCreateMbx", &Kernel::sceKernelCreateMbx);
     hle(tm, 0x86255ADAu, "sceKernelDeleteMbx", &Kernel::sceKernelDeleteMbx);
     hle(tm, 0xE9B3061Eu, "sceKernelSendMbx", &Kernel::sceKernelSendMbx);
     hle(tm, 0x18260574u, "sceKernelReceiveMbx", &Kernel::sceKernelReceiveMbx);
-    hle(tm, 0xF3986382u, "sceKernelReceiveMbxCB", &Kernel::sceKernelReceiveMbx);
+    hle_cb(tm, 0xF3986382u, "sceKernelReceiveMbxCB", &Kernel::sceKernelReceiveMbx);
     hle(tm, 0x0D81716Au, "sceKernelPollMbx", &Kernel::sceKernelPollMbx);
-    hle(tm, 0xEA748E31u, "sceKernelChangeCurrentThreadAttr", &Kernel::return_zero);
     const char *im = "InterruptManager";
     hle(im, 0xCA04A2B9u, "sceKernelRegisterSubIntrHandler", &Kernel::sceKernelRegisterSubIntrHandler);
     hle(im, 0xD61E6961u, "sceKernelReleaseSubIntrHandler", &Kernel::sceKernelReleaseSubIntrHandler);
@@ -312,16 +295,15 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(tm, 0x28B6489Cu, "sceKernelDeleteSema", &Kernel::sceKernelDeleteSema);
     hle(tm, 0x3F53E640u, "sceKernelSignalSema", &Kernel::sceKernelSignalSema);
     hle(tm, 0x4E3A1105u, "sceKernelWaitSema", &Kernel::sceKernelWaitSema);
-    hle(tm, 0x6D212BACu, "sceKernelWaitSemaCB", &Kernel::sceKernelWaitSema);
+    hle_cb(tm, 0x6D212BACu, "sceKernelWaitSemaCB", &Kernel::sceKernelWaitSema);
     hle(tm, 0x58B1F937u, "sceKernelPollSema", &Kernel::sceKernelPollSema);
     hle(tm, 0x55C20A00u, "sceKernelCreateEventFlag", &Kernel::sceKernelCreateEventFlag);
     hle(tm, 0xEF9E4C70u, "sceKernelDeleteEventFlag", &Kernel::sceKernelDeleteEventFlag);
     hle(tm, 0x1FB15A32u, "sceKernelSetEventFlag", &Kernel::sceKernelSetEventFlag);
     hle(tm, 0x812346E4u, "sceKernelClearEventFlag", &Kernel::sceKernelClearEventFlag);
     hle(tm, 0x402FCF22u, "sceKernelWaitEventFlag", &Kernel::sceKernelWaitEventFlag);
-    hle(tm, 0x328C546Au, "sceKernelWaitEventFlagCB", &Kernel::sceKernelWaitEventFlag);
+    hle_cb(tm, 0x328C546Au, "sceKernelWaitEventFlagCB", &Kernel::sceKernelWaitEventFlag);
     hle(tm, 0x30FD48F0u, "sceKernelPollEventFlag", &Kernel::sceKernelPollEventFlag);
-    hle(tm, 0x912354A7u, "sceKernelRotateThreadReadyQueue", &Kernel::sceKernelRotateThreadReadyQueue);
 
     const char *sm = "SysMemUserForUser";
     hle(sm, 0xA291F107u, "sceKernelMaxFreeMemSize", &Kernel::sceKernelMaxFreeMemSize);
@@ -336,7 +318,6 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
 
     hle("LoadExecForUser", 0x05572A5Fu, "sceKernelExitGame", &Kernel::sceKernelExitGame);
     hle("LoadExecForUser", 0x2AC9954Bu, "sceKernelExitGameWithStatus", &Kernel::sceKernelExitGame);
-    hle("LoadExecForUser", 0x4AC57943u, "sceKernelRegisterExitCallback", &Kernel::return_zero);
 
     const char *mm = "ModuleMgrForUser";
     hle(mm, 0xD675EBB8u, "sceKernelSelfStopUnloadModule", &Kernel::sceKernelSelfStopUnloadModule);
@@ -373,7 +354,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(io, 0x71B19E77u, "sceIoLseekAsync", &Kernel::sceIoLseekAsync);
     hle(io, 0xFF5940B6u, "sceIoCloseAsync", &Kernel::sceIoCloseAsync);
     hle(io, 0xE23EEC33u, "sceIoWaitAsync", &Kernel::sceIoWaitAsync);
-    hle(io, 0x35DBD746u, "sceIoWaitAsyncCB", &Kernel::sceIoWaitAsync);
+    hle_cb(io, 0x35DBD746u, "sceIoWaitAsyncCB", &Kernel::sceIoWaitAsync);
     hle(io, 0x3251EA56u, "sceIoPollAsync", &Kernel::sceIoPollAsync);
 
     const char *dp = "sceDisplay";
@@ -381,9 +362,9 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(dp, 0x289D82FEu, "sceDisplaySetFrameBuf", &Kernel::sceDisplaySetFrameBuf);
     hle(dp, 0xEEDA2E54u, "sceDisplayGetFrameBuf", &Kernel::sceDisplayGetFrameBuf);
     hle(dp, 0x984C27E7u, "sceDisplayWaitVblankStart", &Kernel::sceDisplayWaitVblankStart);
-    hle(dp, 0x46F186C3u, "sceDisplayWaitVblankStartCB", &Kernel::sceDisplayWaitVblankStart);
+    hle_cb(dp, 0x46F186C3u, "sceDisplayWaitVblankStartCB", &Kernel::sceDisplayWaitVblankStart);
     hle(dp, 0x36CDFADEu, "sceDisplayWaitVblank", &Kernel::sceDisplayWaitVblankStart);
-    hle(dp, 0x8EB9EC49u, "sceDisplayWaitVblankCB", &Kernel::sceDisplayWaitVblankStart);
+    hle_cb(dp, 0x8EB9EC49u, "sceDisplayWaitVblankCB", &Kernel::sceDisplayWaitVblankStart);
     hle(dp, 0x9C6EAAD7u, "sceDisplayGetVcount", &Kernel::sceDisplayGetVcount);
     {
         // Small functions registered in place; behaviour follows PPSSPP (Core/HLE/sceDmac.cpp,
@@ -455,11 +436,11 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle("Kernel_Library", 0x092968F4u, "sceKernelCpuSuspendIntr", &Kernel::sceKernelCpuSuspendIntr);
     hle("Kernel_Library", 0x5F10D406u, "sceKernelCpuResumeIntr", &Kernel::return_zero);
     hle("Kernel_Library", 0x3B84732Du, "sceKernelCpuResumeIntrWithSync", &Kernel::return_zero);
-    hle("Kernel_Library", 0x293B45B8u, "sceKernelGetThreadId", &Kernel::sceKernelGetThreadId);
     hle("Kernel_Library", 0x1839852Au, "sceKernelMemcpy", &Kernel::sceKernelMemcpy);
     hle("Kernel_Library", 0xA089ECA4u, "sceKernelMemset", &Kernel::sceKernelMemset);
 
     install_devices();
+    install_callbacks();
     install_lwmutex();
     install_mpeg();
     install_sas();
@@ -488,7 +469,9 @@ Thread *Kernel::thread(std::int32_t uid) {
 void Kernel::make_ready(Thread &t, bool front) {
     t.state = ThreadState::Ready;
     t.wait = WaitType::None;
-    t.ready_sequence = front ? 0u : ++ready_sequence_;
+    t.cb_wait = false;
+    t.wait_paused = false;
+    t.ready_sequence = front ? --front_sequence_ : static_cast<std::int64_t>(++ready_sequence_);
 }
 
 Thread *Kernel::pick_ready() {
@@ -534,14 +517,22 @@ void Kernel::block(Ctx &ctx, WaitType wait, std::uint32_t result) {
         rt_.stop("idle");
         return;
     }
-    t->ctx = ctx;
     t->state = ThreadState::Waiting;
     t->wait = wait;
+    t->has_waited = true;
+    ++t->releases;
+    t->wait_sequence = ++wait_sequence_;
+    t->cb_wait = cb_call_;
+    t->wait_paused = false;
+    // In a CB wait, callbacks already notified run first, on this thread.
+    if (t->cb_wait && start_pending_callback(*t, ctx, true, true)) return;
+    t->ctx = ctx;
     reschedule(ctx);
 }
 
 void Kernel::reschedule(Ctx &ctx) {
     poll_waits();
+    dispatch_callbacks();
     Thread *next = pick_ready();
     if (next == nullptr) {
         current_uid_ = -1;
@@ -567,18 +558,22 @@ void Kernel::maybe_preempt(Ctx &ctx) {
 void Kernel::wake(Thread &t, std::uint32_t result) {
     t.ctx.gpr[2] = result;
     if (t.timeout_address != 0u) {
+        // The timer goes off a little after the deadline the time left counts to.
         const std::uint64_t now = now_us();
-        rt_.memory().store32(t.timeout_address,
-                             t.wake_time_us > now ? static_cast<std::uint32_t>(t.wake_time_us - now) : 0u);
+        rt_.memory().store32(t.timeout_address, t.wake_time_us > now + kTimeoutLatencyUs
+                                                    ? static_cast<std::uint32_t>(t.wake_time_us - kTimeoutLatencyUs - now) : 0u);
     }
     t.wake_time_us = 0u;
     t.timeout_address = 0u;
     make_ready(t);
 }
 
+// A wait's timeout ends max(timeout, 205us) plus about 30us after the call, as measured on hardware.
 void Kernel::begin_timeout(Thread &t, std::uint32_t timeout_address) {
     t.timeout_address = timeout_address;
-    t.wake_time_us = timeout_address != 0u ? now_us() + rt_.memory().load32(timeout_address) : 0u;
+    t.wake_time_us = timeout_address != 0u
+        ? now_us() + std::max<std::uint64_t>(rt_.memory().load32(timeout_address), 205u) + kTimeoutDeadlineUs + kTimeoutLatencyUs
+        : 0u;
 }
 
 void Kernel::poll_waits() {
@@ -589,7 +584,7 @@ void Kernel::poll_waits() {
             wake(t, 0u);
             continue;
         }
-        if (t.state != ThreadState::Waiting || t.wake_time_us == 0u || now < t.wake_time_us) continue;
+        if (t.state != ThreadState::Waiting || t.wait_paused || t.wake_time_us == 0u || now < t.wake_time_us) continue;
         if (t.wait == WaitType::Delay) {
             t.wake_time_us = 0u;
             wake(t, 0u);
@@ -622,64 +617,6 @@ std::uint64_t Kernel::earliest_timed_wake() const {
         if (alarm.running == 0 && (earliest == 0u || alarm.at < earliest)) earliest = alarm.at;
     }
     return earliest;
-}
-
-void Kernel::start_thread(Thread &t, std::uint32_t arglen, const std::vector<std::uint8_t> &args) {
-    reset_context(t.ctx);
-    std::uint32_t sp = t.stack_top - 0x100u; // k0 area at the stack top
-    for (std::uint32_t i = 0; i < 0x100u; i += 4u) rt_.memory().store32(sp + i, 0u);
-    t.ctx.gpr[26] = sp; // k0
-    std::uint32_t argp = 0u;
-    if (arglen != 0u && !args.empty()) {
-        sp -= align_up(arglen, 16u);
-        for (std::uint32_t i = 0; i < arglen && i < args.size(); ++i) rt_.memory().store8(sp + i, args[i]);
-        argp = sp;
-    }
-    sp -= 64u;
-    t.ctx.gpr[4] = arglen;
-    t.ctx.gpr[5] = argp;
-    t.ctx.gpr[28] = t.gp;
-    t.ctx.gpr[29] = sp;
-    t.ctx.gpr[31] = kThreadReturnAddress;
-    t.ctx.pc = t.entry;
-    t.wakeup_count = 0u;
-    make_ready(t);
-}
-
-void Kernel::exit_thread(Ctx &ctx, std::int32_t status, bool remove) {
-    Thread *t = current();
-    if (t == nullptr) {
-        rt_.stop("idle");
-        return;
-    }
-    t->exit_status = status;
-    t->state = remove ? ThreadState::Dead : ThreadState::Dormant;
-    if (remove && t->stack_block >= 0) {
-        blocks_.erase(t->stack_block);
-        t->stack_block = -1;
-    }
-    const std::int32_t uid = t->uid;
-    for (auto &[other_uid, other] : threads_) {
-        (void)other_uid;
-        if (other.state == ThreadState::Waiting && other.wait == WaitType::ThreadEnd && other.wait_uid == uid)
-            wake(other, static_cast<std::uint32_t>(status));
-    }
-    if (const auto call = guest_calls_.find(uid); call != guest_calls_.end()) {
-        // A guest callback finished: hand its result to the thread waiting for it.
-        t->state = ThreadState::Dead;
-        if (t->stack_block >= 0) {
-            blocks_.erase(t->stack_block);
-            t->stack_block = -1;
-        }
-        Thread *caller = thread(call->second.caller);
-        const std::uint32_t result = call->second.done ? call->second.done(static_cast<std::uint32_t>(status))
-                                                       : static_cast<std::uint32_t>(status);
-        guest_calls_.erase(call);
-        threads_.erase(uid);
-        if (caller != nullptr && caller->state == ThreadState::Waiting && caller->wait == WaitType::Callback)
-            wake(*caller, result);
-    }
-    reschedule(ctx);
 }
 
 void Kernel::call_guest(Ctx &ctx, std::uint32_t entry, std::initializer_list<std::uint32_t> args,
@@ -728,10 +665,6 @@ void Kernel::dump_threads() const {
         std::cerr << "[event] " << uid << " " << e.name << " pattern=" << hex(e.pattern) << "\n";
 }
 
-void Kernel::thread_returned(Ctx &ctx) {
-    exit_thread(ctx, static_cast<std::int32_t>(ctx.gpr[2]), false);
-}
-
 void Kernel::boot(std::uint32_t entry, std::uint32_t gp, const std::string &module_path) {
     Thread t;
     t.uid = new_uid();
@@ -772,6 +705,7 @@ bool Kernel::frame(double budget_ms) {
         poll_waits();
         run_alarms();
         run_ge_callbacks();
+        dispatch_callbacks();
         if (Thread *running = current()) {
             const Thread *next = pick_ready();
             if (next != nullptr && next->priority < running->priority) {
@@ -901,136 +835,6 @@ std::uint32_t Kernel::total_free() const {
 
 // ---------------------------------------------------------------------------
 // ThreadManForUser
-
-void Kernel::sceKernelCreateThread(Ctx &ctx) {
-    Thread t;
-    t.uid = new_uid();
-    t.name = read_string(ctx.gpr[4], 32);
-    t.entry = ctx.gpr[5];
-    t.priority = static_cast<std::int32_t>(ctx.gpr[6]);
-    t.stack_size = align_up(std::max(ctx.gpr[7], 0x200u), 0x100u);
-    t.attr = ctx.gpr[8];
-    t.stack_block = allocate("stack:" + t.name, 1u, t.stack_size, 0u);
-    if (t.stack_block < 0) {
-        finish(ctx, kErrorNoMemory);
-        return;
-    }
-    t.stack_top = blocks_.at(t.stack_block).address + t.stack_size;
-    t.gp = ctx.gpr[28];
-    const std::int32_t uid = t.uid;
-    threads_[uid] = std::move(t);
-    finish(ctx, static_cast<std::uint32_t>(uid));
-}
-
-void Kernel::sceKernelStartThread(Ctx &ctx) {
-    Thread *t = thread(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (t == nullptr) {
-        finish(ctx, kErrorUnknownThread);
-        return;
-    }
-    if (t->state != ThreadState::Dormant) {
-        finish(ctx, kErrorNotDormant);
-        return;
-    }
-    const std::uint32_t arglen = ctx.gpr[5], argp = ctx.gpr[6];
-    std::vector<std::uint8_t> args;
-    if (argp != 0u)
-        for (std::uint32_t i = 0; i < arglen; ++i) args.push_back(rt_.memory().load8(argp + i));
-    start_thread(*t, args.empty() ? 0u : arglen, args);
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-void Kernel::sceKernelExitThread(Ctx &ctx) { exit_thread(ctx, static_cast<std::int32_t>(ctx.gpr[4]), false); }
-void Kernel::sceKernelExitDeleteThread(Ctx &ctx) { exit_thread(ctx, static_cast<std::int32_t>(ctx.gpr[4]), true); }
-
-void Kernel::sceKernelDeleteThread(Ctx &ctx) {
-    Thread *t = thread(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (t == nullptr) {
-        finish(ctx, kErrorUnknownThread);
-        return;
-    }
-    if (t->stack_block >= 0) blocks_.erase(t->stack_block);
-    t->stack_block = -1;
-    t->state = ThreadState::Dead;
-    finish(ctx, 0u);
-}
-
-void Kernel::sceKernelTerminateDeleteThread(Ctx &ctx) {
-    const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (uid == current_uid_ || uid == 0) {
-        exit_thread(ctx, 0, true);
-        return;
-    }
-    sceKernelDeleteThread(ctx);
-}
-
-void Kernel::sceKernelSleepThread(Ctx &ctx) {
-    Thread *t = current();
-    if (t != nullptr && t->wakeup_count > 0u) {
-        --t->wakeup_count;
-        finish(ctx, 0u);
-        return;
-    }
-    block(ctx, WaitType::Sleep, 0u);
-}
-
-void Kernel::sceKernelWakeupThread(Ctx &ctx) {
-    Thread *t = thread(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (t == nullptr) {
-        finish(ctx, kErrorUnknownThread);
-        return;
-    }
-    if (t->state == ThreadState::Waiting && t->wait == WaitType::Sleep) wake(*t, 0u);
-    else ++t->wakeup_count;
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-void Kernel::sceKernelDelayThread(Ctx &ctx) {
-    Thread *t = current();
-    if (t != nullptr) t->wake_time_us = now_us() + std::max(ctx.gpr[4], 1u);
-    block(ctx, WaitType::Delay, 0u);
-}
-
-void Kernel::sceKernelGetThreadId(Ctx &ctx) { finish(ctx, static_cast<std::uint32_t>(current_uid_)); }
-
-void Kernel::sceKernelGetThreadCurrentPriority(Ctx &ctx) {
-    Thread *t = current();
-    finish(ctx, t != nullptr ? static_cast<std::uint32_t>(t->priority) : 0x20u);
-}
-
-void Kernel::sceKernelChangeThreadPriority(Ctx &ctx) {
-    Thread *t = thread(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (t == nullptr) {
-        finish(ctx, kErrorUnknownThread);
-        return;
-    }
-    if (ctx.gpr[5] != 0u) t->priority = static_cast<std::int32_t>(ctx.gpr[5]);
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
-void Kernel::sceKernelWaitThreadEnd(Ctx &ctx) {
-    Thread *target = thread(static_cast<std::int32_t>(ctx.gpr[4]));
-    if (target == nullptr) {
-        finish(ctx, kErrorUnknownThread);
-        return;
-    }
-    if (target->state == ThreadState::Dormant || target->state == ThreadState::Dead) {
-        finish(ctx, static_cast<std::uint32_t>(target->exit_status));
-        return;
-    }
-    Thread *self = current();
-    if (self != nullptr) {
-        self->wait_uid = target->uid;
-        begin_timeout(*self, ctx.gpr[5]);
-    }
-    block(ctx, WaitType::ThreadEnd, 0u);
-}
-
-void Kernel::sceKernelCreateCallback(Ctx &ctx) { finish(ctx, static_cast<std::uint32_t>(new_uid())); }
-void Kernel::sceKernelCheckCallback(Ctx &ctx) { finish(ctx, 0u); }
 
 void Kernel::sceKernelGetSystemTimeLow(Ctx &ctx) { finish(ctx, static_cast<std::uint32_t>(now_us())); }
 void Kernel::sceKernelGetSystemTimeWide(Ctx &ctx) { finish64(ctx, now_us()); }
@@ -1541,15 +1345,6 @@ void Kernel::sceKernelPollEventFlag(Ctx &ctx) {
     finish(ctx, kErrorEventFlagCondition);
 }
 
-void Kernel::sceKernelRotateThreadReadyQueue(Ctx &ctx) {
-    finish(ctx, 0u);
-    Thread *self = current();
-    if (self == nullptr) return;
-    self->ctx = ctx;
-    make_ready(*self);
-    reschedule(ctx);
-}
-
 // ---------------------------------------------------------------------------
 // SysMemUserForUser
 
@@ -1586,7 +1381,6 @@ void Kernel::sceKernelExitGame(Ctx &ctx) {
     halt_reason_ = "exit";
     rt_.stop("exit");
 }
-
 
 void Kernel::sceKernelStdin(Ctx &ctx) { finish(ctx, 0u); }
 void Kernel::sceKernelStdout(Ctx &ctx) { finish(ctx, 1u); }

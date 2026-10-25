@@ -64,42 +64,6 @@ std::uint32_t Kernel::count_waiters(WaitType wait, std::int32_t uid) const {
 // ---------------------------------------------------------------------------
 // Suspension: a suspended thread keeps its state (ready or waiting) but is never picked to run.
 
-void Kernel::sceKernelSuspendThread(Ctx &ctx) {
-    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (uid == 0 || uid == current_uid_) {
-        finish(ctx, kErrorIllegalThid);
-        return;
-    }
-    Thread *t = thread(uid);
-    if (t == nullptr) finish(ctx, kErrorUnknownThread);
-    else if (t->state == ThreadState::Dormant || t->state == ThreadState::Dead) finish(ctx, kErrorDormant);
-    else if (t->suspended) finish(ctx, kErrorSuspend);
-    else {
-        t->suspended = true;
-        finish(ctx, 0u);
-    }
-}
-
-void Kernel::sceKernelResumeThread(Ctx &ctx) {
-    const auto uid = static_cast<std::int32_t>(ctx.gpr[4]);
-    if (uid == 0 || uid == current_uid_) {
-        finish(ctx, kErrorIllegalThid);
-        return;
-    }
-    Thread *t = thread(uid);
-    if (t == nullptr) {
-        finish(ctx, kErrorUnknownThread);
-        return;
-    }
-    if (!t->suspended) {
-        finish(ctx, kErrorNotSuspend);
-        return;
-    }
-    t->suspended = false;
-    finish(ctx, 0u);
-    maybe_preempt(ctx);
-}
-
 // ---------------------------------------------------------------------------
 // Refer*Status: the guest sets the size field; the rest of the structure is written here.
 
@@ -318,8 +282,6 @@ void Kernel::sceKernelReferVplStatus(Ctx &ctx) {
 
 void Kernel::install_kernel_objects() {
     const char *tm = "ThreadManForUser";
-    hle(tm, 0x9944F31Fu, "sceKernelSuspendThread", &Kernel::sceKernelSuspendThread);
-    hle(tm, 0x75156E8Fu, "sceKernelResumeThread", &Kernel::sceKernelResumeThread);
     hle(tm, 0xBC6FEBC5u, "sceKernelReferSemaStatus", &Kernel::sceKernelReferSemaStatus);
     hle(tm, 0xA8E8C846u, "sceKernelReferMbxStatus", &Kernel::sceKernelReferMbxStatus);
     hle(tm, 0xD8199E4Cu, "sceKernelReferFplStatus", &Kernel::sceKernelReferFplStatus);
