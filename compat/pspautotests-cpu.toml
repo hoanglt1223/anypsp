@@ -1,0 +1,11 @@
+title = "pspautotests: cpu"
+kind = "test-suite"
+source = "https://github.com/hrydgard/pspautotests/tree/master/tests/cpu"
+module = "pspautotests/tests/cpu"
+stage = "in-game"
+runner = "interpreter"
+hosts = ["linux-x64", "windows-x64"]
+evidence = "python tests/conformance.py cpu/ with anypsp-interp: 37 of 55 programs match their .expected output on Linux x64 (2026-10-25) and on Windows; through psp_recomp-translated runners (tests/translated-conformance.py) 38 of 55 on Windows (2026-10-24). The arm64 build of anypsp-interp passes cpu/cpu_alu under qemu-aarch64."
+blockers = ["FPU and VFPU edge cases: denormals, NaN generation, FCR31, prefix saturation and unpacking, branch hazards (cpu/fpu/*, cpu/vfpu/*); most of them also fail in PPSSPP's headless runs", "cpu/cop0/eret needs the kernel-mode sceIoOpen; cpu/jump/unaligned jumps to an unaligned address the runtime has no entry for"]
+regression = "python tests/conformance.py cpu/"
+updated = 2026-10-25

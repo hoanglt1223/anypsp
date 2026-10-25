@@ -1,0 +1,11 @@
+title = "pspautotests: Cube Sample (cubevfpu)"
+kind = "homebrew"
+source = "https://github.com/hrydgard/pspautotests/tree/master/demos"
+module = "pspautotests/demos/cubevfpu.prx"
+genre = "graphics demo"
+stage = "fails"
+runner = "translated"
+hosts = ["linux-x64", "android-x86_64"]
+evidence = "anypsp build to a Linux program and to an APK (arm64-v8a + x86_64, 17 MB); both run 300 vblanks to the frame limit, the APK on an API 35 x86_64 emulator through platform/android/emulator-smoke.sh. The interpreter (anypsp-interp-gpu) draws the textured cube; the translated program draws only black frames, with GL and with the software renderer."
+blockers = ["Translated code never calls sceGeListUpdateStallAddr or sceGeDrawSync (the interpreter does every frame), so the GE lists stay stalled; celshading.elf behaves the same"]
+updated = 2026-10-25
