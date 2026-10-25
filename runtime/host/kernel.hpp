@@ -33,6 +33,8 @@
 
 namespace pspweb {
 
+struct Mp3Stream;
+
 // Host trampoline a guest thread returns into when its entry function ends.
 // Placed in the 16 KiB gap below the module load base so the runtime's direct
 // PC table does not grow to cover the kernel partition.
@@ -402,6 +404,35 @@ private:
     void hle_value(const char *library, std::uint32_t nid, const char *name, std::uint32_t result);
     void notify_callback(Ctx &ctx, std::int32_t uid, std::int32_t arg);
     static void finish_float(Ctx &ctx, float value);
+    // mp3.cpp
+    void install_mp3();
+    void delay_result(Ctx &ctx, std::uint32_t result, std::uint64_t usec);
+    Mp3Stream *mp3_stream(Ctx &ctx, std::uint32_t missing, bool need_init);
+    std::uint32_t mp3_decode_frame(Mp3Stream &stream, std::uint32_t pcm_out);
+    void mp3_query(Ctx &ctx, std::uint32_t not_init_error, std::uint32_t (*field)(const Mp3Stream &));
+    void sceMp3InitResource(Ctx &ctx);
+    void sceMp3TermResource(Ctx &ctx);
+    void sceMp3ReserveMp3Handle(Ctx &ctx);
+    void sceMp3ReleaseMp3Handle(Ctx &ctx);
+    void sceMp3Init(Ctx &ctx);
+    void sceMp3Decode(Ctx &ctx);
+    void sceMp3CheckStreamDataNeeded(Ctx &ctx);
+    void sceMp3GetInfoToAddStreamData(Ctx &ctx);
+    void sceMp3NotifyAddStreamData(Ctx &ctx);
+    void sceMp3ResetPlayPosition(Ctx &ctx);
+    void sceMp3ResetPlayPositionByFrame(Ctx &ctx);
+    void sceMp3SetLoopNum(Ctx &ctx);
+    void sceMp3GetLoopNum(Ctx &ctx);
+    void sceMp3GetSumDecodedSample(Ctx &ctx);
+    void sceMp3GetMaxOutputSample(Ctx &ctx);
+    void sceMp3GetMp3ChannelNum(Ctx &ctx);
+    void sceMp3GetBitRate(Ctx &ctx);
+    void sceMp3GetSamplingRate(Ctx &ctx);
+    void sceMp3GetMPEGVersion(Ctx &ctx);
+    void sceMp3GetFrameNum(Ctx &ctx);
+    void sceMp3LowLevelInit(Ctx &ctx);
+    void sceMp3LowLevelDecode(Ctx &ctx);
+    std::shared_ptr<void> mp3_;
     // power.cpp
     void install_power();
     void scePowerRegisterCallback(Ctx &ctx);
@@ -701,6 +732,8 @@ private:
     void sceKernelFreePartitionMemory(Ctx &ctx);
     void sceKernelGetBlockHeadAddr(Ctx &ctx);
     void sceKernelDevkitVersion(Ctx &ctx);
+    void sceKernelSetCompiledSdkVersion(Ctx &ctx);
+    void sceKernelGetCompiledSdkVersion(Ctx &ctx);
     void sceKernelPrintf(Ctx &ctx);
 
     // LoadExecForUser / ModuleMgrForUser.

@@ -127,11 +127,6 @@ void Kernel::install_devices() {
     hle(suspend, 0xEADB1BD7u, "sceKernelPowerLock", &Kernel::return_zero);
     hle(suspend, 0x3AEE7261u, "sceKernelPowerUnlock", &Kernel::return_zero);
     hle(suspend, 0x090CCB3Fu, "sceKernelPowerTick", &Kernel::return_zero);
-    hle("SysMemUserForUser", 0x342061E5u, "sceKernelSetCompiledSdkVersion370", &Kernel::return_zero);
-    hle("SysMemUserForUser", 0x1B4217BCu, "sceKernelSetCompiledSdkVersion603_605", &Kernel::return_zero);
-    hle("SysMemUserForUser", 0x91DE343Cu, "sceKernelSetCompiledSdkVersion500_505", &Kernel::return_zero);
-    hle("SysMemUserForUser", 0xEBD5C3E6u, "sceKernelSetCompiledSdkVersion395", &Kernel::return_zero);
-    hle("SysMemUserForUser", 0x315AD3A0u, "sceKernelSetCompiledSdkVersion380_390", &Kernel::return_zero);
     // Memory stick callbacks and folders need no work: the memory stick is a host folder.
     hle("IoFileMgrForUser", 0x54F5FB11u, "sceIoDevctl", &Kernel::sceIoDevctl);
     hle("IoFileMgrForUser", 0x06A70004u, "sceIoMkdir", &Kernel::return_zero);
@@ -314,6 +309,7 @@ void Kernel::audio_output(Ctx &ctx, AudioChannel &channel, std::uint32_t buffer,
         return;
     }
     self->wake_time_us = start_us;
+    self->wait_extra = 0u;
     block(ctx, WaitType::Delay, frames);
 }
 

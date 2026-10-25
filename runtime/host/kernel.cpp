@@ -295,7 +295,14 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     hle(sm, 0x9D9A5BA1u, "sceKernelGetBlockHeadAddr", &Kernel::sceKernelGetBlockHeadAddr);
     hle(sm, 0x3FC9AE6Au, "sceKernelDevkitVersion", &Kernel::sceKernelDevkitVersion);
     hle(sm, 0x13A5ABEFu, "sceKernelPrintf", &Kernel::sceKernelPrintf);
-    hle(sm, 0x7591C7DBu, "sceKernelSetCompiledSdkVersion", &Kernel::return_zero);
+    for (const auto &[nid, name] : std::initializer_list<std::pair<std::uint32_t, const char *>>{
+             {0x7591C7DBu, "sceKernelSetCompiledSdkVersion"}, {0x342061E5u, "sceKernelSetCompiledSdkVersion370"},
+             {0x315AD3A0u, "sceKernelSetCompiledSdkVersion380_390"}, {0xEBD5C3E6u, "sceKernelSetCompiledSdkVersion395"},
+             {0x057E7380u, "sceKernelSetCompiledSdkVersion401_402"}, {0x91DE343Cu, "sceKernelSetCompiledSdkVersion500_505"},
+             {0x7893F79Au, "sceKernelSetCompiledSdkVersion507"}, {0x35669D4Cu, "sceKernelSetCompiledSdkVersion600_602"},
+             {0x1B4217BCu, "sceKernelSetCompiledSdkVersion603_605"}, {0x358CA1BBu, "sceKernelSetCompiledSdkVersion606"}})
+        hle(sm, nid, name, &Kernel::sceKernelSetCompiledSdkVersion);
+    hle(sm, 0xFC114573u, "sceKernelGetCompiledSdkVersion", &Kernel::sceKernelGetCompiledSdkVersion);
     hle(sm, 0xF77D77CBu, "sceKernelSetCompilerVersion", &Kernel::return_zero);
 
     hle("LoadExecForUser", 0x05572A5Fu, "sceKernelExitGame", &Kernel::sceKernelExitGame);
@@ -426,6 +433,7 @@ void Kernel::install(const std::vector<psprecomp::PspImport> &imports) {
     install_callbacks();
     install_sync();
     install_power();
+    install_mp3();
     install_msgpipe();
     install_tlspl();
     install_vtimer();
@@ -575,7 +583,7 @@ void Kernel::poll_waits() {
         if (t.state != ThreadState::Waiting || t.wait_paused || t.wake_time_us == 0u || now < t.wake_time_us) continue;
         if (t.wait == WaitType::Delay) {
             t.wake_time_us = 0u;
-            wake(t, 0u);
+            wake(t, t.wait_extra);
         } else {
             // Every other wait with a deadline is an object wait with a timeout.
             if (t.wait == WaitType::EventFlag && event_flags_.contains(t.wait_uid) && valid_word(t.wait_out_address))
@@ -1008,6 +1016,14 @@ void Kernel::sceKernelGetBlockHeadAddr(Ctx &ctx) {
 }
 
 void Kernel::sceKernelDevkitVersion(Ctx &ctx) { finish(ctx, 0x05000010u); }
+
+// Every variant just records the version; several HLE functions behave differently by it.
+void Kernel::sceKernelSetCompiledSdkVersion(Ctx &ctx) {
+    sdk_version_ = ctx.gpr[4];
+    finish(ctx, 0u);
+}
+
+void Kernel::sceKernelGetCompiledSdkVersion(Ctx &ctx) { finish(ctx, sdk_version_); }
 
 void Kernel::sceKernelPrintf(Ctx &ctx) {
     std::cout << "[guest] " << read_string(ctx.gpr[4], 512) << "\n";

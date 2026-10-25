@@ -242,7 +242,7 @@ bool Kernel::resume_wait(Thread &t, Ctx &ctx) {
     } else if (try_complete_wait(t, result)) {
         done = true;
     } else if (t.wake_time_us != 0u && now_us() >= t.wake_time_us) {
-        result = t.wait == WaitType::Delay ? 0u : kErrorWaitTimeout;
+        result = t.wait == WaitType::Delay ? t.wait_extra : kErrorWaitTimeout;
         if (t.timeout_address != 0u) rt_.memory().store32(t.timeout_address, 0u);
         t.timeout_address = 0u;
         done = true;

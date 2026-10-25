@@ -23,6 +23,10 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
 
 - FFmpeg code by way of PPSSPP's `at3_standalone`, as bundled by psp-web-recomp. Origin commit: `runtime/third_party/at3_standalone/SOURCE_COMMIT`. License text: `runtime/third_party/at3_standalone/COPYING.LGPLv2.1`.
 
+## minimp3 (CC0 1.0): `runtime/third_party/minimp3/`
+
+- `minimp3.h` from [lieff/minimp3](https://github.com/lieff/minimp3) at the commit in `runtime/third_party/minimp3/SOURCE_COMMIT`, unmodified; decodes MP3 frames for `sceMp3` (`runtime/host/mp3.cpp`). Public domain dedication: `runtime/third_party/minimp3/LICENSE`.
+
 ## anyui menu toolkit (MIT): `runtime/gpu/ui/anyui/`
 
 - From AnyGBA (`runtime/src/ui/anyui/`, MIT), the same files in both projects: software rasteriser, TrueType reader, icons and the in-game menu's layout. Copyright (c) 2026 Henry Nguyen. License text: `runtime/gpu/ui/anyui/LICENSE`.
@@ -47,6 +51,8 @@ AnyPSP as a whole is licensed under the GNU General Public License, version 2 or
   - `recomp/loader/relocs.cpp`: HI16 pairing and the packed relocation format (program header type `0x700000A1`) follow `Core/ELF/ElfReader.cpp` (`LoadRelocations`, `LoadRelocations2`).
   - `data/nids.toml`: library, NID and function names extracted from PPSSPP's HLE function tables (`Core/HLE/*.cpp`) by `tools/gen-nids.py`; the PPSSPP commit is recorded in the file header.
   - `runtime/cpu/` (the reference Allegrex interpreter), adapted from PPSSPP at `902e5ccd8c1400b4387b73942491cded655e5f9c`: `interp_alu.cpp` from `Core/MIPS/Interpreter.cpp`, `interp_vfpu.cpp` from `Core/MIPS/InterpreterVFPU.cpp`, `vfpu_utils.cpp`/`.h` from `Core/MIPS/MIPSVFPUUtils.cpp`/`.h`, `interp_tables.cpp` from `Core/MIPS/MIPSTables.cpp`; `interp.cpp`, `interp_ops.h`, `mips_state.h` and `ppsspp_compat.h` follow `Core/MIPS/MIPS.cpp`/`MIPS.h`, `MIPSTables.h` and `Common/Math/math_util.h`. The copied files keep PPSSPP's copyright header.
+  - The thread manager and kernel objects follow `Core/HLE/sceKernelThread.cpp`, `KernelWaitHelpers.h`, `sceKernelSemaphore.cpp`, `sceKernelEventFlag.cpp`, `sceKernelMutex.cpp`, `sceKernelMbx.cpp`, `sceKernelMsgPipe.cpp`, `sceKernelVTimer.cpp`, `sceKernelAlarm.cpp` and `sceKernelMemory.cpp` (pools, TLS pools, the variable pool's block list) at `16103889f4889f895feec0ec8381c113e3551963`: `runtime/host/kernel_threads.cpp`, `kernel_callbacks.cpp`, `kernel_sync.cpp`, `kernel_msgpipe.cpp`, `kernel_vtimer.cpp`, `kernel_tls.cpp`, `kernel_objects.cpp`, plus the alarms in `kernel.cpp`. Error codes and timing constants come from there.
+  - `runtime/host/power.cpp` follows `Core/HLE/scePower.cpp`; `runtime/host/mp3.cpp` follows `Core/HLE/sceMp3.cpp` and the AuCtx part of `Core/HW/SimpleAudioDec.cpp` (same commit).
   - `runtime/host/kernel.cpp`: `sceDmacMemcpy`, `sceDisplayGetAccumulatedHcount` and `sceUmdReplace*` follow `Core/HLE/sceDmac.cpp`, `sceDisplay.cpp` and `sceUmd.cpp`; the initial thread register state follows `PSPThreadContext::reset` in `Core/HLE/sceKernelThread.cpp`.
   - `tests/conformance.py` compares output the way `headless/Compare.cpp` does.
   - `runtime/gpu/cheats.cpp`: the CWCheat file parser and code types adapted from `Core/CwCheat.cpp` (`CheatFileParser`, `CWCheatEngine::InterpretNextCwCheat` and `ExecuteOp`) at `b4386554795949491a26e51b7d74082bb9b2470f`.

@@ -374,6 +374,7 @@ void Kernel::delay_current(Ctx &ctx, std::uint64_t usec) {
     const std::uint64_t delay = usec < 200u ? 210u : usec + 10u;
     t->wake_time_us = now_us() + delay;
     t->wait_uid = t->uid;
+    t->wait_extra = 0u;
     block(ctx, WaitType::Delay, 0u);
 }
 
