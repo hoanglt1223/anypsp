@@ -20,7 +20,9 @@ namespace anypsp::loader {
 // Throws with the line number on anything else. Returns the entries added.
 std::size_t load_nid_toml(const std::filesystem::path &path, psprecomp::NidRegistry &registry);
 
-// data/nids.toml from the source tree this binary was built from.
+// The ANYPSP_NID_DATABASE environment variable when set; else data/nids.toml of the source tree
+// this binary was built from when it exists; else nids.toml next to the program or in
+// <prefix>/share/anypsp/ above its bin/ folder (installed tools and packaged games).
 [[nodiscard]] std::filesystem::path default_nid_database();
 
 } // namespace anypsp::loader

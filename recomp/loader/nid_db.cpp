@@ -5,9 +5,22 @@
 #include "psprecomp/common.hpp"
 
 #include <charconv>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <string>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 #ifndef ANYPSP_DATA_DIR
 #error "ANYPSP_DATA_DIR must name the data/ directory"
@@ -116,6 +129,43 @@ std::size_t load_nid_toml(const std::filesystem::path &path, psprecomp::NidRegis
     return added;
 }
 
-std::filesystem::path default_nid_database() { return std::filesystem::path(ANYPSP_DATA_DIR) / "nids.toml"; }
+namespace {
+
+std::filesystem::path executable_dir() {
+    std::error_code ec;
+#if defined(_WIN32)
+    std::wstring buffer(32768, L'\0');
+    const DWORD n = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (n == 0 || n >= buffer.size()) return {};
+    buffer.resize(n);
+    return std::filesystem::path(buffer).parent_path();
+#elif defined(__APPLE__)
+    std::uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string buffer(size, '\0');
+    if (_NSGetExecutablePath(buffer.data(), &size) != 0) return {};
+    return std::filesystem::path(buffer.c_str()).parent_path();
+#else
+    const auto exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    return ec ? std::filesystem::path() : exe.parent_path();
+#endif
+}
+
+} // namespace
+
+std::filesystem::path default_nid_database() {
+    if (const char *path = std::getenv("ANYPSP_NID_DATABASE"); path != nullptr && *path != '\0')
+        return std::filesystem::path(reinterpret_cast<const char8_t *>(path));
+    const std::filesystem::path built_from = std::filesystem::path(ANYPSP_DATA_DIR) / "nids.toml";
+    std::error_code ec;
+    if (std::filesystem::exists(built_from, ec)) return built_from;
+    // Installed (<prefix>/bin next to <prefix>/share/anypsp) or packaged (next to the program).
+    const std::filesystem::path dir = executable_dir();
+    if (!dir.empty()) {
+        for (const auto &candidate : {dir / "nids.toml", dir.parent_path() / "share" / "anypsp" / "nids.toml"})
+            if (std::filesystem::exists(candidate, ec)) return candidate;
+    }
+    return built_from;
+}
 
 } // namespace anypsp::loader
