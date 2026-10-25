@@ -903,6 +903,8 @@ GeSurfaces::Rect GeSurfaces::batch_bounds(bool &rectangle) const {
 }
 
 void GeSurfaces::before_transfer(const TransferRect &src, const TransferRect &) {
+    // Draws still batched may cover the source; they only count as GPU-dirty once issued.
+    flush();
     if (in_between_) return;
     // Pixels only the GPU has must reach VRAM before the copy reads them.
     // Destinations need no download: the copy is newer than whatever is there.

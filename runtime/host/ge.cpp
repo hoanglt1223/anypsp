@@ -921,10 +921,12 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
         const float inv_w = 1.0f / cv.cw;
         v.x = cv.cx * inv_w * viewport_[0] + viewport_[3];
         v.y = cv.cy * inv_w * viewport_[1] + viewport_[4];
-        // The GE rasterizes at 1/16 pixel.
+        // The GE rasterizes at 1/16 pixel. It floors (PPSSPP GPU/Software/TransformUnit.cpp ClipToScreen)
+        // from float24 arithmetic; with this float32 transform rounding matches the GE tests better.
+        // Screen depth is floored.
         v.x = std::round(v.x * 16.0f) / 16.0f;
         v.y = std::round(v.y * 16.0f) / 16.0f;
-        v.z = cv.cz * inv_w * viewport_[2] + viewport_[5];
+        v.z = std::floor(cv.cz * inv_w * viewport_[2] + viewport_[5]);
         v.w = cv.cw;
     }
     v.u = cv.u;

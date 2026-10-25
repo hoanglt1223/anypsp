@@ -24,7 +24,6 @@ FetchContent_MakeAvailable(SDL3)
 set(ANYPSP_GPU_DIR ${CMAKE_CURRENT_LIST_DIR})
 add_library(anypsp_gpu STATIC
     ${ANYPSP_GPU_DIR}/../host/ge_gl.cpp
-    ${ANYPSP_GPU_DIR}/../host/ge_surfaces.cpp
     ${ANYPSP_GPU_DIR}/gl_api.cpp
     ${ANYPSP_GPU_DIR}/gl_host.cpp
     ${ANYPSP_GPU_DIR}/in_between.cpp
