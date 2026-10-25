@@ -102,7 +102,7 @@ void write_sfo(const fs::path &path, const std::vector<std::pair<std::string, st
     std::ofstream(path, std::ios::binary) << out;
 }
 
-bool near(float a, float b) { return std::abs(a - b) < 0.011f; }
+bool approx_equal(float a, float b) { return std::abs(a - b) < 0.011f; }
 
 anyui::Canvas scene(int w, int h);
 
@@ -567,12 +567,12 @@ TEST_CASE("menu: the Video preview's keys, descriptions and pointer") {
     CHECK(f.page.preview.title == "Graphics preset: Medium");
     anyui::PreviewState &st = menu.preview_state();
     key(menu, SDL_SCANCODE_RIGHTBRACKET);
-    CHECK(near(st.split, 0.6f));
+    CHECK(approx_equal(st.split, 0.6f));
     MenuInput in;
     in.buttons = {anypsp::input::kLeftTrigger};
     menu.update(in);
     menu.update(in);
-    CHECK(near(st.split, 0.4f));
+    CHECK(approx_equal(st.split, 0.4f));
     press(menu, pad::kSelect);
     CHECK(st.loupe);
     MenuInput shifted;
@@ -580,7 +580,7 @@ TEST_CASE("menu: the Video preview's keys, descriptions and pointer") {
     shifted.pad = pad::kDown;
     shifted.shift = true;
     menu.update(shifted);
-    CHECK(near(st.loupe_y, 0.55f));
+    CHECK(approx_equal(st.loupe_y, 0.55f));
     CHECK(menu.lines()[1].starts_with("> Graphics preset"));  // the cursor stayed
     in = {};
     in.stick_x = -1;
@@ -621,7 +621,7 @@ TEST_CASE("menu: the Video preview's keys, descriptions and pointer") {
     CHECK(std::abs(pic.w / pic.h - 480.f / 272.f) < 0.03f);
     using Phase = anyui::MenuView::PointerPhase;
     CHECK(view.preview_pointer(st, Phase::Down, pic.x + pic.w * 0.75f, pic.y + 5, false));
-    CHECK(near(st.split, 0.75f));
+    CHECK(approx_equal(st.split, 0.75f));
     CHECK(view.preview_pointer(st, Phase::Up, pic.x + pic.w * 0.75f, pic.y + 5, false));
     CHECK(!view.preview_pointer(st, Phase::Move, pic.x + 10, pic.y + 10, false));
     CHECK(st.pointer);
