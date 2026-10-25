@@ -22,8 +22,9 @@ Early. Phases 01 (base) and 02 (loader and analysis) are done; 03 (code generati
   On the pspautotests demos that keep a symbol table, every function symbol is found statically.
 - **Headless host.** It builds with MSVC: the HLE kernel and the software GE, with no window and no audio. A runner per translated program runs homebrew and writes feedback. Many pspautotests programs still stop at Allegrex instructions the code generator does not lower yet (phase 03).
 - **Desktop play.** `anypsp-play <game.iso|disc folder>` opens a window with sound, keyboard and gamepad input, and keeps saves in the per-user data folder; translated runners take `--window`. See [docs/user/desktop.md](docs/user/desktop.md).
+- **GE.** OpenGL 3.3 and Vulkan backends share one surface manager (`runtime/host/ge_surfaces.cpp`) and the same shaders; Vulkan runs headless with optional MSAA and an on-disk pipeline cache (`--renderer vulkan`). 18 of the 28 pspautotests GE screenshot tests match PPSSPP's reference pictures exactly on both.
 - **Not yet:**
-  - Vulkan GE (phase 05);
+  - a Vulkan window or swapchain (the Android host presents the Vulkan output image);
   - Android and ARM handheld hosts, desktop builds in CI (phase 06);
   - message pipes, thread-local pools, virtual timers and callback notification (phase 04);
   - a check of the web/EGL build after the renderer seam.

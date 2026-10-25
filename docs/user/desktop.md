@@ -44,6 +44,13 @@ CPU wrote before the GPU uses it again. `--coherent 1` copies back after every d
 much slower and only useful to rule coherence out while debugging; `--coherent 0` never copies back and
 breaks games that read their framebuffers (UNH 1 draws its fighters as dark streaks).
 
+`--renderer vulkan` draws with Vulkan instead of OpenGL, headless only (no window yet; the Android host
+uses this renderer). `--msaa 2|4|8` turns on multisampling for it (games that read their framebuffers,
+or keep a stencil in alpha, may show edge artifacts with it), and its compiled pipelines are kept in
+`cache/vulkan-pipelines.bin` in the per-user data folder (`--vk-cache file` names another file, `off`
+keeps none). `ANYPSP_VK_VALIDATION=1` turns on the Khronos validation layer when it is installed, and
+`ANYPSP_VK_DEVICE=n` picks the n-th GPU. Both renderers produce the same pictures within rounding.
+
 ## Menu
 
 Escape, F1, Pause or Back+Start on a gamepad pauses the game and opens the menu over a frosted copy of the
