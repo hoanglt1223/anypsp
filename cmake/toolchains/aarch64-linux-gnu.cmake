@@ -6,7 +6,7 @@
 #
 # ANYPSP_AARCH64_SYSROOT overrides the sysroot (for example a handheld's root file system copied
 # with its -dev packages, which also gives SDL3 its X11/Wayland/ALSA headers). Without those
-# headers SDL3 builds with its KMS/DRM-free fallbacks only (offscreen and dummy drivers).
+# headers SDL3 builds without a display backend (offscreen and dummy drivers only).
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR aarch64)
 
@@ -39,6 +39,24 @@ set(CMAKE_C_FLAGS_INIT "${flags}")
 set(CMAKE_CXX_FLAGS_INIT "${flags}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${flags}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${flags}")
+
+# pkg-config must not report the build machine's libraries (SDL3 would link x86 X11/Wayland/PulseAudio).
+set(pc_dirs "")
+foreach(dir lib/pkgconfig share/pkgconfig usr/lib/pkgconfig usr/lib/${ANYPSP_AARCH64_TRIPLE}/pkgconfig usr/share/pkgconfig)
+    string(APPEND pc_dirs "${ANYPSP_AARCH64_SYSROOT}/${dir}:")
+endforeach()
+set(ENV{PKG_CONFIG_LIBDIR} "${pc_dirs}")
+set(ENV{PKG_CONFIG_PATH} "")
+if(CMAKE_SYSROOT)
+    set(ENV{PKG_CONFIG_SYSROOT_DIR} "${CMAKE_SYSROOT}")
+endif()
+
+# A bare cross sysroot has no X11/Wayland headers: let SDL3 build without a display backend
+# (offscreen and dummy drivers) instead of stopping.
+if(NOT EXISTS "${ANYPSP_AARCH64_SYSROOT}/include/X11" AND NOT EXISTS "${ANYPSP_AARCH64_SYSROOT}/usr/include/X11"
+   AND NOT EXISTS "${ANYPSP_AARCH64_SYSROOT}/usr/include/wayland-client.h")
+    set(SDL_UNIX_CONSOLE_BUILD ON CACHE BOOL "SDL3 without X11/Wayland")
+endif()
 
 set(CMAKE_FIND_ROOT_PATH ${ANYPSP_AARCH64_SYSROOT})
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
