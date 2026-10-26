@@ -12,6 +12,7 @@ the "untranslated" column counts the addresses where that happened.
 import argparse
 import concurrent.futures
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -57,7 +58,9 @@ def main():
     parser.add_argument("filters", nargs="*")
     parser.add_argument("--tools", type=pathlib.Path, default=ROOT / "out" / "msvc")
     parser.add_argument("--work", type=pathlib.Path, default=ROOT / "out" / "tconf")
-    parser.add_argument("--opt", default="d")
+    # Unoptimised test units keep megabyte stack frames; Windows runners link a 64 MB stack, other
+    # hosts keep the default 8 MB, which chained calls overflow (cpu/vfpu/vrot, exact, fpu/denormal).
+    parser.add_argument("--opt", default="d" if os.name == "nt" else "1")
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--json", type=pathlib.Path)
