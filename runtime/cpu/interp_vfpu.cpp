@@ -776,7 +776,9 @@ namespace MIPSInt
 	}
 
 	void Int_Vsgn(MIPSState *mips, MIPSOpcode op) {
-		float s[4], t[4], d[4];
+		// t past the vector size is never written by the prefix below, yet an S swizzle past the
+		// size reads it: it has to be zero, not whatever was on the stack.
+		float s[4], t[4]{}, d[4];
 		int vd = _VD;
 		int vs = _VS;
 		VectorSize sz = GetVecSize(op);
