@@ -85,8 +85,11 @@ jobs:
           "$anypsp" build tests/corpus/pspautotests/demos/cubevfpu.prx -o out/dist --name cubevfpu --opt d
           program=out/dist/cubevfpu/cubevfpu
           [ -f "$program" ] || program=out/dist/cubevfpu/cubevfpu.exe
-          "$program" --headless --frames 120 --dump out/dist/cubevfpu-120.png | tee out/dist/run.log
-          grep -q "frame limit reached" out/dist/run.log
+          # Running it needs OpenGL 3.3, which hosted Windows runners lack: there it is built only.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            "$program" --headless --frames 120 --dump out/dist/cubevfpu-120.png | tee out/dist/run.log
+            grep -q "frame limit reached" out/dist/run.log
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
