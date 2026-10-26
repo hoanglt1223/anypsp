@@ -2086,10 +2086,10 @@ namespace MIPSInt
 
 		for (int i = 0; i < (int)n; i++) {
 			switch (optype) {
-			case 0: d.f[i] = vfpu_add(s[i], t[i]); break; //vadd
-			case 1: d.f[i] = vfpu_sub(s[i], t[i]); break; //vsub
-			case 7: d.f[i] = vfpu_div(s[i], t[i]); break; //vdiv
-			case 8: d.f[i] = vfpu_mul(s[i], t[i]); break; //vmul
+			case 0: d.u[i] = vfpu_add_bits(std::bit_cast<u32>(s[i]), std::bit_cast<u32>(t[i])); break; //vadd
+			case 1: d.u[i] = vfpu_sub_bits(std::bit_cast<u32>(s[i]), std::bit_cast<u32>(t[i])); break; //vsub
+			case 7: d.u[i] = vfpu_div_bits(std::bit_cast<u32>(s[i]), std::bit_cast<u32>(t[i])); break; //vdiv
+			case 8: d.u[i] = vfpu_mul_bits(std::bit_cast<u32>(s[i]), std::bit_cast<u32>(t[i])); break; //vmul
 			}
 
 			if (USE_VFPU_RESULT_FIXUP) {

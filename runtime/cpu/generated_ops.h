@@ -24,6 +24,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace anypsp::cpu {
 
@@ -107,6 +108,19 @@ ANYPSP_GEN_INLINE void write_vector(Ctx &ctx, const float *s) {
     for (u32 i = 0; i < N; ++i) ctx.vfpu[lanes[i]] = s[i];
 }
 
+// Lanes as bits, for results that can be the VFPU NaN 0x7F800001 (see vfpu_arith.h).
+template <u32 Reg, u32 N>
+ANYPSP_GEN_INLINE void read_vector_bits(const Ctx &ctx, u32 *d) {
+    constexpr auto lanes = vector_lanes(Reg, N);
+    for (u32 i = 0; i < N; ++i) std::memcpy(&d[i], &ctx.vfpu[lanes[i]], sizeof(u32));
+}
+
+template <u32 Reg, u32 N>
+ANYPSP_GEN_INLINE void write_vector_bits(Ctx &ctx, const u32 *s) {
+    constexpr auto lanes = vector_lanes(Reg, N);
+    for (u32 i = 0; i < N; ++i) std::memcpy(&ctx.vfpu[lanes[i]], &s[i], sizeof(u32));
+}
+
 template <u32 Reg, u32 Side>
 ANYPSP_GEN_INLINE void read_matrix(const Ctx &ctx, float *d) {
     constexpr auto lanes = matrix_lanes(Reg, Side);
@@ -150,16 +164,16 @@ ANYPSP_GEN_INLINE bool vec3(Runtime &rt, Ctx &ctx, u32 pc) {
     constexpr u32 n = vec_size(Op);
     constexpr u32 kind = (Op >> 26) == 25u ? 8u : (Op >> 23) & 7u;
     static_assert(kind == 0u || kind == 1u || kind == 7u || kind == 8u);
-    float s[4], t[4], d[4];
-    read_vector<(Op >> 8) & 0x7Fu, n>(ctx, s);
-    read_vector<(Op >> 16) & 0x7Fu, n>(ctx, t);
+    u32 s[4], t[4], d[4];
+    read_vector_bits<(Op >> 8) & 0x7Fu, n>(ctx, s);
+    read_vector_bits<(Op >> 16) & 0x7Fu, n>(ctx, t);
     for (u32 i = 0; i < n; ++i) {
-        if constexpr (kind == 0u) d[i] = vfpu_add(s[i], t[i]);
-        else if constexpr (kind == 1u) d[i] = vfpu_sub(s[i], t[i]);
-        else if constexpr (kind == 7u) d[i] = vfpu_div(s[i], t[i]);
-        else d[i] = vfpu_mul(s[i], t[i]);
+        if constexpr (kind == 0u) d[i] = vfpu_add_bits(s[i], t[i]);
+        else if constexpr (kind == 1u) d[i] = vfpu_sub_bits(s[i], t[i]);
+        else if constexpr (kind == 7u) d[i] = vfpu_div_bits(s[i], t[i]);
+        else d[i] = vfpu_mul_bits(s[i], t[i]);
     }
-    write_vector<Op & 0x7Fu, n>(ctx, d);
+    write_vector_bits<Op & 0x7Fu, n>(ctx, d);
     return true;
 }
 
